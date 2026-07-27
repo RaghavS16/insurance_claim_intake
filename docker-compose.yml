@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_PASSWORD: DBpassword
+      POSTGRES_DB: insurance_claims
+    ports: ["5433:5432"]
+    # Enable the extension automatically on first startup:
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    depends_on: [postgres]
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+
+volumes:
+  postgres_data:
