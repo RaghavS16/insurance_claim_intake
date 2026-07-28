@@ -51,6 +51,7 @@ piper_models/
 # ===== IDE / Editor =====
 .vscode/
 .idea/
+pyrefly.toml
 *.swp
 *.swo
 .DS_Store
