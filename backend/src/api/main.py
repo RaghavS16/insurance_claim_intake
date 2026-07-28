@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from backend.src.database.session import get_db
-from backend.src.agents.graph import build_claim_graph
+from src.database.session import get_db
+from src.agents.graph import build_claim_graph
 
 app = FastAPI(title="Insurance Claim Intake API")
 

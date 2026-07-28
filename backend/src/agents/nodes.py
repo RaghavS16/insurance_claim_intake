@@ -3,8 +3,8 @@ import re
 from datetime import date
 from langchain_ollama import ChatOllama
 from sqlalchemy.orm import Session
-from backend.src.database.models import Policy, Adjuster
-from backend.src.agents.state import ClaimState
+from src.database.models import Policy, Adjuster
+from src.agents.state import ClaimState
 
 llm = ChatOllama(model="llama3.1:8b", temperature=0)
 

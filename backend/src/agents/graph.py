@@ -1,8 +1,8 @@
 from functools import partial
 from langgraph.graph import StateGraph, END
 from sqlalchemy.orm import Session
-from backend.src.agents.state import ClaimState
-from backend.src.agents import nodes
+from src.agents.state import ClaimState
+from src.agents import nodes
 
 
 def build_claim_graph(db: Session):
