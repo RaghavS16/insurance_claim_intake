@@ -3,7 +3,9 @@ import re
 from datetime import date
 from langchain_ollama import ChatOllama
 from sqlalchemy.orm import Session
+# pyrefly: ignore [missing-import]
 from src.database.models import Policy, Adjuster
+# pyrefly: ignore [missing-import]
 from src.agents.state import ClaimState
 
 llm = ChatOllama(model="llama3.1:8b", temperature=0)
@@ -140,7 +142,7 @@ def response_formatter(state: ClaimState) -> ClaimState:
     elif not state.get("coverage_eligible", False):
         decision = "denied"
         message = "This claim does not appear to be covered under your policy."
-    elif state.get("fraud_score", 0) > 0.7:
+    elif state.get("fraud_score", 0) >= 0.7:
         decision = "flagged_for_review"
         message = "Your claim requires additional review before approval."
     else:
