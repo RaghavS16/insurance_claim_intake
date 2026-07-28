@@ -9,7 +9,9 @@ services:
     # Enable the extension automatically on first startup:
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql
 
   backend:
     build: ./backend
