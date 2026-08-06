@@ -139,9 +139,11 @@ def test_invalid_policy_routes_to_manual_review(client):
 
 
 def test_claim_exceeds_coverage_denied(client):
-    """Claimed amount over policy limit -> denied, closed immediately."""
+    """Claimed amount over policy limit -> denied, closed immediately.
+    Uses 'business' claim_type which has no required documents so the
+    evaluation graph reaches coverage_checker without needing doc uploads."""
     intake = client.post("/api/v1/claims/intake", json={
-        "claim_text": "My car was damaged on 2025-06-01. Policy XYZ123. Repair cost is 900000 rupees.",
+        "claim_text": "My business was damaged on 2025-06-01. Policy XYZ123. Business loss is 900000 rupees. Claim type is business.",
         "input_mode": "text",
     }).json()
     ticket_id = intake["ticket_id"]
@@ -152,6 +154,7 @@ def test_claim_exceeds_coverage_denied(client):
     assert data["coverage_eligible"] is False
     assert data["final_decision"] == "denied"
     assert data["closure_status"] == "closed"
+
 
 
 def test_high_fraud_score_flagged_not_closed(client):

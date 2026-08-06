@@ -144,9 +144,9 @@ def coverage_checker(state: ClaimState) -> ClaimState:
     eligible = claimed_amount <= coverage_amount
     state["coverage_eligible"] = eligible
     state["coverage_reasoning"] = (
-        f"[STUB] Claimed amount ₹{claimed_amount} is within policy limit ₹{coverage_amount}."
+        f"Claimed amount ₹{claimed_amount} is within your policy limit of ₹{coverage_amount}."
         if eligible else
-        f"[STUB] Claimed amount ₹{claimed_amount} exceeds policy limit ₹{coverage_amount}."
+        f"Claimed amount ₹{claimed_amount} exceeds your policy limit of ₹{coverage_amount}."
     )
 
     if eligible:
@@ -157,7 +157,7 @@ def coverage_checker(state: ClaimState) -> ClaimState:
         state["payout_amount"] = 0
 
     state.setdefault("audit_log", []).append(
-        f"[STUB] Coverage check: claimed={claimed_amount}, limit={coverage_amount}, "
+        f"Coverage check: claimed={claimed_amount}, limit={coverage_amount}, "
         f"deductible={state['deductible_amount']}, payout={state['payout_amount']}"
     )
     return state

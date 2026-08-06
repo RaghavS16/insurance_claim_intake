@@ -1,18 +1,16 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
   subsets: ["latin"],
+  variable: "--font-inter",
 });
 
-
 export const metadata: Metadata = {
-  title: "Insurance Claim Intake",
-  description: "Voice-driven AI system for insurance claim processing",
+  title: "InsureClaim AI — Intelligent Claim Processing",
+  description: "AI-powered insurance claim intake and evaluation system. Submit, track, and get decisions on your insurance claims instantly.",
 };
-
 
 export default function RootLayout({
   children,
@@ -20,11 +18,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={inter.variable}>
+      <body>{children}</body>
     </html>
   );
 }
