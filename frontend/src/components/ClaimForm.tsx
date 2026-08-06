@@ -244,7 +244,6 @@ export default function ClaimForm() {
                 }}>
                   <option value="damage_photo" style={{ background: "#1a1a35" }}>📸 Damage Photo</option>
                   <option value="repair_estimate" style={{ background: "#1a1a35" }}>🔧 Repair Estimate</option>
-                  <option value="fir" style={{ background: "#1a1a35" }}>📑 Police FIR / Report</option>
                 </select>
               </div>
 

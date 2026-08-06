@@ -138,8 +138,9 @@ def coverage_checker(state: ClaimState) -> ClaimState:
     # policy_embeddings + LLM reasoning over retrieved clauses to determine peril coverage,
     # not just the amount ceiling checked here.
     claimed_amount = state["extracted_data"].get("claimed_amount") or 0
-    coverage_amount = state["policy_data"]["coverage_amount"]
-    deductible = state["policy_data"].get("deductible", 0)
+    policy_data = state.get("policy_data") or {}
+    coverage_amount = policy_data.get("coverage_amount") or 0
+    deductible = policy_data.get("deductible", 0)
 
     eligible = claimed_amount <= coverage_amount
     state["coverage_eligible"] = eligible
@@ -168,7 +169,8 @@ def fraud_detector(state: ClaimState, db: Session) -> ClaimState:
     flags = []
     score = 0.0
     amount = state["extracted_data"].get("claimed_amount") or 0
-    coverage_amount = state["policy_data"]["coverage_amount"]
+    policy_data = state.get("policy_data") or {}
+    coverage_amount = policy_data.get("coverage_amount") or 0
 
     if amount > coverage_amount * 0.9:
         flags.append("claim_near_policy_limit")

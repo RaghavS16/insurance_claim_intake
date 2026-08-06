@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STORAGE_DIR = os.getenv("STORAGE_LOCAL_PATH", "/tmp/claims_documents")
+STORAGE_DIR = os.getenv("STORAGE_LOCAL_PATH", os.path.join("uploads", "claims_documents"))
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 
