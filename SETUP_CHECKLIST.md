@@ -9,6 +9,7 @@
 - [ ] PostgreSQL 14+
 - [ ] Docker Desktop
 - [ ] Git
+- [ ] Tesseract-OCR (for Document Extraction)
 
 Verify:
 ```bash
@@ -31,6 +32,11 @@ cd insurance-claim-intake
 - Pull the reasoning model: `ollama pull llama3.1:8b`
 - Pull an embedding model (needed for RAG): `ollama pull nomic-embed-text`
 - Test: `ollama run llama3.1:8b` → type "hello" → confirm response
+
+### 3.5 Tesseract-OCR Setup (Windows)
+- Download the Windows installer from UB-Mannheim: https://github.com/UB-Mannheim/tesseract/wiki
+- Install and ensure the installation directory (e.g., `C:\Program Files\Tesseract-OCR`) is added to your system PATH.
+- Test: `tesseract --version`
 
 ---
 
@@ -60,6 +66,9 @@ faster-whisper>=0.10.0
 python-dotenv>=1.0.0
 pytest>=7.4.3
 httpx>=0.25.0
+pytesseract>=0.3.10
+pdfplumber>=0.10.2
+# boto3>=1.33.0  # Uncomment if using AWS S3 (Optional)
 ```
 
 **Note on versions:** `langchain-ollama` and `langchain-postgres` are pinned with `>=` rather than an exact old version — `langchain-postgres==0.0.1` predates pgvector support and will conflict with `langchain>=0.2.0`. Using a floor version lets pip resolve compatible releases.
@@ -99,6 +108,9 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 SECRET_KEY=change-this-in-production
 DEBUG=True
+# AWS_ACCESS_KEY_ID=your_key_here          # Optional: For AWS S3
+# AWS_SECRET_ACCESS_KEY=your_secret_here   # Optional: For AWS S3
+# AWS_S3_BUCKET_NAME=your_bucket_here      # Optional: For AWS S3
 ```
 
 ### 9. Test FastAPI Backend
@@ -200,6 +212,7 @@ docker-compose up
 - [ ] FastAPI running (`curl http://localhost:8000/docs`)
 - [ ] Whisper transcribes a test audio file
 - [ ] Piper generates a test audio file
+- [ ] Tesseract-OCR installed and in PATH (`tesseract --version`)
 
 ### Frontend
 - [ ] Next.js running

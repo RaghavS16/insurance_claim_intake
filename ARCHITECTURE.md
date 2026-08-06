@@ -28,13 +28,14 @@
 │ └──────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────┐ │
 │ │          LANGGRAPH AGENTIC ORCHESTRATOR                   │ │
-│ │  Nodes:                                                   │ │
-│ │  1. claim_extractor → extract fields (LLM)              │ │
-│ │  2. policy_validator → check PostgreSQL                  │ │
-│ │  3. coverage_checker → RAG query + LLM reasoning         │ │
-│ │  4. fraud_detector → flag anomalies (rules + LLM)       │ │
-│ │  5. route_decision → assign adjuster + log              │ │
-│ │  6. response_formatter → return result (+ speech)        │ │
+│ │  Nodes (7-Step Workflow):                                 │ │
+│ │  1. claim_extractor (Intake/Extract) + OCR + multi-turn │ │
+│ │  2. confirmation_step (Confirm extracted fields)        │ │
+│ │  3. policy_validator (Check DB status)                    │ │
+│ │  4. coverage_checker (RAG query + LLM reasoning)         │ │
+│ │  5. fraud_detector (Risk check with doc-derived info)   │ │
+│ │  6. claim_decision (Decide outcome)                       │ │
+│ │  7. closure_router (Feedback trigger & adjuster prep)   │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────┐ │
 │ │           VOICE PIPELINE                                  │ │
@@ -131,40 +132,37 @@ START
 [0. Voice Transcription] (if voice input used)
   Input: audio → Whisper → raw claim text
   ↓
-[1. Claim Extractor Node]
-  LLM: "Extract structured fields: policy_id, incident_date, damage_description, claimant_info"
-  Output: structured ClaimData object
+[1. Claim Extractor Node + Document Checker]
+  Logic: mandatory_field_checker (loops if info missing) + OCR (pytesseract/pdfplumber) for docs
+  Output: structured ClaimData object + Document intelligence
   ↓
-[2. Policy Validator Node]
+[2. Confirmation Node]
+  Logic: Return extracted fields for user review & confirmation
+  ↓
+[3. Policy Validator Node]
   Database: Query PostgreSQL for policy
   Output: PolicyData object or error
   ↓
 [Decision: Valid policy?]
   NO → Route to manual review
   YES ↓
-[3. Coverage Checker Node]
+[4. Coverage Checker Node]
   RAG: Embed the claim text → pgvector similarity search → retrieve top-matching policy clauses
   LLM: "Does this claim fall under covered incidents?"
   Output: coverage_eligible (bool), reasoning
   ↓
-[Decision: Covered?]
-  NO → Route to denial adjuster
-  YES ↓
-[4. Fraud Detector Node]
-  Rules: Check for patterns (duplicate claims, high amounts, suspicious dates)
+[5. Fraud Detector Node]
+  Rules: Check for patterns using text AND document-derived data
   LLM: "Assess fraud likelihood on 0-1 scale"
   Output: fraud_score, flags
   ↓
-[Decision: Fraud score > 0.7?]
-  YES → Flag for manual review + fraud team
-  NO ↓
-[5. Route Decision Node]
-  Database: Query PostgreSQL for available adjusters
-  Logic: Assign to specialist (auto claim vs. property claim vs. complex)
-  Output: adjuster_id, ticket_id
+[6. Claim Decision Node]
+  Logic: Compile coverage and fraud scores.
+  Output: final_decision (approved | denied | flagged_for_review | manual_review)
   ↓
-[6. Response Formatter Node]
-  Output: ClaimResponse JSON + spoken response text (sent to TTS)
+[7. Closure & Response Router Node]
+  Logic: Sets closure_status (closed | pending_review) and routes to adjuster informational or active queue.
+  Output: ClaimResponse JSON + spoken response text (sent to TTS) + Feedback trigger
   ↓
 END → Return to API → Piper generates spoken response
 ```
@@ -175,10 +173,13 @@ class ClaimState:
     claim_text: str
     input_mode: str  # "voice" or "text"
     extracted_data: Optional[ClaimData]
+    documents: List[dict]  # Uploaded docs with OCR content
     policy_data: Optional[PolicyData]
     coverage_eligible: Optional[bool]
     fraud_score: float
     fraud_flags: List[str]
+    final_decision: str    # approved, denied, flagged_for_review, etc.
+    closure_status: str    # closed, pending_review, awaiting_user
     assigned_adjuster: Optional[Adjuster]
     ticket_id: str
     audit_log: List[str]
@@ -313,15 +314,17 @@ STEP 2: Frontend → Backend
 POST /api/v1/voice/transcribe (audio file)
 → Whisper transcribes to text
 
-STEP 3: Text → Agent Pipeline
-POST /api/v1/claims/extract { "claim_text": "...", "input_mode": "voice" }
+STEP 3: Text → Agent Pipeline (Extraction & Confirmation)
+POST /api/v1/claims/extract
+→ Extractor checks for missing fields, parses documents with OCR.
+→ Confirmation asks user to confirm fields.
 
-Node 1 (Extractor): extracts policy_id, incident_date, claim_type, damage_description, claimed_amount, location
-Node 2 (Policy Validator): confirms policy XYZ123 is active, auto insurance, limit 500000
-Node 3 (Coverage Checker): embeds claim text, pgvector search retrieves matching policy clauses, confirms collision is covered, amount within limit → eligible
-Node 4 (Fraud Detector): no recent claims, amount normal → fraud_score = 0.15, no flags
-Node 5 (Route Decision): assigns to auto specialist, generates ticket CLAIM-2024-00123
-Node 6 (Response Formatter): builds response JSON + spoken response text
+STEP 4: Agent Pipeline (Evaluation)
+Node 3 (Policy Validator): confirms policy XYZ123 is active, auto insurance, limit 500000
+Node 4 (Coverage Checker): embeds claim text, pgvector search retrieves clauses, confirms coverage.
+Node 5 (Fraud Detector): checks doc data vs claim text. fraud_score = 0.15.
+Node 6 (Claim Decision): coverage eligible + low fraud → final_decision = approved.
+Node 7 (Closure Router): sets closure_status = closed, lists adjuster as contact. Builds response JSON + TTS text.
 
 STEP 4: Backend → Frontend
 JSON result + POST /api/v1/voice/synthesize → audio response
@@ -340,9 +343,11 @@ INSERT into claims table + audit_log
 | Component | Choice | Why |
 |-----------|--------|-----|
 | Backend | FastAPI | Async, fast, great for AI/LLM integrations, built-in OpenAPI docs |
+| Object Storage | AWS S3 (Optional) | Enterprise-grade cloud file storage for uploaded documents (Free tier) |
 | Frontend | Next.js + React | Full-stack TypeScript, Vercel deployment, SSR |
 | Voice (STT) | faster-whisper | Open-source, self-hosted, no per-call cost |
 | Voice (TTS) | Piper | Open-source, fast, self-hosted |
+| OCR (Docs) | pytesseract + pdfplumber | Open-source document text extraction |
 | LLM Orchestration | LangGraph | Standard for agentic workflows, explicit state management |
 | Vector store | PostgreSQL + pgvector | RAG support, one database instead of two, low ops burden |
 | Database | PostgreSQL | Reliable, JSONB for audit logs, doubles as vector store |

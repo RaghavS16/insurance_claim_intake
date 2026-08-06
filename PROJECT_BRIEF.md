@@ -10,10 +10,9 @@ A production-grade system that automates insurance claim intake using:
 - Full-stack web UI (React + Next.js frontend)
 
 ## Timeline
-- **July (Now)**: Foundation + Setup
-- **August Review 1**: Architecture + Core Agent MVP
-- **September Review 2**: Full Integration + RAG Implementation
-- **October Review 3**: Polish + DevOps + Deployment + Production-ready system
+- **August (Review 1)**: Core 7-step pipeline skeleton (text-only MVP), rule-based checks, no voice/OCR/RAG.
+- **September (Review 2)**: Voice-in/voice-out (Whisper/Piper) + Document intelligence (OCR) + RAG (pgvector similarity search for coverage reasoning).
+- **October (Review 3)**: Feedback capture loop + Adjuster dashboard + DevOps (Docker, CI/CD, Deployment). Final end-to-end 7-step workflow.
 - **Post-October**: Final Viva
 
 ## Tech Stack
@@ -25,6 +24,7 @@ A production-grade system that automates insurance claim intake using:
 - **Ollama** (local dev) + Llama 3.1 LLM for agent reasoning
 - **LangGraph** — agentic workflow orchestration
 - **LangChain** — RAG pipeline + integrations
+- **OCR** — pytesseract & pdfplumber (document intelligence)
 
 ### Frontend
 - **React.js** + **Next.js** (TypeScript) — full-stack frontend
@@ -38,6 +38,7 @@ A production-grade system that automates insurance claim intake using:
 
 ### Database & Storage
 - **PostgreSQL** — production relational data (policies, claims, adjusters, audit log) **and** vector storage via the `pgvector` extension (policy embeddings for RAG) — one database, two roles
+- **AWS S3 (Optional)** — enterprise-grade cloud object storage for uploaded claim documents (images/PDFs)
 - **Redis** (optional) — caching, session management
 - **MongoDB** (optional) — unstructured claim documents
 
@@ -50,14 +51,14 @@ A production-grade system that automates insurance claim intake using:
 
 ## Project Goals & Success Metrics
 
-### Functional Goals
-1. Accept voice input → transcribe to text (STT)
-2. Extract structured claim data (policy ID, incident date, damages, claimant info)
-3. Validate policy against PostgreSQL database
-4. Use RAG to retrieve relevant coverage rules + historical claims
-5. Agentic workflow decides: approve, need more info, or flag fraud
-6. Route to appropriate adjuster (with audit trail)
-7. Return response to claimant (via TTS + React UI)
+### Functional Goals (7-Step Workflow)
+1. **Intake**: Accept voice input → transcribe to text (STT), text fallback available.
+2. **Extraction & Documents**: Multi-turn prompting for missing fields, extract structured data, process uploaded documents via OCR and validate type via content.
+3. **Confirmation**: Return extracted fields for user review and speak back via TTS.
+4. **Policy Validation**: Validate policy status (active/expired) against PostgreSQL.
+5. **Risk Assessment**: Rule-based fraud detection enhanced with document-derived data.
+6. **Claim Decision**: Use RAG to check coverage rules. Decide outcome (approved, denied, flagged_for_review).
+7. **Closure + Feedback**: Route to adjuster if flagged, speak and show final decision, capture feedback (no payment processing — payment is explicitly out of scope).
 
 ### Success Metrics
 - Data extraction accuracy: >85% on test claims
