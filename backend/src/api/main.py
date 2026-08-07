@@ -127,18 +127,18 @@ def upload_document(
             ),
         )
 
-    dest_dir = os.path.join(STORAGE_DIR, str(claim.id))
-    os.makedirs(dest_dir, exist_ok=True)
     filename = file.filename or "uploaded_file"
-    dest_path = os.path.join(dest_dir, filename)
-    with open(dest_path, "wb") as f:
-        f.write(file.file.read())
+    s3_filename = f"{claim.id}/{uuid.uuid4().hex[:8]}_{filename}"
+    
+    # Upload to S3
+    from src.utils.s3 import upload_to_s3
+    s3_url = upload_to_s3(file.file, s3_filename)
 
     doc = Document(
         claim_id=claim.id,
         document_type=document_type,
         original_filename=filename,
-        file_path=dest_path,
+        file_path=s3_url,
         mime_type=file.content_type,
     )
     db.add(doc)
@@ -146,7 +146,7 @@ def upload_document(
     # keep pipeline_state.documents in sync so the evaluation graph sees it
     state = dict(getattr(claim, "pipeline_state", None) or {})
     docs = list(state.get("documents", []))
-    docs.append({"document_type": document_type, "filename": filename, "file_path": dest_path})
+    docs.append({"document_type": document_type, "filename": filename, "file_path": s3_url})
     state["documents"] = docs
     setattr(claim, "pipeline_state", dict(state))
 

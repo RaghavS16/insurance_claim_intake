@@ -1,362 +1,390 @@
 # System Architecture — A Voice-Driven Agentic AI System for Insurance Claim Intake and Adjudication
 
-## High-Level Overview
+> **Status key used throughout this document:**
+> ✅ **Built (August)** — implemented and tested in the current codebase
+> 🔜 **September (planned)** — designed, not yet implemented
+> 🔜 **October (planned)** — designed, not yet implemented
+
+---
+
+## High-Level Overview (Current State — August)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      CLAIMANT INTERFACE                      │
-│  (React + Next.js Frontend, TypeScript)                      │
-│  - Voice input (CORE — primary interaction method)           │
-│    Claimant speaks their claim naturally; STT transcribes it │
-│  - Text input (fallback / accessibility option)              │
-│  - Results display + spoken (TTS) response of the decision   │
+│  (Next.js + TypeScript Frontend, App Router, Tailwind)       │
+│  ✅ Text input (ClaimForm) — currently the only input mode   │
+│  🔜 Voice input (Sept) — will become the primary mode,       │
+│      text remains as fallback/accessibility option           │
+│  ✅ Results display (decision, payout, fraud flags, JSON)    │
+│  🔜 Spoken (TTS) response of the decision (Sept)              │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ REST API (JSON) + audio upload
+                       │ REST API (JSON) + multipart file upload
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                    FASTAPI BACKEND                           │
-│                  (Python, Async)                             │
+│                  (Python 3.11, Sync/Async)                    │
 │ ┌──────────────────────────────────────────────────────────┐ │
-│ │            /api/claims/{endpoint}                         │ │
-│ │  - POST /transcribe (audio → text, Whisper)               │ │
-│ │  - POST /extract-claim (text → structured data)          │ │
-│ │  - POST /validate-policy (check DB)                      │ │
-│ │  - POST /check-coverage (RAG + rules)                    │ │
-│ │  - POST /assess-fraud (agentic decision)                 │ │
-│ │  - POST /route-claim (assign to adjuster)                │ │
-│ │  - POST /synthesize (text → audio response, Piper)       │ │
+│ │  ✅ /api/v1/claims/intake        (POST)                   │ │
+│ │  ✅ /api/v1/claims/{id}/documents (POST, GET)              │ │
+│ │  ✅ /api/v1/claims/{id}/confirm   (POST)                   │ │
+│ │  ✅ /api/v1/claims/{id}           (GET)                    │ │
+│ │  ✅ /api/v1/document-requirements/{claim_type} (GET)       │ │
+│ │  ✅ /health                                                │ │
+│ │  🔜 /api/v1/voice/transcribe (Sept)                        │ │
+│ │  🔜 /api/v1/voice/synthesize (Sept)                        │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────┐ │
 │ │          LANGGRAPH AGENTIC ORCHESTRATOR                   │ │
-│ │  Nodes (7-Step Workflow):                                 │ │
-│ │  1. claim_extractor (Intake/Extract) + OCR + multi-turn │ │
-│ │  2. confirmation_step (Confirm extracted fields)        │ │
-│ │  3. policy_validator (Check DB status)                    │ │
-│ │  4. coverage_checker (RAG query + LLM reasoning)         │ │
-│ │  5. fraud_detector (Risk check with doc-derived info)   │ │
-│ │  6. claim_decision (Decide outcome)                       │ │
-│ │  7. closure_router (Feedback trigger & adjuster prep)   │ │
+│ │  ✅ Two compiled graphs (see below), 6 active nodes        │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────┐ │
-│ │           VOICE PIPELINE                                  │ │
-│ │  - faster-whisper (STT) — self-hosted, open-source        │ │
-│ │  - Piper (TTS) — self-hosted, open-source                 │ │
+│ │           VOICE PIPELINE  🔜 September                    │ │
+│ │  - faster-whisper (STT), Piper (TTS) — not wired in yet   │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │ ┌──────────────────────────────────────────────────────────┐ │
 │ │           LLM & RAG PIPELINE                              │ │
-│ │  - Ollama + Llama 3.1 (local dev) — agent reasoning       │ │
-│ │  - Ollama + nomic-embed-text — generates vector embeddings│ │
-│ │  - LangChain for RAG chains (retriever → prompt → LLM)   │ │
+│ │  ✅ Ollama + Llama 3.1 8B — used for extraction only       │ │
+│ │  🔜 nomic-embed-text + pgvector similarity search (Sept)  │ │
+│ │     — coverage_checker is currently a rule-based stub     │ │
 │ └──────────────────────────────────────────────────────────┘ │
 └──────────────────────────┬────────────────────────────────────┘
                           │
                           ↓
         ┌───────────────────────────────────────┐
-        │           POSTGRESQL                   │
+        │           POSTGRESQL 15                │
         │   (single database, two roles)         │
         │                                         │
-        │  Relational tables:                    │
-        │  - policies, claims, adjusters,        │
+        │  ✅ Relational tables (built, seeded):  │
+        │  - policies, adjusters, claims,        │
+        │    documents, payment_requests,        │
         │    audit_log                           │
         │                                         │
-        │  Vector store (via pgvector extension):│
-        │  - policy clause embeddings            │
-        │  - historical claim embeddings         │
-        │  - similarity search (RAG retrieval)   │
+        │  ✅ pgvector + pgcrypto extensions       │
+        │     enabled (init.sql)                 │
+        │  🔜 policy_embeddings table + vector    │
+        │     similarity search (Sept)            │
         └───────────────────────────────────────┘
 ```
 
-**Note:** There is only one database here. PostgreSQL, with the `pgvector` extension enabled, handles both the relational data (policies, claims, adjusters) and the vector embeddings used for RAG retrieval — no separate vector database service is deployed.
+**Note:** There is only one database. PostgreSQL, with the `pgvector` extension already enabled, will hold both the relational data (built now) and the vector embeddings used for RAG retrieval (September) — no separate vector database service is planned or needed.
+
+---
 
 ## Component Breakdown
 
-### 1. Frontend (React + Next.js + TypeScript)
-**Responsibility:** Voice-first user interface, form handling, result display
+### 1. Frontend (Next.js + TypeScript) — ✅ Built
 
-**Key Components:**
-- `VoiceRecorder` — captures the claimant's spoken claim (primary input method)
-- `ClaimForm` — text fallback, used when voice isn't available/practical
-- `ClaimResults` — display extraction results, validation status, fraud flags
-- `AdjusterAssignment` — show routed adjuster info
-- `ClaimHistory` — display past claims
+**Responsibility:** Claim intake UI, document upload, result display.
 
-**Tech:**
-- Next.js App Router, TypeScript, Tailwind CSS
-- React Query for server state
-- `react-media-recorder` (or MediaRecorder API directly) for in-browser voice capture
+**Implemented components:**
+- `ClaimForm.tsx` — single component driving a 4-step flow: Describe Claim → Upload Documents → Review & Confirm → Decision. Includes example-claim quick-fill chips for demo purposes.
+- `services/claims.ts` — typed API client (`submitIntake`, `confirmClaim`, `uploadDocument`, `getDocumentRequirements`) wrapping axios calls to the backend.
 
----
+**Not yet built:**
+- 🔜 `VoiceRecorder` component (Sept)
+- 🔜 `AdjusterAssignment` / adjuster dashboard (Oct)
+- 🔜 `ClaimHistory` (not currently scoped to a specific month — revisit if time allows)
 
-### 2. FastAPI Backend (Python, Async)
-**Responsibility:** API orchestration, voice processing, authentication, request routing
-
-**Key Routes:**
-```python
-POST /api/v1/voice/transcribe
-  Input: audio file (wav/webm)
-  Output: { "text": "transcribed claim text" }
-
-POST /api/v1/claims/extract
-  Input: { "claim_text": "..." }
-  Output: { "policy_id": "...", "incident_date": "...", "damages": [...] }
-
-POST /api/v1/claims/validate
-  Input: { "policy_id": "..." }
-  Output: { "valid": true/false, "policy_details": {...} }
-
-POST /api/v1/claims/assess
-  Input: { claim_data: {...} }
-  Output: { "fraud_score": 0.7, "flags": [...], "decision": "approve|review|deny" }
-
-POST /api/v1/claims/route
-  Input: { claim_data: {...}, decision: {...} }
-  Output: { "adjuster_id": "...", "adjuster_email": "...", "ticket_id": "..." }
-
-POST /api/v1/voice/synthesize
-  Input: { "text": "Your claim has been approved..." }
-  Output: audio file (spoken response)
-
-GET /api/v1/claims/{ticket_id}
-  Output: { claim_status, audit_log, adjuster_notes }
-```
+**Tech in use:** Next.js App Router, TypeScript, inline styles (not yet migrated to Tailwind utility classes in `ClaimForm.tsx` despite `globals.css` defining a Tailwind-based design token set — worth normalizing before Sept), axios.
 
 ---
 
-### 3. LangGraph Agentic Orchestrator
-**Responsibility:** Multi-step reasoning, state management, decision making
+### 2. FastAPI Backend — ✅ Built (August scope)
 
-**Agent Flow:**
-```
-START
-  ↓
-[0. Voice Transcription] (if voice input used)
-  Input: audio → Whisper → raw claim text
-  ↓
-[1. Claim Extractor Node + Document Checker]
-  Logic: mandatory_field_checker (loops if info missing) + OCR (pytesseract/pdfplumber) for docs
-  Output: structured ClaimData object + Document intelligence
-  ↓
-[2. Confirmation Node]
-  Logic: Return extracted fields for user review & confirmation
-  ↓
-[3. Policy Validator Node]
-  Database: Query PostgreSQL for policy
-  Output: PolicyData object or error
-  ↓
-[Decision: Valid policy?]
-  NO → Route to manual review
-  YES ↓
-[4. Coverage Checker Node]
-  RAG: Embed the claim text → pgvector similarity search → retrieve top-matching policy clauses
-  LLM: "Does this claim fall under covered incidents?"
-  Output: coverage_eligible (bool), reasoning
-  ↓
-[5. Fraud Detector Node]
-  Rules: Check for patterns using text AND document-derived data
-  LLM: "Assess fraud likelihood on 0-1 scale"
-  Output: fraud_score, flags
-  ↓
-[6. Claim Decision Node]
-  Logic: Compile coverage and fraud scores.
-  Output: final_decision (approved | denied | flagged_for_review | manual_review)
-  ↓
-[7. Closure & Response Router Node]
-  Logic: Sets closure_status (closed | pending_review) and routes to adjuster informational or active queue.
-  Output: ClaimResponse JSON + spoken response text (sent to TTS) + Feedback trigger
-  ↓
-END → Return to API → Piper generates spoken response
-```
+**Responsibility:** API orchestration, request routing, graph invocation, persistence.
 
-**State Management:**
+**Actual implemented routes** (`backend/src/api/main.py`):
+
 ```python
-class ClaimState:
+GET  /health
+GET  /                                          # redirects to /docs
+
+POST /api/v1/claims/intake
+  Input:  { claim_text, input_mode, ticket_id? }
+  Output: { ticket_id, extracted_data, missing_fields,
+            awaiting_confirmation, message }
+  Runs the intake graph only (extraction + mandatory-field check).
+  Reusable across turns: pass the same ticket_id back with additional
+  claim_text to fill in previously-missing fields.
+
+POST /api/v1/claims/{ticket_id}/documents
+  Input:  multipart form (document_type, file)
+  Output: { document_id, document_type, filename, status }
+  Validates document_type against the claim's claim_type; rejects
+  (400) with a re-upload message if the type doesn't match.
+
+GET  /api/v1/claims/{ticket_id}/documents
+  Output: list of uploaded documents for the claim.
+
+GET  /api/v1/document-requirements/{claim_type}
+  Output: { claim_type, documents_needed, required_documents }
+
+POST /api/v1/claims/{ticket_id}/confirm
+  Input:  { confirmed }
+  Output: { ticket_id, final_decision, closure_status,
+            response_message, spoken_response, extracted_data,
+            coverage_eligible, deductible_amount, payout_amount,
+            fraud_score, fraud_flags, assigned_adjuster,
+            missing_documents, audit_log }
+  Runs the evaluation graph (policy → documents → coverage → fraud
+  → route → format). Rejects (400) if mandatory fields are still
+  missing.
+
+GET  /api/v1/claims/{ticket_id}
+  Output: current stored status/decision snapshot for the claim.
+```
+
+**Not yet built:**
+- 🔜 `/api/v1/voice/transcribe`, `/api/v1/voice/synthesize` (Sept)
+- 🔜 Adjuster action endpoints (approve/deny/request-info from dashboard) (Oct)
+- 🔜 Feedback capture endpoint (Oct)
+- 🔜 Appeal-case creation endpoint (Oct, references `UX_WALKTHROUGH.md` Path 6/10)
+
+**Design note for the review panel:** intake and evaluation are deliberately two separate graphs invoked by two separate endpoints, with the confirmation step living in the API layer (not as a graph node) between them. This lets the frontend show the user their extracted data and let them edit it before the (currently free, but eventually costlier) evaluation graph runs — see `ClaimForm.tsx` step 3.
+
+---
+
+### 3. LangGraph Agentic Orchestrator — ✅ Built (August scope)
+
+**Responsibility:** Multi-step reasoning, state management, decision making.
+
+**Actual graph structure** (`backend/src/agents/graph.py`):
+
+**Graph 1 — Intake** (`build_intake_graph`):
+```
+START → claim_extractor → mandatory_field_checker → END
+```
+Runs on every `/intake` call. Stops regardless of outcome; the API layer decides whether to re-prompt the user (fields still missing) or move to document upload / confirmation (fields complete), based on `missing_fields`.
+
+**Graph 2 — Evaluation** (`build_evaluation_graph`, invoked only after `/confirm`):
+```
+START → policy_validator
+          ├─(rejected)──────────────────────────────→ response_formatter
+          └─(valid)→ document_requirement_checker
+                        ├─(missing docs)─────────────→ response_formatter
+                        └─(ready)→ coverage_checker
+                                     ├─(not covered)──→ response_formatter
+                                     └─(covered)→ fraud_detector
+                                                    → route_decision
+                                                    → response_formatter
+                                                        → END
+```
+
+**Node-by-node status:**
+
+| Node | Status | Notes |
+|---|---|---|
+| `claim_extractor` | ✅ Built | Ollama/Llama 3.1 8B, JSON-schema prompt, merges with prior turn's data |
+| `mandatory_field_checker` | ✅ Built | Checks `policy_id`, `incident_date`, `claim_type`, `damage_description`, `claimed_amount` |
+| `policy_validator` | ✅ Built | Real DB check — active flag + expiry date against `policies` table |
+| `document_requirement_checker` | ✅ Built | Looks up `DOCUMENT_REQUIREMENTS` by claim_type; skips entirely for types needing none (e.g. `business`) |
+| `coverage_checker` | ✅ Built, **stubbed logic** | Currently amount-only: `claimed_amount <= coverage_amount`. 🔜 Sept: replace with pgvector similarity search over `policy_embeddings` + LLM reasoning over retrieved clauses |
+| `fraud_detector` | ✅ Built, **rule-based only** | Flags: near-policy-limit, future incident date, missing description, no supporting documents. No LLM reasoning yet. 🔜 Sept: incorporate document-derived data (e.g. repair estimate vs. claimed amount mismatch) |
+| `route_decision` | ✅ Built | Assigns an active adjuster by specialization (falls back to `complex`); generates `ticket_id` if not already set |
+| `response_formatter` | ✅ Built | Produces `response_message` and `spoken_response` (currently identical strings — kept as separate fields so Sept TTS phrasing can diverge without touching decision logic) |
+
+**Real `ClaimState` schema** (`backend/src/agents/state.py`) — reproduced in full since this is what should appear in the review report, not a simplified sketch:
+
+```python
+class ClaimState(TypedDict, total=False):
+    # Intake
     claim_text: str
-    input_mode: str  # "voice" or "text"
-    extracted_data: Optional[ClaimData]
-    documents: List[dict]  # Uploaded docs with OCR content
-    policy_data: Optional[PolicyData]
-    coverage_eligible: Optional[bool]
+    input_mode: str                # "voice" or "text"
+    claim_type_hint: str
+    extracted_data: Dict[str, Any]
+    missing_fields: List[str]
+    awaiting_confirmation: bool
+    confirmed: bool
+
+    # Documents
+    documents: List[Dict[str, Any]]
+    required_documents: List[str]
+    missing_documents: List[str]
+    documents_needed: bool
+
+    # Policy validation
+    policy_data: Dict[str, Any]
+    validation_status: str         # "valid" | "rejected"
+
+    # Coverage + deductible
+    coverage_eligible: bool
+    coverage_reasoning: str
+    deductible_amount: float
+    payout_amount: float
+
+    # Risk assessment
     fraud_score: float
     fraud_flags: List[str]
-    final_decision: str    # approved, denied, flagged_for_review, etc.
-    closure_status: str    # closed, pending_review, awaiting_user
-    assigned_adjuster: Optional[Adjuster]
+
+    # Decision + routing
+    assigned_adjuster: Dict[str, Any]
     ticket_id: str
+    final_decision: str            # need_more_info | need_documents |
+                                    # approved | denied |
+                                    # flagged_for_review | manual_review
+
+    # Closure + feedback
+    closure_status: str            # closed | pending_review | awaiting_user
+    response_message: str
+    spoken_response: str           # same content as response_message today;
+                                    # kept separate for Sept TTS phrasing
     audit_log: List[str]
 ```
 
----
-
-### 4. Voice Pipeline
-**Responsibility:** Convert speech to text (intake) and text to speech (response)
-
-- **STT — faster-whisper:** claimant's audio → transcribed text, fed into the agent pipeline
-- **TTS — Piper:** the agent's final decision/response text → spoken audio, returned to the frontend
-- **Fallback:** if a claimant can't or doesn't want to use voice, the same pipeline accepts typed text directly at the extraction step, skipping STT
+**Final decision outcomes actually implemented** (`response_formatter`):
+`need_more_info` → `need_documents` → `manual_review` (invalid policy) → `denied` (not covered) → `flagged_for_review` (`fraud_score >= 0.7`) → `approved`. All six are covered by `backend/tests/test_claims_pipeline.py`.
 
 ---
 
-### 5. RAG Pipeline (Retrieval-Augmented Generation)
-**Responsibility:** Context-aware LLM decisions using policy documents
+### 4. Voice Pipeline — 🔜 September (not yet built)
 
-**Two things are involved, and both live in this project:**
-- **Vector embeddings** — numeric representations of policy text, generated by an embedding model (e.g., `nomic-embed-text` via Ollama)
-- **Vector store** — where those embeddings are saved and searched; here, that's PostgreSQL via the `pgvector` extension (not a separate database)
+**Planned responsibility:** Convert speech to text (intake) and text to speech (response).
 
+- **STT — faster-whisper:** claimant's audio → transcribed text → fed into `claim_extractor` unchanged (the node already only cares about `claim_text`, so no extractor changes are expected, only a new `/voice/transcribe` route in front of it)
+- **TTS — Piper:** `spoken_response` (already a distinct state field, currently unused) → audio, returned to the frontend
+- **Fallback:** text input continues to work exactly as it does today; `input_mode` already threads through the whole pipeline (`ClaimState.input_mode`) for this reason
+
+`faster-whisper` is already pinned in `backend/requirements.txt`; Piper is not yet added anywhere and needs its own setup step per `SETUP_CHECKLIST.md`.
+
+---
+
+### 5. RAG Pipeline — 🔜 September (not yet built)
+
+**Current state:** `coverage_checker` is a pure amount-comparison stub (see node table above). No embeddings are generated, no `policy_embeddings` table exists yet, and `nomic-embed-text` is pulled in Ollama per the setup checklist but not called anywhere in code.
+
+**Planned flow (Sept):**
 ```
 Query: "Is my claim covered for water damage?"
   ↓
-[Vector Embedding] query text → embedding (Ollama embedding model)
+[Vector Embedding] query text → embedding (Ollama, nomic-embed-text)
   ↓
 [pgvector Search] SELECT ... ORDER BY embedding <-> query_vector LIMIT 3
-  (finds the 3 most similar policy clauses stored in PostgreSQL)
+  (over a new policy_embeddings table)
   ↓
 [Augment Prompt] "Given these policy clauses: {retrieved_docs}, answer: {query}"
   ↓
 [LLM Reasoning] Llama 3.1 reads clauses + reasons about coverage
   ↓
-Output: "Yes, covered. Policy section 3.2 states: ..."
+Output: coverage_eligible (bool) + coverage_reasoning (cited clause text)
 ```
+`coverage_eligible` and `coverage_reasoning` are already fields on `ClaimState` and already populated (by the stub) today, so the September change is a node-internals swap, not a state-shape change.
 
 ---
 
-### 6. PostgreSQL Database Schema
+### 6. PostgreSQL Database Schema — ✅ Built (relational), 🔜 vector table pending
 
-**Relational tables:**
+**Relational tables — actually created** (`database/schema.sql`, mirrored in `backend/src/database/models.py`):
+
 ```sql
-CREATE TABLE policies (
-    id UUID PRIMARY KEY,
-    policy_number VARCHAR UNIQUE,
-    customer_id UUID,
-    policy_type VARCHAR, -- auto, home, business
-    coverage_amount DECIMAL,
-    deductible DECIMAL,
-    effective_date DATE,
-    expiry_date DATE,
-    is_active BOOLEAN,
-    created_at TIMESTAMP
-);
+policies(id, policy_number, customer_id, policy_type, coverage_amount,
+         deductible, effective_date, expiry_date, is_active, created_at)
 
-CREATE TABLE claims (
-    id UUID PRIMARY KEY,
-    policy_id UUID REFERENCES policies(id),
-    claim_date DATE,
-    incident_date DATE,
-    claim_type VARCHAR,
-    input_mode VARCHAR, -- voice or text
-    description TEXT,
-    claimed_amount DECIMAL,
-    extraction_confidence FLOAT,
-    validation_status VARCHAR, -- approved, rejected, review
-    fraud_score FLOAT,
-    fraud_flags JSONB,
-    assigned_adjuster_id UUID,
-    status VARCHAR, -- open, approved, denied, paid
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
+adjusters(id, name, email, specialization, claims_assigned, is_active)
 
-CREATE TABLE adjusters (
-    id UUID PRIMARY KEY,
-    name VARCHAR,
-    email VARCHAR,
-    specialization VARCHAR, -- auto, home, complex
-    claims_assigned INT,
-    is_active BOOLEAN
-);
+claims(id, ticket_id, policy_id, claim_date, incident_date, claim_type,
+       input_mode, description, claimed_amount, extraction_confidence,
+       validation_status, fraud_score, fraud_flags, assigned_adjuster_id,
+       status, final_decision, closure_status, pipeline_state,
+       created_at, updated_at)
 
-CREATE TABLE audit_log (
-    id UUID PRIMARY KEY,
-    claim_id UUID REFERENCES claims(id),
-    action VARCHAR,
-    timestamp TIMESTAMP,
-    details JSONB
-);
+documents(id, claim_id, document_type, original_filename, file_path,
+          mime_type, file_size_bytes, ocr_text, extracted_metadata,
+          classification_confidence, uploaded_at)
+  -- ocr_text / extracted_metadata / classification_confidence exist
+  -- now so Sept OCR can populate them without a migration; NULL today
+
+payment_requests(id, claim_id, claimed_amount, deductible_amount,
+                  payout_amount, status, created_at)
+  -- stub only: populated on approval, no payment gateway ever called
+
+audit_log(id, claim_id, action, timestamp, details)
 ```
 
-**Vector store table (requires `CREATE EXTENSION vector;` first):**
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+Note: `claims.pipeline_state` (JSONB) is the mechanism that lets a claim's full `ClaimState` persist between the stateless `/intake` and `/confirm` calls — each API request compiles and invokes a fresh graph rather than holding an in-memory session.
 
+**Not yet created:**
+```sql
+-- 🔜 September
 CREATE TABLE policy_embeddings (
     id UUID PRIMARY KEY,
     policy_id UUID REFERENCES policies(id),
     clause_text TEXT,
-    embedding vector(768),  -- dimension depends on the embedding model used
+    embedding vector(768),
     created_at TIMESTAMP
 );
-
--- Similarity search index (approximate nearest neighbor)
 CREATE INDEX ON policy_embeddings USING ivfflat (embedding vector_cosine_ops);
 ```
 
----
-
-### 7. Vector Store (PostgreSQL + pgvector)
-**What it is:** Not a separate database — the `pgvector` extension adds a `vector` column type and similarity-search operators to the same PostgreSQL instance used for relational data.
-
-**Stores:** Policy clause embeddings, optionally historical claim embeddings
-
-**Use Cases:**
-- RAG retrieval: "Find policies covering water damage"
-- Similarity search: "This claim is similar to claims X, Y, Z"
-- Anomaly detection: "This claim is an outlier"
+**Extensions:** `vector` and `pgcrypto` are already enabled via `database/init.sql`, so this table can be added later without further extension setup.
 
 ---
 
-## Data Flow Example: Full Claim Journey (Voice)
+### 7. Vector Store (PostgreSQL + pgvector) — 🔜 September
+
+**What it will be:** Not a separate database — the `pgvector` extension (already enabled) adds a `vector` column type and similarity operators to the same PostgreSQL instance already storing relational data.
+
+**Planned use cases:** RAG retrieval for coverage reasoning; optionally similarity search across historical claims for fraud signal in a later iteration (not currently scoped to any month).
+
+---
+
+## Data Flow Example: Full Claim Journey (Current — Text, August)
 
 ```
-STEP 1: Claimant speaks
-"My car was hit by a truck on July 15 in Mumbai. I have policy XYZ123. Repair cost is 50,000 rupees."
+STEP 1: Claimant types
+"My car was hit by a truck on July 15 in Mumbai. I have policy XYZ123.
+Repair cost is 50,000 rupees."
 
 STEP 2: Frontend → Backend
-POST /api/v1/voice/transcribe (audio file)
-→ Whisper transcribes to text
+POST /api/v1/claims/intake { claim_text, input_mode: "text" }
+→ claim_extractor (Llama 3.1 8B) → mandatory_field_checker
+→ missing_fields == [] → awaiting_confirmation: true
 
-STEP 3: Text → Agent Pipeline (Extraction & Confirmation)
-POST /api/v1/claims/extract
-→ Extractor checks for missing fields, parses documents with OCR.
-→ Confirmation asks user to confirm fields.
+STEP 3: Frontend shows extracted fields; user reviews/edits, then
+uploads required documents (auto → damage_photo, repair_estimate)
+POST /api/v1/claims/{id}/documents (x2)
 
-STEP 4: Agent Pipeline (Evaluation)
-Node 3 (Policy Validator): confirms policy XYZ123 is active, auto insurance, limit 500000
-Node 4 (Coverage Checker): embeds claim text, pgvector search retrieves clauses, confirms coverage.
-Node 5 (Fraud Detector): checks doc data vs claim text. fraud_score = 0.15.
-Node 6 (Claim Decision): coverage eligible + low fraud → final_decision = approved.
-Node 7 (Closure Router): sets closure_status = closed, lists adjuster as contact. Builds response JSON + TTS text.
+STEP 4: User clicks Confirm
+POST /api/v1/claims/{id}/confirm { confirmed: true }
+→ policy_validator: XYZ123 active, coverage 500000, deductible 10000
+→ document_requirement_checker: both required docs present
+→ coverage_checker (stub): 50000 <= 500000 → eligible
+→ fraud_detector: low score, no flags
+→ route_decision: assigned to Priya Sharma (auto specialist)
+→ response_formatter: final_decision = "approved", closure_status = "closed"
 
-STEP 4: Backend → Frontend
-JSON result + POST /api/v1/voice/synthesize → audio response
-
-STEP 5: Frontend
-Displays results AND plays spoken confirmation to the claimant
+STEP 5: Backend → Frontend
+JSON result rendered as the Decision card (payout, deductible, adjuster,
+fraud score, collapsible raw JSON)
 
 STEP 6: Database
-INSERT into claims table + audit_log
+claims row updated (status=evaluated, final_decision, closure_status,
+full pipeline_state); payment_requests row inserted (stub, pending_finance)
 ```
+
+**Planned voice variant (Sept)** — identical from Step 2 onward, with Step 1 becoming `audio → POST /voice/transcribe → claim_text` and Step 5 gaining a parallel `POST /voice/synthesize` call on `spoken_response`.
 
 ---
 
 ## Technology Choices & Why
 
-| Component | Choice | Why |
-|-----------|--------|-----|
-| Backend | FastAPI | Async, fast, great for AI/LLM integrations, built-in OpenAPI docs |
-| Object Storage | AWS S3 (Optional) | Enterprise-grade cloud file storage for uploaded documents (Free tier) |
-| Frontend | Next.js + React | Full-stack TypeScript, Vercel deployment, SSR |
-| Voice (STT) | faster-whisper | Open-source, self-hosted, no per-call cost |
-| Voice (TTS) | Piper | Open-source, fast, self-hosted |
-| OCR (Docs) | pytesseract + pdfplumber | Open-source document text extraction |
-| LLM Orchestration | LangGraph | Standard for agentic workflows, explicit state management |
-| Vector store | PostgreSQL + pgvector | RAG support, one database instead of two, low ops burden |
-| Database | PostgreSQL | Reliable, JSONB for audit logs, doubles as vector store |
-| LLM | Llama 3.1 (Ollama) | Open-source, local, no API costs, runs on consumer hardware |
-| Deployment | Docker + GitHub Actions | Reproducible environments, CI/CD automation |
+| Component | Choice | Status | Why |
+|-----------|--------|--------|-----|
+| Backend | FastAPI | ✅ Built | Async-capable, fast, built-in OpenAPI docs (`/docs`) |
+| Frontend | Next.js + React + TS | ✅ Built | Full-stack TypeScript, straightforward Vercel deployment path |
+| Agent orchestration | LangGraph | ✅ Built | Explicit state machine, conditional edges map directly to business rules (policy → docs → coverage → fraud) |
+| LLM | Llama 3.1 8B via Ollama | ✅ Built (extraction only) | Local, no API cost, sufficient for structured extraction |
+| Database | PostgreSQL 15 | ✅ Built | Reliable, JSONB for `pipeline_state`/`audit_log`, doubles as vector store |
+| Vector store | PostgreSQL + pgvector | 🔜 Sept | One database instead of two; extension already enabled |
+| Voice (STT) | faster-whisper | 🔜 Sept | Open-source, self-hosted, no per-call cost |
+| Voice (TTS) | Piper | 🔜 Sept | Open-source, fast, self-hosted |
+| OCR | pytesseract + pdfplumber | 🔜 Sept | Not yet in `requirements.txt`; needed for document content matching |
+| Deployment | Docker + GitHub Actions | 🔜 Oct | `docker-compose.yml` exists early, but no CI workflow yet |
+| Object storage | Local disk (`uploads/`) | ✅ Built (interim) | `STORAGE_LOCAL_PATH`; AWS S3 remains optional/unbuilt |
 
 ---
 
-## Deployment Architecture (October onwards)
+## Deployment Architecture — 🔜 October (planned, not yet built)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -365,9 +393,10 @@ INSERT into claims table + audit_log
               │ git push
               ↓
 ┌──────────────────────────────────────────────────────────────┐
-│            GitHub Actions (CI/CD Pipeline)                    │
-│  - Run pytest (backend), Jest (frontend)                     │
-│  - Build Docker images, push to registry                     │
+│            GitHub Actions (CI/CD Pipeline)  🔜 Oct            │
+│  - Run pytest (backend, already exists locally),              │
+│    Jest (frontend, not yet written)                           │
+│  - Build Docker images, push to registry                      │
 └─────────┬────────────────────────────────────────────────────┘
           │
     ┌─────┴─────┐
@@ -375,7 +404,12 @@ INSERT into claims table + audit_log
 ┌────────┐   ┌─────────────┐
 │ Vercel │   │Railway/Render│
 │Frontend│   │ Backend + DB │
-│        │   │(Postgres +   │
-│        │   │ pgvector)    │
+│ 🔜 Oct │   │  🔜 Oct      │
 └────────┘   └─────────────┘
 ```
+
+`docker-compose.yml` and `database/init.sql`/`schema.sql`/`seed.sql` already exist and work locally (containerization scaffolding started ahead of schedule), but no GitHub Actions workflow, Vercel project, or Railway/Render deployment exists yet.
+
+---
+
+*This document is the single source of truth for architecture as of the August (Review 1) milestone. It should be updated at the start of September and October, not left as a static target-state description — move each 🔜 item to ✅ as it's actually built, rather than writing a new document.*

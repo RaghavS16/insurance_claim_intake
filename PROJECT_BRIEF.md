@@ -38,7 +38,7 @@ A production-grade system that automates insurance claim intake using:
 
 ### Database & Storage
 - **PostgreSQL** — production relational data (policies, claims, adjusters, audit log) **and** vector storage via the `pgvector` extension (policy embeddings for RAG) — one database, two roles
-- **AWS S3 (Optional)** — enterprise-grade cloud object storage for uploaded claim documents (images/PDFs)
+- **AWS S3** — enterprise-grade cloud object storage for uploaded claim documents (images/PDFs)
 - **Redis** (optional) — caching, session management
 - **MongoDB** (optional) — unstructured claim documents
 
