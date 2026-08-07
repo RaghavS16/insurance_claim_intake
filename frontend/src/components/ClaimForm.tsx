@@ -5,6 +5,7 @@ import {
   submitIntake,
   confirmClaim,
   uploadDocument,
+  getDocumentRequirements,
   IntakeResponse,
   ConfirmResponse,
 } from "@/services/claims";
@@ -54,8 +55,16 @@ export default function ClaimForm() {
 
       if (data.awaiting_confirmation) {
         const claimType = (data.extracted_data?.claim_type as string) ?? "";
-        if (claimType === "auto" || claimType === "home") {
-          setStep("documents");
+        // FIX 3: Ask the backend whether documents are required instead of
+        // hardcoding "auto" | "home". This ensures the upload step is shown
+        // whenever DOCUMENT_REQUIREMENTS changes, with no frontend update needed.
+        if (claimType) {
+          const reqData = await getDocumentRequirements(claimType);
+          if (reqData.required_documents && reqData.required_documents.length > 0) {
+            setStep("documents");
+          } else {
+            setStep("confirm");
+          }
         } else {
           setStep("confirm");
         }

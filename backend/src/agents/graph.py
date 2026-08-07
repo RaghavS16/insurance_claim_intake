@@ -47,10 +47,14 @@ def build_evaluation_graph(db: Session):
         {"valid": "document_requirement_checker", "rejected": "response_formatter"},
     )
 
+    # FIX 2: When documents are missing we still run route_decision so that
+    # assigned_adjuster is always populated in the state. Without this, the
+    # "missing" branch jumped directly to response_formatter, leaving
+    # assigned_adjuster=None in the API response and causing a frontend crash.
     graph.add_conditional_edges(
         "document_requirement_checker",
         lambda s: "missing" if s.get("missing_documents") else "ready",
-        {"ready": "coverage_checker", "missing": "response_formatter"},
+        {"ready": "coverage_checker", "missing": "route_decision"},
     )
 
     graph.add_conditional_edges(

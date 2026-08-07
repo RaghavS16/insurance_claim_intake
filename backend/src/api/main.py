@@ -128,6 +128,10 @@ def upload_document(
         )
 
     filename = file.filename or "uploaded_file"
+    # FIX 1: flush so that the DB assigns claim.id (UUID PK) before we read it.
+    # Without this, a newly-added-but-not-flushed claim has id=None, producing
+    # an S3 key of "None/<hash>_filename" which is silently wrong.
+    db.flush()
     s3_filename = f"{claim.id}/{uuid.uuid4().hex[:8]}_{filename}"
     
     # Upload to S3
