@@ -79,6 +79,16 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     setattr(claim, "claim_type", result.get("extracted_data", {}).get("claim_type"))
     setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
     setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
+    
+    # Map incident_date to the DB column if it was successfully extracted
+    incident_date_str = result.get("extracted_data", {}).get("incident_date")
+    if incident_date_str:
+        from datetime import datetime
+        try:
+            setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+
     db.commit()
 
     return {
@@ -231,6 +241,20 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
     setattr(claim, "final_decision", str(result.get("final_decision") or ""))
     setattr(claim, "closure_status", str(result.get("closure_status") or ""))
     setattr(claim, "status", "evaluated")
+
+    # Map policy_id to DB column if policy details were found
+    policy_id = result.get("policy_data", {}).get("id")
+    if policy_id:
+        setattr(claim, "policy_id", policy_id)
+
+    # Ensure incident_date is mapped in case it wasn't captured in early intake
+    incident_date_str = result.get("extracted_data", {}).get("incident_date")
+    if incident_date_str:
+        from datetime import datetime
+        try:
+            setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
+        except ValueError:
+            pass
 
     # Stub payment logging -- only on approval, never actually disbursed
     if result.get("final_decision") == "approved":
