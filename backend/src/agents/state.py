@@ -12,6 +12,11 @@ class ClaimState(TypedDict, total=False):
     awaiting_confirmation: bool        # True once fields are complete and shown back to user
     confirmed: bool                    # True once user has confirmed the extracted data
 
+    # R3-8: Proxy confidence score — ratio of required fields that are non-null
+    # after extraction. Wired to the `extraction_confidence` DB column.
+    # Range: 0.0 (all required fields missing) to 1.0 (all required fields present).
+    extraction_confidence: float
+
     # ---- Documents (Stage 3) ----
     documents: List[Dict[str, Any]]        # [{document_type, filename, file_path}]
     required_documents: List[str]          # required doc types for this claim_type
@@ -20,7 +25,7 @@ class ClaimState(TypedDict, total=False):
 
     # ---- Policy validation (Stage 4) ----
     policy_data: Dict[str, Any]
-    validation_status: str  # "valid" | "rejected"
+    validation_status: str  # "valid" | "rejected" | "type_mismatch"
 
     # ---- Coverage + deductible (Stage 4) ----
     coverage_eligible: bool
@@ -44,4 +49,4 @@ class ClaimState(TypedDict, total=False):
                              # voice phrasing can diverge from display text later without
                              # touching decision logic
 
-    audit_log: List[str]
+    audit_log: List[str]

@@ -111,7 +111,16 @@ DEBUG=True
 AWS_ACCESS_KEY_ID=your_key_here
 AWS_SECRET_ACCESS_KEY=your_secret_here
 AWS_S3_BUCKET_NAME=your_bucket_here
+AWS_REGION=ap-south-1
+# R3-5: Comma-separated origins allowed by CORS.  localhost:3000 is the
+# dev default.  Add your Vercel/Railway URL here before October deployment.
+ALLOWED_ORIGINS=http://localhost:3000
 ```
+
+> **Note on `nomic-embed-text`:** The model is pulled per the Ollama setup step
+> and required for the September RAG deliverable, but **nothing in the August
+> codebase calls it**. Do not present it as an active feature in Review 1 —
+> only state that it is downloaded and ready for the September sprint.
 
 ### 9. Test FastAPI Backend
 ```bash
@@ -166,12 +175,15 @@ services:
     environment:
       POSTGRES_PASSWORD: DBpassword
       POSTGRES_DB: insurance_claims
+    # R1-13: port 5433:5432 — host port 5433 maps to container port 5432.
+    # This matches docker-compose.yml and DATABASE_URL in backend/.env.
+    # Use psql -h localhost -p 5433 ... to connect from the host.
     ports: ["5433:5432"]
-    volumes: ["postgres_data:/var/lib/postgresql/data"]
-    # Enable the extension automatically on first startup:
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql
 
   backend:
     build: ./backend
@@ -179,7 +191,7 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-    depends_on: [postgres]
+      AWS_REGION: ap-south-1
 
   frontend:
     build: ./frontend

@@ -1,6 +1,29 @@
 # User Experience Walkthrough — Final System (Post-October)
 ## All Paths Through the 7-Step Workflow (Corrected)
 
+> **⚠️ REVIEW PANEL NOTE — August (Review 1) milestone:**
+> This document describes the **target-state** system (post-October). Features marked
+> with 🎤 (voice), 📋 (policy clause citations), 💸 (appeal workflow), and ⭐ (feedback)
+> are **not yet implemented** in the August codebase. Do NOT demo these paths as live
+> capabilities in Review 1.
+>
+> **What IS live in August (text-only pipeline):**
+> - ✅ Text claim intake, multi-turn field-prompt loop
+> - ✅ Document upload (S3), type validation
+> - ✅ Policy validation (active/expired), claim_type vs policy_type check
+> - ✅ Coverage check (amount-only — clause citations are September RAG work)
+> - ✅ Rule-based fraud detection (future date, near-limit amount)
+> - ✅ Adjuster routing with load-balancing
+> - ✅ Auto-approve / deny / flag / manual-review decisions
+>
+> **Explicitly out of scope for August:**
+> - 🔜 Voice input/output (September)
+> - 🔜 Policy clause citations in approval messages (September RAG)
+> - 🔜 Scope-of-coverage exclusion enforcement, e.g. "flood excluded under clause 2.1" (September)
+> - 🔜 Appeal / reopening workflow (October)
+> - 🔜 Feedback collection (October)
+> - 🔜 Customer identity / ownership check (October)
+
 Every scenario below is voice-first with text fallback (🎤 = spoken, 💬 = also shown as text on screen).
 
 ---

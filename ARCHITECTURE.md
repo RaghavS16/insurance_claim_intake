@@ -380,7 +380,7 @@ full pipeline_state); payment_requests row inserted (stub, pending_finance)
 | Voice (TTS) | Piper | 🔜 Sept | Open-source, fast, self-hosted |
 | OCR | pytesseract + pdfplumber | 🔜 Sept | Not yet in `requirements.txt`; needed for document content matching |
 | Deployment | Docker + GitHub Actions | 🔜 Oct | `docker-compose.yml` exists early, but no CI workflow yet |
-| Object storage | Local disk (`uploads/`) | ✅ Built (interim) | `STORAGE_LOCAL_PATH`; AWS S3 remains optional/unbuilt |
+| Object storage | AWS S3 (boto3) | ✅ Built | Direct S3 upload via `upload_to_s3()` in `backend/src/utils/s3.py`; bucket/region/credentials read from env vars. Local-disk path is removed — **S3 is required**, not optional. Note: URLs are currently public-read direct links, not presigned — see Known Limitations. |
 
 ---
 
@@ -413,3 +413,36 @@ full pipeline_state); payment_requests row inserted (stub, pending_finance)
 ---
 
 *This document is the single source of truth for architecture as of the August (Review 1) milestone. It should be updated at the start of September and October, not left as a static target-state description — move each 🔜 item to ✅ as it's actually built, rather than writing a new document.*
+
+---
+
+## Known Limitations — August (Review 1)
+
+This section documents intentional scope cuts and known gaps in the current implementation. Each item includes the planned remedy and a one-line viva answer for the review panel.
+
+### Business Logic
+
+| # | Limitation | Impact | Planned Remedy |
+|---|-----------|--------|----------------|
+| BL-1 | **No customer identity / policy ownership check.** Anyone who knows a policy number can file a claim against it. | MVP with no auth system — reasonable scope cut. | October: wire `policies.customer_id` to an auth JWT after authentication is added. |
+| BL-2 | **Coverage checking validates amount ceiling only, not scope-of-coverage.** A valid, non-expired policy currently approves any incident type, including perils it would normally exclude. | Directly noticeable in demo if a reviewer files a "flood on auto" scenario. | September: replace `coverage_checker` stub with pgvector RAG over `policy_embeddings`. |
+| BL-3 | **Adjuster routing is load-balanced by `claims_assigned` (fixed in August), but `claims_assigned` is not reset between sessions.** Counter accumulates across all-time claims. | Minor — load balancing is directionally correct but not rate-based. | October: add a scheduled reset or time-windowed query. |
+| BL-4 | **No appeal / reopening workflow.** A `denied` or `closed` claim has zero recourse path in the current system. | `UX_WALKTHROUGH.md` mentions appeals in its target-state description (Paths 6, 10). | October: add `appealed_claim_id` FK, `POST /api/v1/claims/{id}/appeal` endpoint. |
+| BL-5 | **No feedback tracking field.** Nothing marks whether feedback was requested or received for a closed claim. | Minor — feedback column stub useful to add before October migration. | October: add `feedback_requested_at`/`feedback_submitted` nullable columns. |
+
+### Security
+
+| # | Limitation | Impact | Planned Remedy |
+|---|-----------|--------|----------------|
+| S-1 | **S3 document URLs are permanent public-read links, not presigned.** Combined with a guessable key format, every uploaded document may be world-readable. | Includes potentially sensitive documents (medical bills, damage photos). | October: move to `generate_presigned_url()` with short expiry; set bucket ACL to private. |
+| S-2 | **Prompt injection into the extractor is unguarded.** `claim_text` is dropped verbatim into the LLM extraction prompt. | Low current risk (LLM has no tool access here), but worth acknowledging. | September: add input sanitisation before prompt construction; document as constraint. |
+
+### Infrastructure
+
+| # | Limitation | Impact | Planned Remedy |
+|---|-----------|--------|----------------|
+| I-1 | **No row-level locking on multi-turn intake.** Two near-simultaneous `/intake` calls on the same `ticket_id` can create a last-writer-wins race. | Unlikely in a single-user demo; relevant when load testing. | October: `SELECT ... FOR UPDATE` or an optimistic version column. |
+| I-2 | **Two sources of truth for documents** (`documents` table + `pipeline_state.documents` JSONB) can theoretically diverge under concurrent writes. | `document_requirement_checker` reads only the JSONB copy; the relational table provides queryability. | October: consider a view or trigger to keep them in sync; document the design intent in code. |
+| I-3 | **No Alembic / migration tooling.** `migrate.sql` and `schema.sql` both define the same table — drift between them is a when-not-if problem. | Adding columns in September/October will require manually updating both files. | October: introduce Alembic; `schema.sql` becomes the migration baseline. |
+| I-4 | **`extraction_confidence` column is defined but never populated.** | Dead schema. | September: populate with a proxy value (e.g. number of non-null fields / total fields). |
+| I-5 | **Currency hardcoded to ₹ (INR).** No `currency` field in schema or state. | Fine for single-market MVP; conflicts with "production-grade" framing if asked about generalisation. | Document as single-market scope; add `currency` field if multi-market is added to roadmap. |

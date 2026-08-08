@@ -1,0 +1,42 @@
+# R4-a: Prevent sensitive and unnecessary files from being copied into
+# the Docker image during `COPY . .` in the Dockerfile.
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Test databases and artifacts
+test_claims.db
+*.db
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets / config that must NOT be baked into the image
+.env
+*.env.*
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Git
+.git/
+.gitignore

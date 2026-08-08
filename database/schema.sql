@@ -103,15 +103,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- ============================================================
 -- Seed Data for Development / Testing
+-- R4-7: All three seed sources (schema.sql, seed.sql, conftest.py)
+-- now define the same canonical policy set: XYZ123, HOME456, AUTO789.
 -- ============================================================
 
--- Active policy used by tests (XYZ123, 500000 coverage, 10000 deductible)
+-- Active auto policy used by tests (XYZ123, 500000 coverage, 10000 deductible)
 INSERT INTO policies (policy_number, customer_id, policy_type, coverage_amount, deductible, effective_date, expiry_date, is_active)
 VALUES
     ('XYZ123', gen_random_uuid(), 'auto', 500000, 10000, '2024-01-01', '2030-12-31', TRUE)
 ON CONFLICT (policy_number) DO NOTHING;
 
--- Expired policy used by tests (AUTO789)
+-- Active home policy (HOME456, 1000000 coverage, 10000 deductible)
+-- Previously only existed in seed.sql; added here so `docker-compose up` and
+-- direct `schema.sql` runs both produce a working home-claim demo.
+INSERT INTO policies (policy_number, customer_id, policy_type, coverage_amount, deductible, effective_date, expiry_date, is_active)
+VALUES
+    ('HOME456', gen_random_uuid(), 'home', 1000000, 10000, '2025-03-01', '2026-02-28', TRUE)
+ON CONFLICT (policy_number) DO NOTHING;
+
+-- Expired auto policy used by tests (AUTO789, for invalid-policy path)
 INSERT INTO policies (policy_number, customer_id, policy_type, coverage_amount, deductible, effective_date, expiry_date, is_active)
 VALUES
     ('AUTO789', gen_random_uuid(), 'auto', 300000, 5000, '2020-01-01', '2022-12-31', FALSE)

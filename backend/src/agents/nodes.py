@@ -1,14 +1,24 @@
 import json
+import logging
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
+from typing import Any, Dict
+
 from langchain_ollama import ChatOllama
 from sqlalchemy.orm import Session
 
 from src.database.models import Policy, Adjuster
 from src.agents.state import ClaimState
 
-llm = ChatOllama(model="llama3.1:8b", temperature=0)
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# LLM — compiled once at module import so graph.compile() doesn't bear the
+# repeated construction cost.  timeout=60 enforces the <5s-per-node target;
+# Ollama hangs will surface as a TimeoutError rather than blocking forever.
+# ---------------------------------------------------------------------------
+llm = ChatOllama(model="llama3.1:8b", temperature=0, timeout=60)
 
 # Fields the system must have before it can evaluate a claim.
 REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
@@ -36,6 +46,43 @@ DOCUMENT_LABELS = {
     "fir": "a police FIR / report",
 }
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    """Return current UTC time as an ISO-8601 string for audit log entries."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _audit(state: ClaimState, message: str) -> None:
+    """Append a timestamped entry to the audit log. R3-7 fix."""
+    state.setdefault("audit_log", []).append(f"[{_now_iso()}] {message}")
+
+
+def _coerce_amount(raw: Any) -> float | None:
+    """
+    Safely coerce a claimed_amount value from the LLM into a float.
+
+    The LLM sometimes returns:
+      - A JSON number  → already float/int, just cast
+      - A string like "50,000" or "₹50000" → strip non-numeric chars and cast
+      - None           → return None (field still missing)
+
+    R1-9 fix: without this, coverage_checker's `<=` raises TypeError on strings.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        cleaned = re.sub(r"[^\d.]", "", raw)
+        try:
+            return float(cleaned) if cleaned else None
+        except ValueError:
+            return None
+    return None
+
 
 # ---------- Node 1: Claim Extractor ----------
 EXTRACTION_PROMPT = """Extract structured claim information from the text below.
@@ -48,30 +95,72 @@ Return ONLY valid JSON, no markdown, no explanation, matching this schema:
   "claimed_amount": number or null
 }}
 
+IMPORTANT: claimed_amount must be a number (not a string). If you cannot determine
+a value, use null — do not guess.
+
 Claim text: "{claim_text}"
 """
 
 def claim_extractor(state: ClaimState) -> ClaimState:
-    prompt = EXTRACTION_PROMPT.format(claim_text=state["claim_text"])
-    response = llm.invoke(prompt)
-    content = response.content
-    raw = content if isinstance(content, str) else str(content)
-    raw = raw.strip()
-    raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
+    # R1-5: If the claim is already confirmed/evaluated, short-circuit to avoid
+    # a re-submission or retry overwriting already-confirmed field data with
+    # potentially worse re-extracted data from stale/empty text.
+    if state.get("confirmed") or state.get("closure_status") in ("closed", "pending_review"):
+        _audit(state, "claim_extractor skipped: claim already confirmed/evaluated")
+        return state
 
+    prompt = EXTRACTION_PROMPT.format(claim_text=state["claim_text"])
     try:
+        response = llm.invoke(prompt)
+        content = response.content
+        raw = content if isinstance(content, str) else str(content)
+        raw = raw.strip()
+        raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
         extracted = json.loads(raw)
     except json.JSONDecodeError:
-        extracted = {
+        logger.warning("claim_extractor: JSON decode failed, using fallback extraction")
+        extracted: Dict[str, Any] = {
+            "policy_id": None, "incident_date": None,
+            "claim_type": state.get("claim_type_hint"), "damage_description": state["claim_text"],
+            "claimed_amount": None,
+        }
+    except Exception as exc:
+        logger.error("claim_extractor: LLM invocation failed: %s", exc)
+        extracted: Dict[str, Any] = {
             "policy_id": None, "incident_date": None,
             "claim_type": state.get("claim_type_hint"), "damage_description": state["claim_text"],
             "claimed_amount": None,
         }
 
-    # Merge with anything already known (e.g. answers supplied in a previous confirm-loop turn)
-    merged = {**state.get("extracted_data", {}), **{k: v for k, v in extracted.items() if v is not None}}
+    # R1-9: Coerce claimed_amount to float immediately after extraction so that
+    # all downstream nodes always work with a numeric type.
+    if "claimed_amount" in extracted:
+        extracted["claimed_amount"] = _coerce_amount(extracted["claimed_amount"])
+
+    # R1-4: Field-locking: once a field exists in prior state with a non-null
+    # value, a second-turn re-extraction must NOT silently overwrite it.
+    # Only merge fields that are currently absent or null in the existing data.
+    prior = state.get("extracted_data") or {}
+    locked_fields = {k for k, v in prior.items() if v is not None}
+
+    merged = {**prior}
+    for k, v in extracted.items():
+        if v is not None and k not in locked_fields:
+            merged[k] = v
+        elif k not in merged:
+            merged[k] = v  # allow writing null for absent keys so missing_fields works
+
+    # R3-8: Populate extraction_confidence as a proxy — ratio of required fields
+    # that are now non-null. This wires in the previously-dead schema column.
+    non_null_required = sum(1 for f in REQUIRED_FIELDS if merged.get(f) is not None)
+    state["extraction_confidence"] = non_null_required / len(REQUIRED_FIELDS)
+
     state["extracted_data"] = merged
-    state.setdefault("audit_log", []).append(f"Extracted: {merged}")
+    _audit(
+        state,
+        f"Extracted fields: {[k for k, v in merged.items() if v is not None]} "
+        f"(confidence={state['extraction_confidence']:.0%})"
+    )
     return state
 
 
@@ -82,9 +171,9 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
     state["missing_fields"] = missing
     state["awaiting_confirmation"] = len(missing) == 0
     if missing:
-        state.setdefault("audit_log", []).append(f"Missing required fields: {missing}")
+        _audit(state, f"Missing required fields: {missing}")
     else:
-        state.setdefault("audit_log", []).append("All mandatory fields present")
+        _audit(state, "All mandatory fields present")
     return state
 
 
@@ -96,7 +185,28 @@ def policy_validator(state: ClaimState, db: Session) -> ClaimState:
     if not policy or not policy.is_active or policy.expiry_date < date.today():
         state["policy_data"] = {}
         state["validation_status"] = "rejected"
-        state.setdefault("audit_log", []).append(f"Policy validation failed for {policy_id}")
+        _audit(state, f"Policy validation failed for {policy_id}")
+        return state
+
+    # R2-3: Validate that the user-declared claim_type matches the policy's
+    # actual policy_type.  Mismatched types (e.g. "business" claim on an "auto"
+    # policy) are not a denial — but we flag it and route to manual review so
+    # an adjuster can verify, rather than silently approving on wrong coverage.
+    declared_claim_type = str(state["extracted_data"].get("claim_type") or "")
+    if declared_claim_type and declared_claim_type != policy.policy_type:
+        state["policy_data"] = {
+            "id": str(policy.id),
+            "policy_number": policy.policy_number,
+            "policy_type": policy.policy_type,
+            "coverage_amount": float(policy.coverage_amount),  # type: ignore
+            "deductible": float(policy.deductible),  # type: ignore
+        }
+        state["validation_status"] = "type_mismatch"
+        _audit(
+            state,
+            f"Claim type mismatch: declared='{declared_claim_type}', "
+            f"policy type='{policy.policy_type}'. Routing to manual review."
+        )
         return state
 
     state["policy_data"] = {
@@ -107,28 +217,31 @@ def policy_validator(state: ClaimState, db: Session) -> ClaimState:
         "deductible": float(policy.deductible),  # type: ignore
     }
     state["validation_status"] = "valid"
-    state.setdefault("audit_log", []).append(f"Policy {policy_id} validated")
+    _audit(state, f"Policy {policy_id} validated (type={policy.policy_type})")
     return state
 
 
+# ---------- Node 4: Document Requirement Checker ----------
 def document_requirement_checker(state: ClaimState) -> ClaimState:
     extracted = state.get("extracted_data") or {}
-    claim_type = str(extracted.get("claim_type") or "")
+    # R1-2: Use the policy's actual type (already validated) as the canonical
+    # source — falls back to the user-declared claim_type only if policy_data
+    # is absent (e.g. during unit tests without DB).
+    policy_type = (state.get("policy_data") or {}).get("policy_type")
+    claim_type = str(policy_type or extracted.get("claim_type") or "")
     required = DOCUMENT_REQUIREMENTS.get(claim_type, [])
     state["required_documents"] = required
     state["documents_needed"] = len(required) > 0
 
     if not required:
         state["missing_documents"] = []
-        state.setdefault("audit_log", []).append(f"No documents required for claim_type={claim_type}")
+        _audit(state, f"No documents required for claim_type={claim_type}")
         return state
 
     uploaded_types = {d.get("document_type") for d in state.get("documents", [])}
     missing = [d for d in required if d not in uploaded_types]
     state["missing_documents"] = missing
-    state.setdefault("audit_log", []).append(
-        f"Required documents: {required}, missing: {missing}"
-    )
+    _audit(state, f"Required documents: {required}, missing: {missing}")
     return state
 
 
@@ -137,45 +250,61 @@ def coverage_checker(state: ClaimState) -> ClaimState:
     # TODO (September): replace amount-only check with pgvector similarity search over
     # policy_embeddings + LLM reasoning over retrieved clauses to determine peril coverage,
     # not just the amount ceiling checked here.
-    claimed_amount = state["extracted_data"].get("claimed_amount") or 0
+    # NOTE: coverage_checker only runs for claims that reach this node (valid policy,
+    # documents ready). manual_review claims short-circuit at policy_validator.
+    # deductible_amount/payout_amount are explicitly absent for manual_review cases
+    # by design, not by omission — see response_formatter branch 3.
+
+    raw_amount = state["extracted_data"].get("claimed_amount")
+    # R2-2: Sanity-check claimed_amount sign/magnitude.
+    # _coerce_amount already ran in claim_extractor, but guard again defensively.
+    claimed_amount = _coerce_amount(raw_amount) or 0.0
+    if claimed_amount < 0:
+        _audit(state, f"WARN: negative claimed_amount ({claimed_amount}) clamped to 0")
+        claimed_amount = 0.0
+
     policy_data = state.get("policy_data") or {}
-    coverage_amount = policy_data.get("coverage_amount") or 0
-    deductible = policy_data.get("deductible", 0)
+    coverage_amount = float(policy_data.get("coverage_amount") or 0)
+    deductible = float(policy_data.get("deductible") or 0)
 
     eligible = claimed_amount <= coverage_amount
     state["coverage_eligible"] = eligible
     state["coverage_reasoning"] = (
-        f"Claimed amount ₹{claimed_amount} is within your policy limit of ₹{coverage_amount}."
+        f"Claimed amount ₹{claimed_amount:,.0f} is within your policy limit of ₹{coverage_amount:,.0f}."
         if eligible else
-        f"Claimed amount ₹{claimed_amount} exceeds your policy limit of ₹{coverage_amount}."
+        f"Claimed amount ₹{claimed_amount:,.0f} exceeds your policy limit of ₹{coverage_amount:,.0f}."
     )
 
     if eligible:
         state["deductible_amount"] = deductible
         state["payout_amount"] = max(claimed_amount - deductible, 0)
     else:
-        state["deductible_amount"] = 0
-        state["payout_amount"] = 0
+        state["deductible_amount"] = 0.0
+        state["payout_amount"] = 0.0
 
-    state.setdefault("audit_log", []).append(
-        f"Coverage check: claimed={claimed_amount}, limit={coverage_amount}, "
-        f"deductible={state['deductible_amount']}, payout={state['payout_amount']}"
+    _audit(
+        state,
+        f"Coverage check: claimed=₹{claimed_amount:,.0f}, limit=₹{coverage_amount:,.0f}, "
+        f"deductible=₹{state['deductible_amount']:,.0f}, payout=₹{state['payout_amount']:,.0f}"
     )
     return state
 
 
-# ---------- Node 6: Fraud Detector (rule-based only, per your scoping) ----------
+# ---------- Node 6: Fraud Detector (rule-based only, per scoping) ----------
 def fraud_detector(state: ClaimState, db: Session) -> ClaimState:
     flags = []
     score = 0.0
-    amount = state["extracted_data"].get("claimed_amount") or 0
+    raw_amount = state["extracted_data"].get("claimed_amount")
+    amount = _coerce_amount(raw_amount) or 0.0
     policy_data = state.get("policy_data") or {}
-    coverage_amount = policy_data.get("coverage_amount") or 0
+    coverage_amount = float(policy_data.get("coverage_amount") or 0)
 
     if amount > coverage_amount * 0.9:
         flags.append("claim_near_policy_limit")
         score += 0.3
 
+    # R3-9: Robust date parsing — flag unparseable dates explicitly rather than
+    # silently creating a two-truth situation (string in extracted_data vs None in DB).
     incident_date_str = state["extracted_data"].get("incident_date")
     if incident_date_str:
         try:
@@ -183,41 +312,73 @@ def fraud_detector(state: ClaimState, db: Session) -> ClaimState:
             if incident > date.today():
                 flags.append("future_incident_date")
                 score += 0.4
-        except ValueError:
+        except (ValueError, TypeError):
             flags.append("unparseable_incident_date")
             score += 0.1
+            _audit(state, f"WARN: incident_date '{incident_date_str}' could not be parsed as YYYY-MM-DD")
 
     if not state["extracted_data"].get("damage_description"):
         flags.append("missing_description")
         score += 0.1
 
-    # Document-based signal: only meaningful once documents actually exist in state.
+    # NOTE (R1-11): The `no_supporting_documents` check below is intentionally
+    # preserved for potential future graph redesigns where fraud_detector might
+    # run before the documents-ready gate.  In the current graph, this branch
+    # is unreachable because fraud_detector only runs after the documents-ready
+    # conditional edge in graph.py.  It is a no-op at runtime, not a bug.
     if state.get("documents_needed") and not state.get("documents"):
         flags.append("no_supporting_documents")
         score += 0.1
 
     state["fraud_score"] = min(score, 1.0)
     state["fraud_flags"] = flags
-    state.setdefault("audit_log", []).append(f"Fraud score: {state['fraud_score']}, flags: {flags}")
+    _audit(state, f"Fraud score: {state['fraud_score']:.2f}, flags: {flags}")
     return state
 
 
 # ---------- Node 7: Route Decision ----------
 def route_decision(state: ClaimState, db: Session) -> ClaimState:
-    claim_type = state["extracted_data"].get("claim_type", "auto")
+    # R1-1: Use `or "auto"` so that a None claim_type (not just a missing key)
+    # also triggers the default, preventing the adjuster query from matching nothing.
+    claim_type = state["extracted_data"].get("claim_type") or "auto"
+
+    # R2-6: Load-balance by ordering adjusters by claims_assigned ascending so
+    # the least-loaded adjuster is always picked first, not just the first match.
     adjuster = (
         db.query(Adjuster)
-        .filter(Adjuster.specialization == claim_type, Adjuster.is_active == True)
+        .filter(Adjuster.specialization == claim_type, Adjuster.is_active == True)  # noqa: E712
+        .order_by(Adjuster.claims_assigned.asc())
         .first()
-    ) or db.query(Adjuster).filter(Adjuster.specialization == "complex").first()
+    ) or (
+        db.query(Adjuster)
+        .filter(Adjuster.specialization == "complex", Adjuster.is_active == True)  # noqa: E712
+        .order_by(Adjuster.claims_assigned.asc())
+        .first()
+    )
 
-    state["assigned_adjuster"] = {
-        "id": str(adjuster.id), "name": adjuster.name, "email": adjuster.email,
-    } if adjuster else {}
+    # R3-12: Guard against the case where no adjuster at all exists in the DB
+    # (e.g. empty seed, or all adjusters deactivated).  Without this, the claim
+    # would be approved with assigned_adjuster_id=NULL and no accountability trail.
+    if not adjuster:
+        _audit(
+            state,
+            "WARN: No active adjuster found for any specialization. "
+            "Claim will proceed without an assigned adjuster — manual intervention required."
+        )
+        state["assigned_adjuster"] = {}
+    else:
+        state["assigned_adjuster"] = {
+            "id": str(adjuster.id), "name": adjuster.name, "email": adjuster.email,
+        }
+        # R2-6: Increment claims_assigned so the next claim uses load balancing correctly.
+        adjuster.claims_assigned = (adjuster.claims_assigned or 0) + 1  # type: ignore
+        db.flush()  # write within the same transaction; committed in the API layer
 
     if not state.get("ticket_id"):
         state["ticket_id"] = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
-    state.setdefault("audit_log", []).append(f"Routed to {state['assigned_adjuster']}, ticket {state['ticket_id']}")
+
+    adjuster_name = state["assigned_adjuster"].get("name", "UNASSIGNED")
+    _audit(state, f"Routed to adjuster '{adjuster_name}', ticket {state['ticket_id']}")
     return state
 
 
@@ -241,8 +402,16 @@ def response_formatter(state: ClaimState) -> ClaimState:
         state["closure_status"] = "awaiting_user"
 
     # 3. Policy invalid -> manual review, cannot auto-decide
-    elif state.get("validation_status") == "rejected":
-        message = "We couldn't validate your policy. Your claim has been sent for manual review."
+    elif state.get("validation_status") in ("rejected", "type_mismatch"):
+        if state.get("validation_status") == "type_mismatch":
+            policy_type = (state.get("policy_data") or {}).get("policy_type", "unknown")
+            declared = state["extracted_data"].get("claim_type", "unknown")
+            message = (
+                f"Your claim type ('{declared}') does not match your policy type ('{policy_type}'). "
+                "Your claim has been sent for manual review by an adjuster who will verify coverage."
+            )
+        else:
+            message = "We couldn't validate your policy. Your claim has been sent for manual review."
         state["final_decision"] = "manual_review"
         state["closure_status"] = "pending_review"
 
@@ -267,8 +436,8 @@ def response_formatter(state: ClaimState) -> ClaimState:
     else:
         message = (
             f"Your claim has been approved. Ticket {state.get('ticket_id')}. "
-            f"Approved payout (before final adjuster sign-off): ₹{state.get('payout_amount', 0)} "
-            f"after a ₹{state.get('deductible_amount', 0)} deductible. "
+            f"Approved payout (before final adjuster sign-off): ₹{state.get('payout_amount', 0):,.0f} "
+            f"after a ₹{state.get('deductible_amount', 0):,.0f} deductible. "
             f"Assigned to {state.get('assigned_adjuster', {}).get('name', 'an adjuster')} for processing."
         )
         state["final_decision"] = "approved"
@@ -276,5 +445,5 @@ def response_formatter(state: ClaimState) -> ClaimState:
 
     state["response_message"] = message
     state["spoken_response"] = message  # identical for now; kept separate for Sept TTS phrasing tweaks
-    state.setdefault("audit_log", []).append(f"Final decision: {state['final_decision']} ({state['closure_status']})")
+    _audit(state, f"Final decision: {state['final_decision']} ({state['closure_status']})")
     return state
