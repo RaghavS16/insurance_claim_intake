@@ -66,7 +66,7 @@ def _coerce_amount(raw: Any) -> float | None:
 
     The LLM sometimes returns:
       - A JSON number  → already float/int, just cast
-      - A string like "50,000" or "₹50000" → strip non-numeric chars and cast
+      - A string like "50,000", "₹50000", or "Rs. 1,50,000.00" → extract number and cast
       - None           → return None (field still missing)
 
     R1-9 fix: without this, coverage_checker's `<=` raises TypeError on strings.
@@ -76,6 +76,13 @@ def _coerce_amount(raw: Any) -> float | None:
     if isinstance(raw, (int, float)):
         return float(raw)
     if isinstance(raw, str):
+        match = re.search(r"(\d+(?:[,\s]\d+)*(?:\.\d+)?)", raw)
+        if match:
+            cleaned = match.group(1).replace(",", "").replace(" ", "")
+            try:
+                return float(cleaned)
+            except ValueError:
+                pass
         cleaned = re.sub(r"[^\d.]", "", raw)
         try:
             return float(cleaned) if cleaned else None

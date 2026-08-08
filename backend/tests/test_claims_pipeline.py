@@ -430,3 +430,61 @@ def test_audit_log_entries_are_timestamped(client):
     for entry in audit_log:
         # Each entry should start with [YYYY-MM-DDTHH:MM:SSZ]
         assert entry.startswith("[20"), f"audit_log entry missing timestamp: {entry!r}"
+
+
+def test_claimed_amount_as_string_coerced():
+    """R1-9: Verify _coerce_amount handles numeric formats, currency strings, commas, and invalid inputs."""
+    from src.agents.nodes import _coerce_amount
+
+    assert _coerce_amount(50000) == 50000.0
+    assert _coerce_amount(50000.50) == 50000.50
+    assert _coerce_amount("50,000") == 50000.0
+    assert _coerce_amount("₹50000") == 50000.0
+    assert _coerce_amount("Rs. 1,50,000.00") == 150000.00
+    assert _coerce_amount(None) is None
+    assert _coerce_amount("invalid_text") is None
+
+
+def test_duplicate_claim_rejected(client):
+    """R2-1: Submitting a claim for the same policy and incident date as an already-evaluated claim should be rejected with 409 Conflict."""
+    dummy_bytes = b"X" * 150
+    # First claim evaluation
+    intake1 = client.post("/api/v1/claims/intake", json={
+        "claim_text": "My car had an accident on 2025-12-01. Policy XYZ123. Repair cost is 15000 rupees.",
+        "input_mode": "text",
+    }).json()
+    tid1 = intake1["ticket_id"]
+    client.post(f"/api/v1/claims/{tid1}/documents", data={"document_type": "damage_photo"}, files={"file": ("d.jpg", dummy_bytes, "image/jpeg")})
+    client.post(f"/api/v1/claims/{tid1}/documents", data={"document_type": "repair_estimate"}, files={"file": ("e.pdf", dummy_bytes, "application/pdf")})
+    confirm1 = client.post(f"/api/v1/claims/{tid1}/confirm", json={"confirmed": True})
+    assert confirm1.status_code == 200
+
+    # Second claim with SAME policy (XYZ123) and SAME incident date (2025-12-01)
+    intake2 = client.post("/api/v1/claims/intake", json={
+        "claim_text": "My car had another hit on 2025-12-01. Policy XYZ123. Repair cost is 18000 rupees.",
+        "input_mode": "text",
+    }).json()
+    tid2 = intake2["ticket_id"]
+    client.post(f"/api/v1/claims/{tid2}/documents", data={"document_type": "damage_photo"}, files={"file": ("d.jpg", dummy_bytes, "image/jpeg")})
+    client.post(f"/api/v1/claims/{tid2}/documents", data={"document_type": "repair_estimate"}, files={"file": ("e.pdf", dummy_bytes, "application/pdf")})
+
+    confirm2 = client.post(f"/api/v1/claims/{tid2}/confirm", json={"confirmed": True})
+    assert confirm2.status_code == 409
+    assert "already exists" in confirm2.json()["detail"]
+
+
+def test_no_adjuster_fallback_edge_case():
+    """R3-12: route_decision handles edge cases gracefully when no matching adjuster exists without throwing a NoneType exception."""
+    from src.agents.nodes import route_decision
+    from unittest.mock import MagicMock
+
+    mock_db = MagicMock()
+    mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+    state = {
+        "extracted_data": {"claim_type": "unknown_type"},
+        "audit_log": [],
+    }
+    res = route_decision(state, mock_db)
+    assert res["assigned_adjuster"] == {}
+    assert any("No active adjuster found" in entry for entry in res.get("audit_log", []))
