@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
-from src.database.models import Claim, Document, PaymentRequest, Policy
+from src.database.models import Claim, Document, PaymentRequest, Policy, ConversationTurn
 from src.agents.graph import build_intake_graph, build_evaluation_graph
 from src.agents.nodes import DOCUMENT_REQUIREMENTS
+from src.api.voice_ws import router as voice_router
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(voice_router)
 
 # ---------------------------------------------------------------------------
 # Document upload security constants (R3-2)
@@ -500,3 +503,48 @@ def get_claim(ticket_id: str, db: Session = Depends(get_db)):
         "extracted_data": state.get("extracted_data"),
         "response_message": state.get("response_message"),
     }
+
+
+@app.post("/api/v1/claims/voice-session")
+def start_voice_session(db: Session = Depends(get_db)):
+    """Creates an empty draft claim and returns its ticket_id so the frontend
+    can open the WebSocket at /ws/claims/{ticket_id}/voice immediately."""
+    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    claim = Claim(ticket_id=ticket_id, input_mode="voice", status="draft", conversation_status="not_started")
+    db.add(claim)
+    db.commit()
+    return {"ticket_id": ticket_id}
+
+
+@app.get("/api/v1/claims/{ticket_id}/conversation")
+def get_conversation_history(ticket_id: str, db: Session = Depends(get_db)):
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="ticket_id not found")
+    turns = (
+        db.query(ConversationTurn)
+        .filter(ConversationTurn.claim_id == claim.id)
+        .order_by(ConversationTurn.turn_number, ConversationTurn.created_at)
+        .all()
+    )
+    return [{"turn": t.turn_number, "speaker": t.speaker, "text": t.text, "created_at": t.created_at} for t in turns]
+
+
+@app.get("/api/v1/claims")
+def list_claims(db: Session = Depends(get_db)):
+    claims = db.query(Claim).order_by(Claim.created_at.desc()).limit(50).all()
+    results = []
+    for c in claims:
+        st = c.pipeline_state or {}
+        results.append({
+            "id": str(c.id),
+            "ticket_id": c.ticket_id,
+            "claim_type": c.claim_type,
+            "status": c.status,
+            "conversation_status": c.conversation_status,
+            "final_decision": c.final_decision,
+            "closure_status": c.closure_status,
+            "extracted_data": st.get("extracted_data") or {},
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+    return results

@@ -114,3 +114,62 @@ def build_evaluation_graph(db: Session):
     graph.add_edge("response_formatter", END)
 
     return graph.compile()
+
+
+# ---------------------------------------------------------------------------
+# Graph 3 (Review 1): Conversation turn graph.
+# Runs once per user utterance. Reuses claim_extractor and
+# mandatory_field_checker unchanged; adds conversation-control routing on top.
+# No DB dependency -> compiled once at import time, like the intake graph.
+# ---------------------------------------------------------------------------
+
+def _build_conversation_graph():
+    graph = StateGraph(ClaimState)  # type: ignore
+
+    graph.add_node("conversation_turn_processor", nodes.conversation_turn_processor)
+    graph.add_node("claim_extractor", nodes.claim_extractor)
+    graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
+    graph.add_node("next_question_generator", nodes.next_question_generator)
+    graph.add_node("document_requirement_checker", nodes.document_requirement_checker)
+    graph.add_node("document_request_generator", nodes.document_request_generator)
+    graph.add_node("intake_completion_marker", nodes.intake_completion_marker)
+
+    graph.set_entry_point("conversation_turn_processor")
+
+    # 'repeat' / 'dont_know' / 'defer' intents set _skip_extraction=True and
+    # bypass claim_extractor entirely (their field-level updates were already
+    # applied in conversation_turn_processor).
+    graph.add_conditional_edges(
+        "conversation_turn_processor",
+        lambda s: "skip" if s.get("_skip_extraction") else "extract",
+        {"extract": "claim_extractor", "skip": "mandatory_field_checker"},
+    )
+
+    graph.add_edge("claim_extractor", "mandatory_field_checker")
+
+    graph.add_conditional_edges(
+        "mandatory_field_checker",
+        lambda s: "missing" if s.get("missing_fields") else "complete",
+        {"missing": "next_question_generator", "complete": "document_requirement_checker"},
+    )
+
+    graph.add_edge("next_question_generator", END)
+
+    graph.add_conditional_edges(
+        "document_requirement_checker",
+        lambda s: "missing" if s.get("missing_documents") else "ready",
+        {"missing": "document_request_generator", "ready": "intake_completion_marker"},
+    )
+
+    graph.add_edge("document_request_generator", END)
+    graph.add_edge("intake_completion_marker", END)
+
+    return graph.compile()
+
+
+_conversation_graph = _build_conversation_graph()
+
+
+def build_conversation_graph():
+    """Return the pre-compiled conversation-turn graph singleton."""
+    return _conversation_graph

@@ -81,6 +81,11 @@ class Claim(Base):
     final_decision = Column(String)          # need_more_info | need_documents | approved | denied | flagged_for_review | manual_review
     closure_status = Column(String)          # awaiting_user | pending_review | closed
 
+    # Review 1: tracks the voice conversation lifecycle, distinct from `status`
+    # ("draft"/"evaluated") which tracks the evaluation-graph lifecycle.
+    conversation_status = Column(String, default="not_started")
+    # not_started | in_progress | awaiting_documents | intake_complete
+
     # Full ClaimState dict persisted as JSON between the intake call and the confirm call,
     # since each API request compiles/invokes the graph fresh (no in-memory session).
     pipeline_state = _JSONB(default=dict)
@@ -132,3 +137,14 @@ class AuditLog(Base):
     action = Column(String, nullable=False)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     details = _JSONB(default=dict)
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    claim_id = _UUID(ForeignKey("claims.id"), nullable=False, default=None)
+    turn_number = Column(Integer, nullable=False)
+    speaker = Column(String, nullable=False)          # "user" | "agent"
+    text = Column(String, nullable=False)
+    audio_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
