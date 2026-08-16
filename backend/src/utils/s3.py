@@ -15,9 +15,9 @@ def get_s3_client():
         region_name=region,  # may still be None if env not set; boto3 will use ~/.aws config
     )
 
-def upload_to_s3(file_obj, filename: str) -> str:
+def upload_to_s3(file_obj, filename: str, expires_in: int = 3600) -> str:
     """
-    Uploads a file object to S3 and returns the public URL.
+    Uploads a file object to S3 and returns a secure presigned URL (or public URL if configured).
     """
     s3_client = get_s3_client()
     bucket_name = os.getenv('AWS_S3_BUCKET_NAME')
@@ -33,10 +33,13 @@ def upload_to_s3(file_obj, filename: str) -> str:
             filename
         )
         
-        # Generate the URL
+        # S-1 Security Fix: Default to secure presigned URLs unless public URLs are explicitly requested.
+        use_public = os.getenv("AWS_S3_PUBLIC_URLS", "false").lower() == "true"
+        if not use_public:
+            return generate_presigned_url(filename, expires_in=expires_in)
+
+        # Generate standard public URL fallback
         region = s3_client.meta.region_name
-        
-        # If region is not available from meta, fallback to standard aws url format
         if region:
             url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{filename}"
         else:
@@ -46,3 +49,18 @@ def upload_to_s3(file_obj, filename: str) -> str:
 
     except NoCredentialsError:
         raise Exception("AWS credentials not found. Please check your .env file.")
+
+def generate_presigned_url(filename: str, expires_in: int = 3600) -> str:
+    """
+    Generates a secure temporary presigned URL for downloading/viewing a file from S3.
+    """
+    s3_client = get_s3_client()
+    bucket_name = os.getenv('AWS_S3_BUCKET_NAME')
+    if not bucket_name:
+        raise ValueError("AWS_S3_BUCKET_NAME is not set in environment variables.")
+    return s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bucket_name, 'Key': filename},
+        ExpiresIn=expires_in
+    )
+

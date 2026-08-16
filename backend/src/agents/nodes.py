@@ -15,10 +15,21 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # LLM — compiled once at module import so graph.compile() doesn't bear the
-# repeated construction cost.  timeout=60 enforces the <5s-per-node target;
-# Ollama hangs will surface as a TimeoutError rather than blocking forever.
+# repeated construction cost. timeout=10 enforces quick fallback execution
+# when Ollama is offline or slow while allowing local Llama 3.1 inference.
 # ---------------------------------------------------------------------------
-llm = ChatOllama(model="llama3.1:8b", temperature=0, timeout=60)
+llm = ChatOllama(model="llama3.1:8b", temperature=0, timeout=10)
+
+def _sanitize_claim_text(text: str) -> str:
+    """Sanitize user claim text before injecting into prompt templates."""
+    if not text:
+        return ""
+    # Remove null bytes and trim whitespace
+    clean = text.replace("\x00", "").strip()
+    # Escape curly braces for python str.format safety
+    clean = clean.replace("{", "{{").replace("}", "}}")
+    return clean[:5000]
+
 
 # Fields the system must have before it can evaluate a claim.
 REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
@@ -116,7 +127,8 @@ def claim_extractor(state: ClaimState) -> ClaimState:
         _audit(state, "claim_extractor skipped: claim already confirmed/evaluated")
         return state
 
-    prompt = EXTRACTION_PROMPT.format(claim_text=state["claim_text"])
+    sanitized_text = _sanitize_claim_text(state.get("claim_text", ""))
+    prompt = EXTRACTION_PROMPT.format(claim_text=sanitized_text)
     try:
         response = llm.invoke(prompt)
         content = response.content

@@ -84,7 +84,10 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     """
     claim = None
     if request.ticket_id:
-        claim = db.query(Claim).filter(Claim.ticket_id == request.ticket_id).first()
+        try:
+            claim = db.query(Claim).filter(Claim.ticket_id == request.ticket_id).with_for_update().first()
+        except Exception:
+            claim = db.query(Claim).filter(Claim.ticket_id == request.ticket_id).first()
         if not claim:
             raise HTTPException(status_code=404, detail="ticket_id not found")
 
@@ -336,7 +339,10 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
     the cached result rather than re-running the graph (which would insert a
     second PaymentRequest row on an approved claim).
     """
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    try:
+        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).with_for_update().first()
+    except Exception:
+        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
