@@ -137,8 +137,12 @@ async def _handle_utterance(websocket, db, claim, voice_session, pcm_bytes: byte
         "type": "state_update",
         "extracted_data": result.get("extracted_data", {}),
         "missing_fields": result.get("missing_fields", []),
+        "field_status": result.get("field_status", {}),
         "missing_documents": result.get("missing_documents", []),
         "conversation_status": result.get("conversation_status"),
+        "awaiting_confirmation": result.get("awaiting_confirmation", False),
+        "confirmed": result.get("confirmed", False),
+        "agent_text": result.get("next_question", ""),
     })
 
     agent_text = result.get("next_question", "")

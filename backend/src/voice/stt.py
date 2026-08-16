@@ -86,7 +86,8 @@ def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
     audio. Returns "" on empty/silent input rather than raising.
     """
     global _model
-    if len(pcm_bytes) < sample_rate * 2 * 0.2:  # < 200ms of audio, not worth running
+    # Ignore audio shorter than 400ms to avoid false noise triggers
+    if len(pcm_bytes) < sample_rate * 2 * 0.4:
         return ""
 
     wav_bytes = _pcm16_to_wav_bytes(pcm_bytes, sample_rate)
@@ -99,9 +100,15 @@ def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
             vad_filter=False,    # already VAD-segmented upstream
             beam_size=3,
             temperature=0.0,
+            no_speech_threshold=0.6,
         )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        logger.info("STT transcribed %d bytes -> %r (lang_prob=%.2f)", len(pcm_bytes), text, info.language_probability)
+        seg_list = list(segments)
+        valid_texts = [
+            seg.text.strip() for seg in seg_list
+            if getattr(seg, "no_speech_prob", 0.0) <= 0.6
+        ]
+        text = " ".join(valid_texts).strip()
+        logger.info("STT transcribed %d bytes -> %r (lang_prob=%.2f)", len(pcm_bytes), text, getattr(info, "language_probability", 1.0))
         return text
     except RuntimeError as re:
         if "cublas" in str(re).lower() or "cudnn" in str(re).lower() or "cuda" in str(re).lower():
@@ -114,8 +121,14 @@ def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
                     vad_filter=False,
                     beam_size=3,
                     temperature=0.0,
+                    no_speech_threshold=0.6,
                 )
-                text = " ".join(seg.text.strip() for seg in segments).strip()
+                seg_list = list(segments)
+                valid_texts = [
+                    seg.text.strip() for seg in seg_list
+                    if getattr(seg, "no_speech_prob", 0.0) <= 0.6
+                ]
+                text = " ".join(valid_texts).strip()
                 logger.info("STT fallback transcribed %d bytes -> %r", len(pcm_bytes), text)
                 return text
             except Exception as cpu_err:

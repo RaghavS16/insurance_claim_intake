@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from src.database.session import get_db
 from src.database.models import Claim, Document, PaymentRequest, Policy, ConversationTurn
-from src.agents.graph import build_intake_graph, build_evaluation_graph
+from src.agents.graph import build_intake_graph, build_conversation_graph, build_evaluation_graph
 from src.agents.evaluation import DOCUMENT_REQUIREMENTS
 from src.api.voice_ws import router as voice_router
 
@@ -118,10 +118,10 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     }
 
     try:
-        graph = build_intake_graph()
+        graph = build_conversation_graph()
         result = graph.invoke(initial_state)
     except Exception as exc:
-        logger.exception("intake_claim: intake graph invocation failed")
+        logger.exception("intake_claim: conversation graph invocation failed")
         raise HTTPException(
             status_code=503,
             detail=(
@@ -141,6 +141,7 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     setattr(claim, "claim_type", result.get("extracted_data", {}).get("claim_type"))
     setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
     setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
+    setattr(claim, "conversation_status", result.get("conversation_status", "in_progress"))
 
     if result.get("extraction_confidence") is not None:
         setattr(claim, "extraction_confidence", float(result["extraction_confidence"]))
@@ -158,12 +159,11 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
         "ticket_id": ticket_id,
         "extracted_data": result.get("extracted_data", {}),
         "missing_fields": result.get("missing_fields", []),
+        "field_status": result.get("field_status", {}),
         "awaiting_confirmation": result.get("awaiting_confirmation", False),
-        "message": (
-            "Please provide: " + ", ".join(result.get("missing_fields", []))
-            if result.get("missing_fields")
-            else "All required details captured. Please review and confirm."
-        ),
+        "confirmed": result.get("confirmed", False),
+        "conversation_status": result.get("conversation_status"),
+        "message": result.get("next_question") or result.get("message", ""),
     }
 
 
@@ -181,7 +181,10 @@ def start_voice_session(db: Session = Depends(get_db)):
     )
     db.add(claim)
     db.commit()
-    return {"ticket_id": ticket_id}
+    return {
+        "ticket_id": ticket_id,
+        "initial_message": "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
+    }
 
 
 @app.get("/api/v1/claims/{ticket_id}/conversation")

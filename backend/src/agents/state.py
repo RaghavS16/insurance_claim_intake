@@ -15,23 +15,27 @@ class ClaimState(TypedDict, total=False):
 
     extracted_data: Dict[str, Any]
     missing_fields: List[str]          # Mandatory fields still required from user
-    awaiting_confirmation: bool        # True once mandatory fields are collected
-    confirmed: bool                    # True once user confirms the collected data
+    field_status: Dict[str, str]       # "missing" | "provided" | "unknown" | "deferred"
+    recently_extracted_fields: List[str] # Fields extracted in current turn (for acknowledgement)
+    deferral_message: Optional[str]    # Friendly acknowledgment when user defers a field
+    awaiting_confirmation: bool        # True when state is in "confirming"
+    confirmed: bool                    # True once user explicitly confirms data
     message: str                       # User-facing summary / feedback message
 
     # Confidence score: ratio of required fields successfully extracted (0.0 - 1.0)
     extraction_confidence: float
 
     # ---- Conversational Turn Management ----
-    conversation_status: str           # "not_started" | "in_progress" | "awaiting_documents" | "intake_complete"
+    conversation_status: str           # "not_started" | "collecting" | "confirming" | "intake_complete"
     turn_number: int                   # Monotonically increasing turn count
     conversation_history: List[Dict[str, str]]  # [{turn, speaker, text}]
-    next_question: str                 # Next question or prompt to be spoken via TTS / displayed
-    next_question_field: str           # Target field for next question
+    next_question: str                 # Natural question or confirmation prompt to be spoken via TTS / displayed
+    next_question_field: str           # Target field for next question (empty during confirmation/complete)
     awaiting_document_request: bool    # True when waiting for document upload prompt
     last_user_utterance: str           # Raw text of latest turn
     unknown_fields: List[str]          # Fields explicitly marked unknown/deferred by user
     _skip_extraction: bool             # Internal routing flag for repeat/defer turns
+    _rejection_active: bool            # Internal flag when user rejects confirmation
 
     # ---- Review 2 / Review 3 (Documents, Policy, Risk, Evaluation) ----
     documents: List[Dict[str, Any]]

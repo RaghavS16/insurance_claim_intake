@@ -2,13 +2,12 @@
 LangGraph orchestration graphs for Claim Intake and Conversation Turns.
 
 Review 1 Architecture:
-- Intake Graph: Compiled as singleton `_intake_graph` (claim_extractor -> mandatory_field_checker).
-- Conversation Graph: Compiled as singleton `_conversation_graph` (intent processor -> extractor -> validator -> next question / completion).
+- Intake Graph: Compiled as singleton `_intake_graph` (claim_extractor -> mandatory_field_checker -> next_question_generator).
+- Conversation Graph: Compiled as singleton `_conversation_graph` (turn processor -> extractor -> validator -> next question / confirmation / completion).
 - Evaluation Graph (Review 2/3): Re-exported from `src.agents.evaluation`.
 """
 import logging
 from langgraph.graph import StateGraph, END
-from sqlalchemy.orm import Session
 
 from src.agents.state import ClaimState
 from src.agents import nodes
@@ -22,16 +21,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 def _build_intake_graph():
     """
-    Intake pipeline: raw claim text -> field extraction -> mandatory field validation.
+    Intake pipeline: raw claim text -> field extraction -> mandatory field validation -> natural prompt.
     """
     graph = StateGraph(ClaimState)  # type: ignore
 
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
+    graph.add_node("next_question_generator", nodes.next_question_generator)
 
     graph.set_entry_point("claim_extractor")
     graph.add_edge("claim_extractor", "mandatory_field_checker")
-    graph.add_edge("mandatory_field_checker", END)
+    graph.add_edge("mandatory_field_checker", "next_question_generator")
+    graph.add_edge("next_question_generator", END)
 
     return graph.compile()
 
@@ -50,7 +51,7 @@ def build_intake_graph():
 def _build_conversation_graph():
     """
     Conversation turn pipeline:
-    User utterance -> Turn intent processor -> [Extractor] -> Field checker -> Next question / Intake completion.
+    User utterance -> Turn intent processor -> [Extractor] -> Field checker -> Natural Response / Confirmation / Completion.
     """
     graph = StateGraph(ClaimState)  # type: ignore
 
@@ -58,11 +59,10 @@ def _build_conversation_graph():
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("next_question_generator", nodes.next_question_generator)
-    graph.add_node("intake_completion_marker", nodes.intake_completion_marker)
 
     graph.set_entry_point("conversation_turn_processor")
 
-    # Intent routing: 'repeat' / 'dont_know' / 'defer' skip re-extraction
+    # Intent routing: 'repeat' / 'affirmation on confirmation' / 'defer' skip re-extraction
     graph.add_conditional_edges(
         "conversation_turn_processor",
         lambda s: "skip" if s.get("_skip_extraction") else "extract",
@@ -70,15 +70,8 @@ def _build_conversation_graph():
     )
 
     graph.add_edge("claim_extractor", "mandatory_field_checker")
-
-    graph.add_conditional_edges(
-        "mandatory_field_checker",
-        lambda s: "missing" if s.get("missing_fields") else "complete",
-        {"missing": "next_question_generator", "complete": "intake_completion_marker"},
-    )
-
+    graph.add_edge("mandatory_field_checker", "next_question_generator")
     graph.add_edge("next_question_generator", END)
-    graph.add_edge("intake_completion_marker", END)
 
     return graph.compile()
 

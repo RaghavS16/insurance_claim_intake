@@ -1,13 +1,6 @@
 """
 Voice Activity Detection using WebRTC VAD (Google's open-source, BSD-licensed
-VAD via the `webrtcvad` Python binding). Chosen over ML-based VAD (e.g.
-silero-vad) for Review 1 because it's CPU-only, dependency-light, and more
-than sufficient for detecting end-of-utterance in a turn-based conversation —
-we don't need barge-in/overlap detection for Review 1's UX.
-
-Frame requirements are strict: webrtcvad only accepts 16-bit mono PCM at
-8000/16000/32000/48000 Hz, in 10/20/30ms frames. faster-whisper also wants
-16kHz mono, so we standardize the whole voice pipeline on 16kHz.
+VAD via the `webrtcvad` Python binding). Standardized on 16kHz mono audio.
 """
 import collections
 from typing import Generator, List
@@ -18,10 +11,12 @@ SAMPLE_RATE = 16000
 FRAME_DURATION_MS = 30          # 10, 20, or 30 only
 FRAME_BYTES = int(SAMPLE_RATE * (FRAME_DURATION_MS / 1000.0) * 2)  # 16-bit = 2 bytes/sample
 
-# How many consecutive silent frames end an utterance. 800ms of natural silence.
-SILENCE_FRAMES_TO_END = int(800 / FRAME_DURATION_MS)  # ~26 frames
-# Ring buffer size for the "is this actually speech starting" check (300ms).
+# Give user 1400ms of natural silence before finalizing utterance (prevents interrupting pauses)
+SILENCE_FRAMES_TO_END = int(1400 / FRAME_DURATION_MS)  # ~46 frames
+# Ring buffer size for speech onset detection (300ms)
 START_PADDING_FRAMES = 10
+# Minimum speech duration to filter out clicks, coughs, and breath noise (450ms)
+MIN_SPEECH_FRAMES = int(450 / FRAME_DURATION_MS)
 
 
 class Frame:
@@ -46,14 +41,9 @@ def frame_generator(audio_bytes: bytes) -> Generator[Frame, None, None]:
 
 class UtteranceSegmenter:
     """
-    Stateful segmenter: feed it audio chunks as they arrive from the
-    WebSocket, it buffers, runs VAD frame-by-frame, and yields complete
-    utterances (as raw PCM16 bytes) once it detects ~800ms of trailing
-    silence after speech has started.
-
-    Aggressiveness 0-3 (3 = most aggressive at filtering non-speech).
-    1 or 2 is a reasonable default: filters background noise without cutting
-    off quiet speech.
+    Stateful segmenter: buffers incoming chunks, tracks voiced activity,
+    and yields complete utterances only after user has finished speaking
+    (1400ms trailing silence with minimum 450ms speech duration).
     """
 
     def __init__(self, aggressiveness: int = 1):
@@ -66,13 +56,12 @@ class UtteranceSegmenter:
 
     def feed(self, chunk: bytes) -> List[bytes]:
         """
-        Feed raw PCM16 bytes (any chunk size). Returns a list of completed
-        utterances (usually 0 or 1) as raw PCM16 bytes ready for STT.
+        Feed raw PCM16 bytes. Returns completed full utterances ready for STT.
         """
         self._leftover += chunk
         completed_utterances: List[bytes] = []
 
-        # Consume as many complete frames as we have bytes for.
+        # Consume complete frames
         frames = list(frame_generator(self._leftover))
         if frames:
             consumed = len(frames) * FRAME_BYTES
@@ -94,10 +83,11 @@ class UtteranceSegmenter:
                 self._voiced_frames.append(frame)
                 self._end_ring.append((frame, is_speech))
                 num_unvoiced = len([f for f, speech in self._end_ring if not speech])
-                # End of utterance: full silence window (~800ms) is unvoiced
+                # End of utterance: full silence window (~1400ms) is unvoiced
                 if len(self._end_ring) == SILENCE_FRAMES_TO_END and num_unvoiced >= int(0.9 * SILENCE_FRAMES_TO_END):
-                    utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)
-                    completed_utterances.append(utterance_bytes)
+                    if len(self._voiced_frames) >= MIN_SPEECH_FRAMES:
+                        utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)
+                        completed_utterances.append(utterance_bytes)
                     self._triggered = False
                     self._voiced_frames = []
                     self._end_ring.clear()
@@ -107,7 +97,7 @@ class UtteranceSegmenter:
 
     def flush(self) -> bytes | None:
         """Call on connection close to grab any in-progress utterance."""
-        if self._triggered and self._voiced_frames:
+        if self._triggered and len(self._voiced_frames) >= MIN_SPEECH_FRAMES:
             utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)
             self._triggered = False
             self._voiced_frames = []

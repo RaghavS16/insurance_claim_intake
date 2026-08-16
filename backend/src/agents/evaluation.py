@@ -31,9 +31,13 @@ _OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 llm = ChatOllama(base_url=_OLLAMA_URL, model="llama3.1:8b", temperature=0, timeout=10)
 
 DOCUMENT_REQUIREMENTS: Dict[str, List[str]] = {
-    "auto": ["damage_photo", "repair_estimate"],
+    "motor": ["damage_photo", "repair_estimate"],
     "home": ["damage_photo"],
-    "business": [],
+    "health": ["medical_bill"],
+    "senior_health": ["medical_bill"],
+    "travel": ["boarding_pass"],
+    "cyber": ["incident_report"],
+    "auto": ["damage_photo", "repair_estimate"],
 }
 
 DOCUMENT_LABELS = {
@@ -127,7 +131,10 @@ def coverage_checker(state: ClaimState) -> ClaimState:
     claim_type = str(extracted.get("claim_type") or "").strip().lower()
     policy_type = str(policy.get("policy_type") or "").strip().lower()
 
-    if policy_type and claim_type and claim_type != policy_type:
+    norm_claim = "motor" if claim_type in ("auto", "motor", "car") else claim_type
+    norm_policy = "motor" if policy_type in ("auto", "motor", "car") else policy_type
+
+    if norm_policy and norm_claim and norm_claim != norm_policy:
         state["coverage_eligible"] = False
         state["validation_status"] = "type_mismatch"
         state["deductible_amount"] = 0.0
