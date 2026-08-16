@@ -1,36 +1,24 @@
 """
-Tests for the Review 1 conversation graph: conversation_turn_processor,
-next_question_generator, document_request_generator, intake_completion_marker,
-and the full conversation graph routing.
-
-Covers the cases described in §13.2 of REVIEW1_VOICE_IMPLEMENTATION.md:
-  - normal turn  (field gets extracted, next question is phrased)
-  - correction turn (locked field is unlocked for re-extraction)
-  - don't-know turn (field marked UNKNOWN_SENTINEL, not re-asked)
-  - repeat turn (existing next_question re-emitted, extraction skipped)
-  - missing-documents turn (document_request_generator fires)
-  - intake-complete turn (all fields+docs present, intake_completion_marker fires)
-
-These tests exercise the nodes in isolation where possible (no LLM call needed)
-and only invoke the full graph for end-to-end routing checks.
+Tests for the Review 1 conversation graph:
+- Intent detection (_detect_utterance_intent)
+- Turn processor (normal, repeat, correction, dont_know, defer)
+- Next question generation
+- Intake completion marking
+- End-to-end conversation graph routing
 """
 import pytest
 
 from src.agents.nodes import (
     conversation_turn_processor,
     next_question_generator,
-    document_request_generator,
     intake_completion_marker,
     UNKNOWN_SENTINEL,
     _detect_utterance_intent,
     FIELD_PROMPTS,
 )
+from src.agents.evaluation import document_request_generator
 from src.agents.graph import build_conversation_graph
 
-
-# ---------------------------------------------------------------------------
-# _detect_utterance_intent (pure function, no side effects)
-# ---------------------------------------------------------------------------
 
 class TestDetectUtteranceIntent:
     def test_normal(self):
@@ -57,12 +45,7 @@ class TestDetectUtteranceIntent:
         assert _detect_utterance_intent("I'll provide it later") == "defer"
 
 
-# ---------------------------------------------------------------------------
-# conversation_turn_processor
-# ---------------------------------------------------------------------------
-
 def _base_state(**overrides) -> dict:
-    """Return a minimal ClaimState dict for testing."""
     state = {
         "claim_text": "",
         "extracted_data": {},
@@ -110,28 +93,20 @@ class TestConversationTurnProcessor:
         state = _base_state(
             claim_text="actually, I meant 75000",
             next_question_field="claimed_amount",
-            extracted_data={"claimed_amount": 50000.0},  # previously locked value
+            extracted_data={"claimed_amount": 50000.0},
         )
         result = conversation_turn_processor(state)
-        # Field should be nulled out (unlocked), _skip_extraction=False so
-        # claim_extractor will get to re-extract with the corrected text.
         assert result["extracted_data"]["claimed_amount"] is None
         assert result["_skip_extraction"] is False
 
     def test_dont_know_no_target_field_falls_through_normal(self):
-        """If there's no target field, don't-know should be treated as normal."""
         state = _base_state(
             claim_text="I don't know",
-            next_question_field=None,  # no field being asked
+            next_question_field=None,
         )
         result = conversation_turn_processor(state)
-        # Should fall through to normal since target_field is falsy
         assert result["_skip_extraction"] is False
 
-
-# ---------------------------------------------------------------------------
-# next_question_generator
-# ---------------------------------------------------------------------------
 
 class TestNextQuestionGenerator:
     def test_picks_first_missing_field(self):
@@ -163,10 +138,6 @@ class TestNextQuestionGenerator:
         assert result["next_question_field"] == "policy_id"
 
 
-# ---------------------------------------------------------------------------
-# document_request_generator
-# ---------------------------------------------------------------------------
-
 class TestDocumentRequestGenerator:
     def test_requests_missing_documents(self):
         state = _base_state(
@@ -185,10 +156,6 @@ class TestDocumentRequestGenerator:
         assert result["conversation_status"] == "intake_complete"
 
 
-# ---------------------------------------------------------------------------
-# intake_completion_marker
-# ---------------------------------------------------------------------------
-
 class TestIntakeCompletionMarker:
     def test_sets_status_and_message(self):
         state = _base_state(ticket_id="CLAIM-ABCD1234")
@@ -198,30 +165,17 @@ class TestIntakeCompletionMarker:
         assert "Thank you" in result["next_question"]
 
 
-# ---------------------------------------------------------------------------
-# Graph routing (end-to-end, no LLM — uses mocked claim_extractor via state)
-# ---------------------------------------------------------------------------
-
 class TestConversationGraphRouting:
-    """
-    These tests bypass the LLM by pre-populating extracted_data so
-    claim_extractor's field-locking logic keeps existing values and the
-    LLM call doesn't change them.  We then verify that the graph routes
-    to the correct terminal node.
-    """
-
     def _all_fields(self) -> dict:
-        """Return extracted_data with all required fields filled."""
         return {
             "policy_id": "XYZ123",
             "incident_date": "2025-06-15",
-            "claim_type": "business",
-            "damage_description": "Office flooded",
+            "claim_type": "auto",
+            "damage_description": "Car collision on highway",
             "claimed_amount": 30000.0,
         }
 
     def test_repeat_turn_skips_extraction(self):
-        """'repeat that' should keep the same next_question."""
         graph = build_conversation_graph()
         state = {
             "claim_text": "say that again",
@@ -234,8 +188,7 @@ class TestConversationGraphRouting:
         result = graph.invoke(state)
         assert result["next_question"] == "What is your policy number?"
 
-    def test_intake_complete_turn_for_business_claim(self):
-        """business claim needs no documents → should reach intake_completion_marker."""
+    def test_intake_complete_turn(self):
         graph = build_conversation_graph()
         state = {
             "claim_text": "confirm everything",
@@ -244,14 +197,12 @@ class TestConversationGraphRouting:
             "next_question": "",
             "audit_log": [],
             "ticket_id": "CLAIM-TEST0001",
-            # All fields pre-filled, claim_extractor will field-lock them
         }
         result = graph.invoke(state)
         assert result.get("conversation_status") == "intake_complete"
         assert "CLAIM-TEST0001" in result.get("next_question", "")
 
     def test_missing_fields_turn_produces_question(self):
-        """If fields are missing, should route to next_question_generator."""
         graph = build_conversation_graph()
         state = {
             "claim_text": "hello",
@@ -260,19 +211,16 @@ class TestConversationGraphRouting:
                 "incident_date": "2025-06-15",
                 "claim_type": "business",
                 "damage_description": "Water damage",
-                # claimed_amount missing
             },
             "missing_fields": ["claimed_amount"],
             "next_question": "",
             "audit_log": [],
         }
         result = graph.invoke(state)
-        # next_question should target claimed_amount (first missing field)
         assert result.get("next_question_field") == "claimed_amount"
         assert result.get("next_question") != ""
 
     def test_dont_know_skips_extraction_and_moves_to_next(self):
-        """don't know + field currently being asked → mark UNKNOWN, ask next field."""
         graph = build_conversation_graph()
         state = {
             "claim_text": "I don't know",
@@ -288,6 +236,5 @@ class TestConversationGraphRouting:
             "audit_log": [],
         }
         result = graph.invoke(state)
-        # claimed_amount should be UNKNOWN_SENTINEL
         assert result["extracted_data"].get("claimed_amount") == UNKNOWN_SENTINEL
         assert "claimed_amount" in result.get("unknown_fields", [])

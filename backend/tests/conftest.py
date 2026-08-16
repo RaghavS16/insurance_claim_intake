@@ -1,25 +1,8 @@
 """
-Test configuration.
+Pytest configuration and test database fixtures.
 
-Uses a temporary SQLite database (file-based, unique per pytest session) so
-tests are fully self-contained and do NOT require a running PostgreSQL instance.
-Seed data (policies XYZ123/HOME456/AUTO789, all four adjusters) is inserted
-once per test session.
-
-R1-6: Previously all tests shared a SINGLE SQLite file on disk ('test_claims.db')
-with no reset between runs — tests were order-dependent. This version:
-  - Uses a temp file named after the pytest session (unique per run via a UUID suffix),
-    so multiple parallel pytest processes don't collide.
-  - Cleans up the temp file after the session.
-  - The 'module'-scoped client fixture is retained for speed (avoids re-seeding
-    between test files in the same module), but the DB is fresh each full run.
-
-Why not sqlite:///:memory:?
-  SQLite in-memory databases are connection-scoped. When FastAPI's get_db()
-  yields a Session from a *different* engine (the one in session.py that was
-  loaded before the override), it sees an empty schema. A temp file avoids
-  this by letting all connections share the same on-disk state regardless of
-  which engine/connection created it.
+Sets up a temporary SQLite database per test session, seeds canonical policies
+and adjusters, and configures fast mock fallbacks for LLM calls during unit tests.
 """
 import os
 import uuid
@@ -29,35 +12,26 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from langchain_ollama import ChatOllama
 from sqlalchemy.orm import sessionmaker
 
-# ------------------------------------------------------------------
-# 1. Create a temporary SQLite file unique to this test session and
-#    set DATABASE_URL *before* importing the app so session.py picks
-#    it up correctly.
-# ------------------------------------------------------------------
+# 1. Setup isolated temporary SQLite test database
 _tmp_db_path = Path(tempfile.gettempdir()) / f"test_claims_{uuid.uuid4().hex[:8]}.db"
 SQLITE_URL = f"sqlite:///{_tmp_db_path}"
 os.environ["DATABASE_URL"] = SQLITE_URL
 
-# ------------------------------------------------------------------
-# 2. Import app + ORM pieces AFTER the env override.
-# ------------------------------------------------------------------
+# 2. Import application models and session
 from src.api.main import app  # noqa: E402
 from src.database.models import Base, Policy, Adjuster  # noqa: E402
 from src.database.session import get_db, engine as app_engine  # noqa: E402
 
-# ------------------------------------------------------------------
-# 3. Create tables using the same engine that the app will use.
-#    This guarantees the schema the app sees is the one we just created.
-# ------------------------------------------------------------------
+# 3. Create tables using the test engine
 Base.metadata.create_all(bind=app_engine)
 TestingSessionLocal = sessionmaker(bind=app_engine, autoflush=False, autocommit=False)
 
 
 def _seed_db(db):
-    """Insert canonical seed rows; idempotent (checks before inserting)."""
+    """Insert canonical test policies and adjusters."""
     if db.query(Policy).filter(Policy.policy_number == "XYZ123").first() is None:
         db.add(Policy(
             id=str(uuid.uuid4()),
@@ -71,7 +45,6 @@ def _seed_db(db):
             is_active=True,
         ))
 
-    # R4-7: HOME456 now in all three seed sources (schema.sql, seed.sql, conftest.py).
     if db.query(Policy).filter(Policy.policy_number == "HOME456").first() is None:
         db.add(Policy(
             id=str(uuid.uuid4()),
@@ -117,9 +90,6 @@ def _seed_db(db):
     db.commit()
 
 
-# ------------------------------------------------------------------
-# 4. Override get_db dependency to use the same session factory.
-# ------------------------------------------------------------------
 def override_get_db():
     db = TestingSessionLocal()
     try:
@@ -131,24 +101,29 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-# ------------------------------------------------------------------
-# 5. Fixtures
-# ------------------------------------------------------------------
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_db():
-    """
-    Session-scoped: seed DB once before any tests run, clean up the
-    temp DB file after the entire session completes.
-    """
+    """Seed test DB before running test suite and clean up temporary SQLite file afterwards."""
     db = TestingSessionLocal()
     _seed_db(db)
     db.close()
     yield
-    # Cleanup after session
     try:
         _tmp_db_path.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def mock_offline_llm(monkeypatch):
+    """
+    By default in unit tests, mock ChatOllama.invoke to trigger deterministic fallback extraction.
+    Prevents 10s timeout delays when Ollama is offline.
+    """
+    def mock_invoke(self, prompt, *args, **kwargs):
+        raise ConnectionError("Ollama offline in test runner")
+
+    monkeypatch.setattr(ChatOllama, "invoke", mock_invoke)
 
 
 @pytest.fixture(scope="module")

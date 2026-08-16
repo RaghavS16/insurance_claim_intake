@@ -1,10 +1,18 @@
+"""
+FastAPI application for Insurance Claim Intake and Conversation Management.
+
+Features:
+- Review 1 Core: Claim intake endpoint, voice session initialization, conversation history
+- Review 2 / Review 3: Document uploads, policy confirmation & evaluation pipeline
+"""
+import io
 import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
@@ -13,16 +21,19 @@ from sqlalchemy.orm import Session
 from src.database.session import get_db
 from src.database.models import Claim, Document, PaymentRequest, Policy, ConversationTurn
 from src.agents.graph import build_intake_graph, build_evaluation_graph
-from src.agents.nodes import DOCUMENT_REQUIREMENTS
+from src.agents.evaluation import DOCUMENT_REQUIREMENTS
 from src.api.voice_ws import router as voice_router
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Insurance Claim Intake API")
+app = FastAPI(
+    title="Insurance Claim Intake Voice Agent API",
+    description="Conversational insurance claim intake and automated evaluation service",
+    version="1.0.0",
+)
 
 # ---------------------------------------------------------------------------
-# R3-5: CORS origins read from env so Vercel/Railway URLs can be configured
-# without a code change.  Falls back to localhost:3000 for local dev.
+# CORS Configuration
 # ---------------------------------------------------------------------------
 _allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS: List[str] = (
@@ -41,11 +52,9 @@ app.add_middleware(
 
 app.include_router(voice_router)
 
-# ---------------------------------------------------------------------------
-# Document upload security constants (R3-2)
-# ---------------------------------------------------------------------------
+# Document upload security constraints
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
-MIN_UPLOAD_SIZE_BYTES = 100               # reject obviously-empty files
+MIN_UPLOAD_SIZE_BYTES = 100               # Reject empty files
 ALLOWED_MIME_TYPES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
     "application/pdf",
@@ -53,37 +62,32 @@ ALLOWED_MIME_TYPES = {
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf"}
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
 def health_check():
+    """Health check endpoint for container probes and load balancers."""
     return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
-# Stage 1-2: Intake + missing-field loop
+# Review 1: Intake & Conversational Field Collection
 # ---------------------------------------------------------------------------
 
 class ClaimIntakeRequest(BaseModel):
-    # R3-1: max_length prevents unbounded LLM prompt injection via claim_text.
-    claim_text: str = Field(..., min_length=1, max_length=5000)
-    input_mode: str = "text"          # "voice" or "text"
-    ticket_id: Optional[str] = None   # pass back in on subsequent turns of the field-prompt loop
+    claim_text: str = Field(..., min_length=1, max_length=5000, description="User utterance or input text")
+    input_mode: str = Field("text", description="'voice' or 'text'")
+    ticket_id: Optional[str] = Field(None, description="Existing claim ticket ID for subsequent turns")
 
 
 @app.post("/api/v1/claims/intake")
 def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     """
-    Runs extraction + mandatory-field check only. If fields are missing, the
-    response tells the frontend what to ask/speak next; the frontend resubmits
-    to this same endpoint with the same ticket_id and the additional text
-    (e.g. "policy XYZ123") appended to claim_text.
-
-    R1-5: If the claim is already 'evaluated', short-circuit and return the
-    current state rather than re-running the extraction graph.
+    Process user claim utterance, extract mandatory fields, and evaluate missing fields.
+    If fields are missing, returns next question prompt for user.
     """
     claim = None
     if request.ticket_id:
@@ -94,8 +98,7 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
         if not claim:
             raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # R1-5: Short-circuit if already evaluated to prevent re-extraction from
-    # overwriting confirmed field data.
+    # Short-circuit if already evaluated to prevent overwriting confirmed data
     if claim and getattr(claim, "status", None) in ("evaluated",):
         state = dict(getattr(claim, "pipeline_state", None) or {})
         return {
@@ -114,19 +117,16 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
         "input_mode": request.input_mode,
     }
 
-    # R4-4: Wrap graph.invoke() in try/except so any node exception (Ollama
-    # down, DB mid-invocation) surfaces as a structured 503 rather than a raw
-    # 500 stack trace to the client.
     try:
         graph = build_intake_graph()
         result = graph.invoke(initial_state)
     except Exception as exc:
-        logger.exception("intake_claim: graph invocation failed")
+        logger.exception("intake_claim: intake graph invocation failed")
         raise HTTPException(
             status_code=503,
             detail=(
                 "The claim processing pipeline encountered an error. "
-                "Your claim has not been saved. Please try again in a moment. "
+                "Please try again in a moment. "
                 f"(Error: {type(exc).__name__})"
             ),
         )
@@ -142,17 +142,15 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
     setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
 
-    # R3-8: Persist extraction_confidence to the DB column (previously always NULL).
     if result.get("extraction_confidence") is not None:
         setattr(claim, "extraction_confidence", float(result["extraction_confidence"]))
 
-    # Map incident_date to the DB column if it was successfully extracted
     incident_date_str = result.get("extracted_data", {}).get("incident_date")
     if incident_date_str:
         try:
             setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
         except ValueError:
-            pass  # date stays NULL in DB; fraud_detector will flag it as unparseable
+            pass
 
     db.commit()
 
@@ -169,8 +167,94 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/api/v1/claims/voice-session")
+def start_voice_session(db: Session = Depends(get_db)):
+    """
+    Create a new draft claim session and return ticket_id for WebSocket voice streaming.
+    """
+    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    claim = Claim(
+        ticket_id=ticket_id,
+        input_mode="voice",
+        status="draft",
+        conversation_status="not_started",
+    )
+    db.add(claim)
+    db.commit()
+    return {"ticket_id": ticket_id}
+
+
+@app.get("/api/v1/claims/{ticket_id}/conversation")
+def get_conversation_history(ticket_id: str, db: Session = Depends(get_db)):
+    """
+    Fetch the complete chronological conversation turns for a claim.
+    """
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    turns = (
+        db.query(ConversationTurn)
+        .filter(ConversationTurn.claim_id == claim.id)
+        .order_by(ConversationTurn.turn_number, ConversationTurn.created_at)
+        .all()
+    )
+    return [
+        {
+            "turn": t.turn_number,
+            "speaker": t.speaker,
+            "text": t.text,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in turns
+    ]
+
+
+@app.get("/api/v1/claims/{ticket_id}")
+def get_claim(ticket_id: str, db: Session = Depends(get_db)):
+    """
+    Retrieve current status and state of a claim.
+    """
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="ticket_id not found")
+    state = claim.pipeline_state or {}
+    return {
+        "ticket_id": claim.ticket_id,
+        "status": claim.status,
+        "conversation_status": claim.conversation_status,
+        "final_decision": claim.final_decision,
+        "closure_status": claim.closure_status,
+        "extracted_data": state.get("extracted_data"),
+        "response_message": state.get("response_message"),
+    }
+
+
+@app.get("/api/v1/claims")
+def list_claims(db: Session = Depends(get_db)):
+    """
+    List most recent claims.
+    """
+    claims = db.query(Claim).order_by(Claim.created_at.desc()).limit(50).all()
+    results = []
+    for c in claims:
+        st = c.pipeline_state or {}
+        results.append({
+            "id": str(c.id),
+            "ticket_id": c.ticket_id,
+            "claim_type": c.claim_type,
+            "status": c.status,
+            "conversation_status": c.conversation_status,
+            "final_decision": c.final_decision,
+            "closure_status": c.closure_status,
+            "extracted_data": st.get("extracted_data") or {},
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+    return results
+
+
 # ---------------------------------------------------------------------------
-# Stage 3: Documents
+# Review 2 / Review 3: Documents & Evaluation (Isolated)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/v1/claims/{ticket_id}/documents")
@@ -180,36 +264,31 @@ def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
+    """
+    Upload and register supporting documentation for an existing claim.
+    """
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # R3-2: MIME type validation
     content_type = file.content_type or ""
     if content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"File type '{content_type}' is not allowed. "
-                f"Accepted types: {sorted(ALLOWED_MIME_TYPES)}. "
-                "Please upload a JPEG, PNG, WebP, GIF, or PDF file."
+                f"Accepted types: {sorted(ALLOWED_MIME_TYPES)}."
             ),
         )
 
-    # R3-2: File extension validation (second gate against spoofed content-type)
     filename = file.filename or "uploaded_file"
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"File extension '{ext}' is not allowed. "
-                f"Accepted extensions: {sorted(ALLOWED_EXTENSIONS)}."
-            ),
+            detail=f"File extension '{ext}' is not allowed.",
         )
 
-    # R3-2: Read entire file to enforce size limits before uploading to S3.
-    # This guards against huge uploads at your expense.
     file_bytes = file.file.read()
     file_size = len(file_bytes)
     if file_size < MIN_UPLOAD_SIZE_BYTES:
@@ -220,54 +299,34 @@ def upload_document(
     if file_size > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large ({file_size:,} bytes). Maximum allowed: {MAX_UPLOAD_SIZE_BYTES:,} bytes (10 MB).",
+            detail=f"File too large ({file_size:,} bytes). Maximum allowed: {MAX_UPLOAD_SIZE_BYTES:,} bytes.",
         )
 
-    # Re-wrap the bytes as a file-like object for upload_to_s3.
-    import io
     file_obj = io.BytesIO(file_bytes)
 
     claim_type = str(getattr(claim, "claim_type", "") or "")
     valid_types = DOCUMENT_REQUIREMENTS.get(claim_type, [])
-    # Basic relevance check (August scope: type-based only; OCR-based content
-    # matching for "does this photo actually show a damaged car" is September+)
     if valid_types and document_type not in valid_types:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"'{document_type}' is not a required or recognized document type for "
-                f"claim_type '{claim_type}'. Expected one of: {valid_types}. "
-                "Please re-upload the correct document."
+                f"'{document_type}' is not a required document type for '{claim_type}'. "
+                f"Expected one of: {valid_types}."
             ),
         )
 
-    # FIX 1 (clarified): db.flush() here is a precautionary guard for the edge
-    # case where claim was just added in the same request (not applicable in
-    # this path since upload_document always fetches an existing claim, but
-    # harmless and defensive against future refactors).
     db.flush()
     s3_filename = f"{claim.id}/{uuid.uuid4().hex[:8]}_{filename}"
 
-    # R1-7: Wrap S3 upload in try/except so bad credentials or a missing bucket
-    # name surfaces as a structured 503 rather than a raw 500 stack trace.
     try:
         from src.utils.s3 import upload_to_s3
         s3_url = upload_to_s3(file_obj, s3_filename)
     except ValueError as exc:
-        logger.error("upload_document: S3 configuration error: %s", exc)
-        raise HTTPException(
-            status_code=503,
-            detail="Document storage is not configured. Please contact support.",
-        )
+        logger.error("upload_document: S3 config error: %s", exc)
+        raise HTTPException(status_code=503, detail="Document storage not configured.")
     except Exception as exc:
         logger.exception("upload_document: S3 upload failed for claim %s", ticket_id)
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Failed to upload document to storage. "
-                "Please try again in a moment."
-            ),
-        )
+        raise HTTPException(status_code=503, detail="Failed to upload document to storage.")
 
     doc = Document(
         claim_id=claim.id,
@@ -279,7 +338,7 @@ def upload_document(
     )
     db.add(doc)
 
-    # keep pipeline_state.documents in sync so the evaluation graph sees it
+    # Sync documents list in pipeline_state
     state = dict(getattr(claim, "pipeline_state", None) or {})
     docs = list(state.get("documents", []))
     docs.append({"document_type": document_type, "filename": filename, "file_path": s3_url})
@@ -299,6 +358,7 @@ def upload_document(
 
 @app.get("/api/v1/claims/{ticket_id}/documents")
 def list_documents(ticket_id: str, db: Session = Depends(get_db)):
+    """List all uploaded documents for a claim ticket."""
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
@@ -308,7 +368,7 @@ def list_documents(ticket_id: str, db: Session = Depends(get_db)):
             "document_id": str(d.id),
             "document_type": d.document_type,
             "filename": d.original_filename,
-            "uploaded_at": d.uploaded_at,
+            "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
         }
         for d in docs
     ]
@@ -316,17 +376,14 @@ def list_documents(ticket_id: str, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/document-requirements/{claim_type}")
 def document_requirements(claim_type: str):
-    required = DOCUMENT_REQUIREMENTS.get(claim_type, [])
+    """Fetch document requirements for a specific claim type."""
+    required = DOCUMENT_REQUIREMENTS.get(claim_type.lower(), [])
     return {
         "claim_type": claim_type,
         "documents_needed": len(required) > 0,
         "required_documents": required,
     }
 
-
-# ---------------------------------------------------------------------------
-# Stage 3 (confirmation) + Stage 4-7: Confirm -> Evaluate -> Decision -> Closure
-# ---------------------------------------------------------------------------
 
 class ConfirmRequest(BaseModel):
     confirmed: bool = True
@@ -335,12 +392,7 @@ class ConfirmRequest(BaseModel):
 @app.post("/api/v1/claims/{ticket_id}/confirm")
 def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = Depends(get_db)):
     """
-    Called once the frontend has shown/spoken the extracted fields back to the
-    user and the user confirms them. Runs the full evaluation graph.
-
-    R2-7: Idempotency guard — if the claim has already been evaluated, return
-    the cached result rather than re-running the graph (which would insert a
-    second PaymentRequest row on an approved claim).
+    Review 2/3: Confirm collected claim data and trigger evaluation graph.
     """
     try:
         claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).with_for_update().first()
@@ -355,12 +407,11 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
         raise HTTPException(status_code=400, detail="Cannot evaluate: mandatory fields still missing.")
 
     if not request.confirmed:
-        return {"ticket_id": ticket_id, "status": "not_confirmed", "message": "Confirmation declined; no changes made."}
+        return {"ticket_id": ticket_id, "status": "not_confirmed", "message": "Confirmation declined."}
 
-    # R2-7: Idempotency guard — return cached evaluation result without re-running
-    # the graph or inserting a second PaymentRequest row.
+    # Idempotent response if already evaluated
     if getattr(claim, "status", None) == "evaluated":
-        logger.info("confirm_and_evaluate: claim %s already evaluated, returning cached result", ticket_id)
+        logger.info("confirm_and_evaluate: claim %s already evaluated, returning cached state", ticket_id)
         return {
             "ticket_id": ticket_id,
             "final_decision": state.get("final_decision"),
@@ -376,11 +427,10 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
             "assigned_adjuster": state.get("assigned_adjuster"),
             "missing_documents": state.get("missing_documents"),
             "audit_log": state.get("audit_log"),
-            "_cached": True,  # signals to the client this is a cached response
+            "_cached": True,
         }
 
-    # R2-1: Duplicate claim detection — check for an existing evaluated claim
-    # with the same policy_id and incident_date (basic, not ML-based).
+    # Duplicate claim check
     incident_date_str = (state.get("extracted_data") or {}).get("incident_date")
     policy_number = (state.get("extracted_data") or {}).get("policy_id")
     if incident_date_str and policy_number:
@@ -390,8 +440,7 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
             incident_date_parsed = None
 
         if incident_date_parsed:
-            # Look up the policy to get its UUID
-            existing_policy = db.query(Policy).filter(Policy.policy_number == policy_number).first()
+            existing_policy = db.query(Policy).filter(Policy.policy_number == str(policy_number).strip().upper()).first()
             if existing_policy:
                 duplicate = (
                     db.query(Claim)
@@ -399,41 +448,30 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
                         Claim.policy_id == existing_policy.id,
                         Claim.incident_date == incident_date_parsed,
                         Claim.status == "evaluated",
-                        Claim.ticket_id != ticket_id,  # exclude self
+                        Claim.ticket_id != ticket_id,
                     )
                     .first()
                 )
                 if duplicate:
-                    logger.warning(
-                        "confirm_and_evaluate: potential duplicate claim %s detected "
-                        "(existing evaluated claim %s for same policy+date)",
-                        ticket_id, duplicate.ticket_id,
-                    )
                     raise HTTPException(
                         status_code=409,
                         detail=(
                             f"A claim for policy {policy_number} with incident date "
-                            f"{incident_date_str} already exists (ticket: {duplicate.ticket_id}). "
-                            "If you believe this is a separate incident, please contact support."
+                            f"{incident_date_str} already exists (ticket: {duplicate.ticket_id})."
                         ),
                     )
 
     state["confirmed"] = True
     state["ticket_id"] = ticket_id
 
-    # R4-4: Wrap graph.invoke() so any node exception surfaces as a 503 not a stack trace.
     try:
         graph = build_evaluation_graph(db)
         result = graph.invoke(state)
     except Exception as exc:
-        logger.exception("confirm_and_evaluate: evaluation graph failed for claim %s", ticket_id)
+        logger.exception("confirm_and_evaluate: evaluation graph failed for %s", ticket_id)
         raise HTTPException(
             status_code=503,
-            detail=(
-                "The claim evaluation pipeline encountered an error. "
-                "Your claim data has been saved — please try confirming again in a moment. "
-                f"(Error: {type(exc).__name__})"
-            ),
+            detail=f"Claim evaluation pipeline encountered an error: {type(exc).__name__}",
         )
 
     setattr(claim, "pipeline_state", dict(result))
@@ -444,12 +482,10 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
     setattr(claim, "closure_status", str(result.get("closure_status") or ""))
     setattr(claim, "status", "evaluated")
 
-    # Map policy_id to DB column if policy details were found
     policy_id = result.get("policy_data", {}).get("id")
     if policy_id:
         setattr(claim, "policy_id", policy_id)
 
-    # Ensure incident_date is mapped in case it wasn't captured in early intake
     incident_date_str2 = result.get("extracted_data", {}).get("incident_date")
     if incident_date_str2:
         try:
@@ -457,9 +493,6 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
         except ValueError:
             pass
 
-    # Stub payment logging -- only on approval, never actually disbursed.
-    # R2-7: This block is only reached when status != "evaluated" (checked above),
-    # so a second /confirm call will short-circuit before inserting a duplicate row.
     if result.get("final_decision") == "approved":
         db.add(PaymentRequest(
             claim_id=claim.id,
@@ -487,64 +520,3 @@ def confirm_and_evaluate(ticket_id: str, request: ConfirmRequest, db: Session = 
         "missing_documents": result.get("missing_documents"),
         "audit_log": result.get("audit_log"),
     }
-
-
-@app.get("/api/v1/claims/{ticket_id}")
-def get_claim(ticket_id: str, db: Session = Depends(get_db)):
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="ticket_id not found")
-    state = claim.pipeline_state or {}
-    return {
-        "ticket_id": claim.ticket_id,
-        "status": claim.status,
-        "final_decision": claim.final_decision,
-        "closure_status": claim.closure_status,
-        "extracted_data": state.get("extracted_data"),
-        "response_message": state.get("response_message"),
-    }
-
-
-@app.post("/api/v1/claims/voice-session")
-def start_voice_session(db: Session = Depends(get_db)):
-    """Creates an empty draft claim and returns its ticket_id so the frontend
-    can open the WebSocket at /ws/claims/{ticket_id}/voice immediately."""
-    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
-    claim = Claim(ticket_id=ticket_id, input_mode="voice", status="draft", conversation_status="not_started")
-    db.add(claim)
-    db.commit()
-    return {"ticket_id": ticket_id}
-
-
-@app.get("/api/v1/claims/{ticket_id}/conversation")
-def get_conversation_history(ticket_id: str, db: Session = Depends(get_db)):
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="ticket_id not found")
-    turns = (
-        db.query(ConversationTurn)
-        .filter(ConversationTurn.claim_id == claim.id)
-        .order_by(ConversationTurn.turn_number, ConversationTurn.created_at)
-        .all()
-    )
-    return [{"turn": t.turn_number, "speaker": t.speaker, "text": t.text, "created_at": t.created_at} for t in turns]
-
-
-@app.get("/api/v1/claims")
-def list_claims(db: Session = Depends(get_db)):
-    claims = db.query(Claim).order_by(Claim.created_at.desc()).limit(50).all()
-    results = []
-    for c in claims:
-        st = c.pipeline_state or {}
-        results.append({
-            "id": str(c.id),
-            "ticket_id": c.ticket_id,
-            "claim_type": c.claim_type,
-            "status": c.status,
-            "conversation_status": c.conversation_status,
-            "final_decision": c.final_decision,
-            "closure_status": c.closure_status,
-            "extracted_data": st.get("extracted_data") or {},
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        })
-    return results

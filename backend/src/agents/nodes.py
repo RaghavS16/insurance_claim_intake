@@ -1,27 +1,66 @@
 """
-Conversation and Claim processing graph nodes.
+Review 1: Conversational Claim Intake Graph Nodes.
+
+Implements:
+- Sanitized LLM prompt invocation with fast fallback
+- Deterministic heuristic field extraction (policy_id, incident_date, claim_type, description, amount)
+- Mandatory field validation & confidence scoring
+- Intent detection (normal, repeat, correction, dont_know, defer)
+- Dynamic next-question generation
+- State updates and field-locking
 """
 import json
 import logging
+import os
 import re
-import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from langchain_ollama import ChatOllama
-from sqlalchemy.orm import Session
 
-from src.database.models import Policy, Adjuster
 from src.agents.state import ClaimState
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# LLM — compiled once at module import so graph.compile() doesn't bear the
-# repeated construction cost. timeout=10 enforces quick fallback execution
-# when Ollama is offline or slow while allowing local Llama 3.1 inference.
-# ---------------------------------------------------------------------------
-llm = ChatOllama(model="llama3.1:8b", temperature=0, timeout=10)
+# Configurable Ollama connection with quick fallback
+_OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+llm = ChatOllama(base_url=_OLLAMA_URL, model="llama3.1:8b", temperature=0, timeout=10)
+
+# Mandatory fields required for Review 1 claim intake
+REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
+
+FIELD_PROMPTS = {
+    "policy_id": "What is your policy number?",
+    "incident_date": "What date did the incident occur?",
+    "claim_type": "What type of claim is this (auto, home, or business)?",
+    "damage_description": "Can you describe the damage or loss?",
+    "claimed_amount": "What is the estimated cost or amount you are claiming?",
+}
+
+UNKNOWN_SENTINEL = "UNKNOWN"
+
+CORRECTION_MARKERS = (
+    "actually", "sorry, i meant", "i meant to say", "no wait", "correction",
+    "let me correct", "scratch that", "i said that wrong", "mistake",
+)
+DONT_KNOW_MARKERS = ("i don't know", "i dont know", "not sure", "no idea", "i'll check", "dont know")
+DEFER_MARKERS = ("i'll provide it later", "later", "not right now", "i'll get back to you", "skip", "pass")
+REPEAT_MARKERS = ("repeat that", "say that again", "come again", "what was that", "pardon", "repeat")
+
+COMMON_STOP_WORDS = {
+    "MY", "THE", "NUMBER", "IS", "PLEASE", "THAT", "WHAT", "IT", "ITS",
+    "CAR", "DAMAGE", "DAMAGED", "HIT", "ACCIDENT", "RUPEES", "RS", "TODAY", "YESTERDAY",
+    "AUTO", "HOME", "BUSINESS", "YES", "NO", "HELLO", "HI", "THANKS", "THANK"
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _audit(state: ClaimState, message: str) -> None:
+    state.setdefault("audit_log", []).append(f"[{_now_iso()}] {message}")
+
 
 def _sanitize_claim_text(text: str) -> str:
     """Sanitize user claim text before injecting into prompt templates."""
@@ -32,66 +71,132 @@ def _sanitize_claim_text(text: str) -> str:
     return clean[:5000]
 
 
-# Fields the system must have before it can evaluate a claim.
-REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
-
-# Which document types each claim_type requires.
-DOCUMENT_REQUIREMENTS: Dict[str, List[str]] = {
-    "auto": ["damage_photo", "repair_estimate"],
-    "home": ["damage_photo"],
-    "business": [],
-}
-
-FIELD_PROMPTS = {
-    "policy_id": "What is your policy number?",
-    "incident_date": "What date did the incident occur?",
-    "claim_type": "What type of claim is this (auto, home, or business)?",
-    "damage_description": "Can you describe the damage or loss?",
-    "claimed_amount": "What is the estimated cost or amount you are claiming?",
-}
-
-DOCUMENT_LABELS = {
-    "damage_photo": "photos of the damage",
-    "repair_estimate": "a repair cost estimate",
-    "fir": "a police FIR / report",
-}
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _audit(state: ClaimState, message: str) -> None:
-    state.setdefault("audit_log", []).append(f"[{_now_iso()}] {message}")
-
-
 def _coerce_amount(raw: Any) -> float | None:
+    """Safely coerce any numeric or string representation to a float amount."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
-        return float(raw)
+        return float(raw) if raw >= 0 else None
     if isinstance(raw, str):
         match = re.search(r"(\d+(?:[,\s]\d+)*(?:\.\d+)?)", raw)
         if match:
             cleaned = match.group(1).replace(",", "").replace(" ", "")
             try:
-                return float(cleaned)
+                val = float(cleaned)
+                return val if val >= 0 else None
             except ValueError:
                 pass
         cleaned = re.sub(r"[^\d.]", "", raw)
         try:
-            return float(cleaned) if cleaned else None
+            val = float(cleaned) if cleaned else None
+            return val if val is not None and val >= 0 else None
         except ValueError:
             return None
     return None
 
 
-# ---------- Node 1: Claim Extractor ----------
-EXTRACTION_PROMPT = """Extract structured claim information from the text below.
-Return ONLY valid JSON, no markdown, no explanation, matching this schema:
+def _normalize_date(raw_date: str) -> Optional[str]:
+    """Parse and normalize date strings into ISO format YYYY-MM-DD."""
+    if not raw_date:
+        return None
+    lowered = raw_date.strip().lower()
+    if "today" in lowered:
+        return date.today().isoformat()
+    if "yesterday" in lowered:
+        return (date.today() - timedelta(days=1)).isoformat()
+
+    # Pattern: YYYY-MM-DD
+    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw_date)
+    if m_iso:
+        return m_iso.group(1)
+
+    # Pattern: DD-MM-YYYY or DD/MM/YYYY
+    m_dmy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", raw_date)
+    if m_dmy:
+        day, month, year = int(m_dmy.group(1)), int(m_dmy.group(2)), int(m_dmy.group(3))
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            pass
+
+    return None
+
+
+def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Deterministic rule-based extraction for fast, zero-dependency processing.
+    """
+    result: Dict[str, Any] = {}
+    clean = claim_text.strip()
+    lowered = clean.lower()
+
+    # 1. Policy ID Extraction
+    if target_field == "policy_id":
+        m = re.search(r"(?:policy|policy\s*number|policy\s*id|number|it\s*is|is)?\s*[:#-]?\s*([a-zA-Z0-9\-_]{3,20})", clean, re.IGNORECASE)
+        if m:
+            val = m.group(1).strip("-#_ ").upper()
+            if val not in COMMON_STOP_WORDS and len(val) >= 3:
+                result["policy_id"] = val
+        else:
+            tokens = [t.strip(".,;:!") for t in clean.split()]
+            for token in tokens:
+                t_up = token.upper()
+                if t_up not in COMMON_STOP_WORDS and len(t_up) >= 3 and any(c.isalnum() for c in t_up):
+                    result["policy_id"] = t_up
+                    break
+    else:
+        m_explicit = re.search(r"\b(?:policy|policy\s*number|policy\s*id|policy\s*#)\s*(?:is|:)?\s*([a-zA-Z0-9\-_]{3,20})\b", clean, re.IGNORECASE)
+        if m_explicit:
+            val = m_explicit.group(1).strip("-#_ ").upper()
+            if val not in COMMON_STOP_WORDS:
+                result["policy_id"] = val
+        else:
+            m_code = re.search(r"\b([A-Z]{2,6}[-_]?[0-9]{3,8})\b", clean, re.IGNORECASE)
+            if m_code:
+                result["policy_id"] = m_code.group(1).upper()
+
+    # 2. Claimed Amount Extraction
+    if target_field == "claimed_amount":
+        amt = _coerce_amount(clean)
+        if amt is not None and amt > 0:
+            result["claimed_amount"] = amt
+    else:
+        m_amt = re.search(r"(?:cost|repair|damage|claimed|loss|estimate|amount|total|is|₹|rs\.?)\s*(?:is|of|around|about)?\s*[:]?\s*(\d+(?:[,\s]\d+)*(?:\.\d+)?)", clean, re.IGNORECASE)
+        if m_amt:
+            amt = _coerce_amount(m_amt.group(1))
+            if amt is not None and amt > 0:
+                result["claimed_amount"] = amt
+
+    # 3. Claim Type Extraction
+    m_type = re.search(r"\b(?:claim\s*type|type)\s*(?:is|:)?\s*(auto|home|business|car|vehicle|property)\b", lowered)
+    if m_type:
+        raw_t = m_type.group(1)
+        result["claim_type"] = "auto" if raw_t in ("auto", "car", "vehicle") else ("home" if raw_t in ("home", "property") else "business")
+    elif any(w in lowered for w in ("business", "commercial", "shop", "office", "store", "warehouse", "factory")):
+        result["claim_type"] = "business"
+    elif any(w in lowered for w in ("car", "auto", "vehicle", "motor", "bike", "truck", "collision", "accident", "crash", "driving")):
+        result["claim_type"] = "auto"
+    elif any(w in lowered for w in ("home", "house", "apartment", "property", "roof", "leak", "flood", "residence", "plumbing")):
+        result["claim_type"] = "home"
+
+    # 4. Incident Date Extraction
+    norm_date = _normalize_date(clean)
+    if norm_date:
+        result["incident_date"] = norm_date
+
+    # 5. Damage Description Extraction
+    if target_field == "damage_description" and len(clean) >= 3:
+        if clean.upper() not in COMMON_STOP_WORDS:
+            result["damage_description"] = clean
+    elif not target_field:
+        if any(w in lowered for w in ("damage", "damaged", "hit", "accident", "crash", "broken", "leak", "flood", "dent", "loss", "scratch", "destroyed")):
+            result["damage_description"] = clean
+
+    return result
+
+
+EXTRACTION_PROMPT = """Extract structured insurance claim information from the text below.
+Return ONLY valid JSON with no markdown formatting and no extra text matching this schema:
 {{
   "policy_id": "string or null",
   "incident_date": "YYYY-MM-DD or null",
@@ -100,58 +205,25 @@ Return ONLY valid JSON, no markdown, no explanation, matching this schema:
   "claimed_amount": number or null
 }}
 
-IMPORTANT: claimed_amount must be a number (not a string). If you cannot determine
-a value, use null — do not guess.
+Rules:
+1. claimed_amount must be a numeric value (not a string). If unknown, use null.
+2. incident_date must be in ISO format YYYY-MM-DD.
+3. If information is not explicitly provided in the text, use null. Do NOT hallucinate.
 
-Target question previously asked: "{target_field}"
+Target question context: "{target_field}"
 Claim text: "{claim_text}"
 """
 
-def _rule_based_fallback_extraction(claim_text: str, target_field: str | None) -> Dict[str, Any]:
-    """Rule-based heuristic fallback to guarantee fast, reliable extraction on direct answers."""
-    result: Dict[str, Any] = {}
-    clean = claim_text.strip()
-    lowered = clean.lower()
 
-    if target_field == "policy_id" or not target_field:
-        m = re.search(r"(?:policy|policy number|number)?\s*(?:is|:)?\s*([a-zA-Z0-9\-_]{3,20})", clean, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip("-").upper()
-            if val not in ("MY", "THE", "NUMBER", "IS", "PLEASE", "THAT", "WHAT"):
-                result["policy_id"] = val
-
-    if target_field == "claimed_amount" or not target_field:
-        amt = _coerce_amount(clean)
-        if amt is not None and amt > 0:
-            result["claimed_amount"] = amt
-
-    if target_field == "claim_type" or not target_field:
-        if any(w in lowered for w in ("car", "auto", "vehicle", "motor", "bike", "accident")):
-            result["claim_type"] = "auto"
-        elif any(w in lowered for w in ("home", "house", "apartment", "property", "roof", "leak")):
-            result["claim_type"] = "home"
-        elif any(w in lowered for w in ("business", "shop", "office", "commercial")):
-            result["claim_type"] = "business"
-
-    if target_field == "incident_date" or not target_field:
-        if "yesterday" in lowered:
-            result["incident_date"] = (date.today() - timedelta(days=1)).isoformat()
-        elif "today" in lowered:
-            result["incident_date"] = date.today().isoformat()
-        else:
-            m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", clean)
-            if m:
-                result["incident_date"] = m.group(1)
-
-    if target_field == "damage_description" and len(clean) > 3:
-        result["damage_description"] = clean
-
-    return result
-
-
+# ---------------------------------------------------------------------------
+# Node 1: Claim Extractor
+# ---------------------------------------------------------------------------
 def claim_extractor(state: ClaimState) -> ClaimState:
-    if state.get("confirmed") or state.get("closure_status") in ("closed", "pending_review"):
-        _audit(state, "claim_extractor skipped: claim already confirmed/evaluated")
+    """
+    Extract structured claim fields from raw user text using LLM with deterministic fallback.
+    """
+    if state.get("confirmed") or state.get("conversation_status") == "intake_complete":
+        _audit(state, "claim_extractor skipped: claim intake already complete")
         return state
 
     raw_text = state.get("claim_text", "")
@@ -172,7 +244,7 @@ def claim_extractor(state: ClaimState) -> ClaimState:
         raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
         extracted = json.loads(raw)
     except Exception as exc:
-        logger.warning("claim_extractor LLM fallback: %s", exc)
+        logger.warning("claim_extractor LLM fallback active: %s", exc)
         extracted = {}
 
     fallback = _rule_based_fallback_extraction(raw_text, target_field)
@@ -180,7 +252,7 @@ def claim_extractor(state: ClaimState) -> ClaimState:
         if v is not None and (extracted.get(k) is None):
             extracted[k] = v
 
-    if "claimed_amount" in extracted:
+    if "claimed_amount" in extracted and extracted["claimed_amount"] is not None:
         extracted["claimed_amount"] = _coerce_amount(extracted["claimed_amount"])
 
     prior: Dict[str, Any] = state.get("extracted_data") or {}
@@ -194,7 +266,7 @@ def claim_extractor(state: ClaimState) -> ClaimState:
             merged[k] = v
 
     non_null_required = sum(1 for f in REQUIRED_FIELDS if merged.get(f) is not None)
-    state["extraction_confidence"] = non_null_required / len(REQUIRED_FIELDS)
+    state["extraction_confidence"] = non_null_required / float(len(REQUIRED_FIELDS))
     state["extracted_data"] = merged
 
     _audit(
@@ -205,298 +277,43 @@ def claim_extractor(state: ClaimState) -> ClaimState:
     return state
 
 
-# ---------- Node 2: Mandatory Field Checker ----------
+# ---------------------------------------------------------------------------
+# Node 2: Mandatory Field Checker
+# ---------------------------------------------------------------------------
 def mandatory_field_checker(state: ClaimState) -> ClaimState:
+    """
+    Check if all 5 mandatory fields are present.
+    """
     data: Dict[str, Any] = state.get("extracted_data") or {}
     missing = [f for f in REQUIRED_FIELDS if not data.get(f)]
     state["missing_fields"] = missing
 
+    ticket_id = state.get("ticket_id", "N/A")
+
     if not missing:
         state["awaiting_confirmation"] = True
         state["message"] = (
-            f"All required fields received for ticket {state.get('ticket_id')}. "
-            "Please confirm your claim details to proceed to evaluation."
+            f"All required fields received for ticket {ticket_id}. "
+            "Please review and confirm your claim details."
         )
         _audit(state, "All mandatory fields present. Awaiting confirmation.")
     else:
         state["awaiting_confirmation"] = False
+        next_prompt = FIELD_PROMPTS.get(missing[0], missing[0].replace("_", " "))
         state["message"] = (
             f"Claim details missing fields: {', '.join(missing)}. "
-            f"Next question: {FIELD_PROMPTS.get(missing[0], missing[0])}"
+            f"Next question: {next_prompt}"
         )
         _audit(state, f"Missing fields: {missing}")
 
     return state
 
 
-# ---------- Node 3: Policy Validator ----------
-def policy_validator(state: ClaimState, db: Optional[Session] = None) -> ClaimState:
-    data: Dict[str, Any] = state.get("extracted_data") or {}
-    policy_id = data.get("policy_id")
-    if not policy_id:
-        state["policy_valid"] = False
-        state["policy_details"] = None
-        _audit(state, "Policy validation failed: no policy_id provided")
-        return state
-
-    if db is None:
-        state["policy_valid"] = True
-        return state
-
-    policy = db.query(Policy).filter(Policy.policy_id == policy_id).first()
-    if not policy:
-        state["policy_valid"] = False
-        state["policy_details"] = None
-        _audit(state, f"Policy validation failed: policy_id '{policy_id}' not found in database")
-        return state
-
-    today = date.today()
-    is_active = policy.start_date <= today <= policy.end_date
-
-    state["policy_valid"] = is_active
-    state["policy_details"] = {
-        "policy_id": str(getattr(policy, "policy_id", "")),
-        "policy_type": str(getattr(policy, "policy_type", "")),
-        "holder_name": str(getattr(policy, "holder_name", "")),
-        "start_date": str(getattr(policy, "start_date", "")),
-        "end_date": str(getattr(policy, "end_date", "")),
-        "coverage_limit": float(getattr(policy, "coverage_limit", 0.0) or 0.0),
-        "deductible": float(getattr(policy, "deductible", 0.0) or 0.0),
-    }
-    _audit(state, f"Policy '{policy_id}' validated: valid={is_active} (active window: {policy.start_date} to {policy.end_date})")
-    return state
-
-
-# ---------- Node 4: Coverage Checker ----------
-def coverage_checker(state: ClaimState) -> ClaimState:
-    if not state.get("policy_valid"):
-        state["coverage_eligible"] = False
-        state["deductible_amount"] = 0.0
-        state["payout_amount"] = 0.0
-        _audit(state, "Coverage check failed: policy is not valid")
-        return state
-
-    extracted: Dict[str, Any] = state.get("extracted_data") or {}
-    policy: Dict[str, Any] = state.get("policy_details") or {}
-    claim_type = extracted.get("claim_type", "")
-    policy_type = policy.get("policy_type", "")
-
-    if policy_type and claim_type != policy_type:
-        state["coverage_eligible"] = False
-        state["deductible_amount"] = 0.0
-        state["payout_amount"] = 0.0
-        _audit(state, f"Coverage check failed: claim_type '{claim_type}' does not match policy_type '{policy_type}'")
-        return state
-
-    incident_date_str = extracted.get("incident_date")
-    if incident_date_str and policy.get("start_date") and policy.get("end_date"):
-        try:
-            inc_date = datetime.strptime(str(incident_date_str), "%Y-%m-%d").date()
-            start = datetime.strptime(str(policy["start_date"]), "%Y-%m-%d").date()
-            end = datetime.strptime(str(policy["end_date"]), "%Y-%m-%d").date()
-            if not (start <= inc_date <= end):
-                state["coverage_eligible"] = False
-                state["deductible_amount"] = 0.0
-                state["payout_amount"] = 0.0
-                _audit(state, f"Coverage check failed: incident_date {inc_date} outside policy window ({start} to {end})")
-                return state
-        except ValueError:
-            pass
-
-    claimed = float(extracted.get("claimed_amount") or 0.0)
-    limit = float(policy.get("coverage_limit", 0.0))
-    deductible = float(policy.get("deductible", 0.0))
-
-    is_eligible = limit == 0 or claimed <= limit
-    state["coverage_eligible"] = is_eligible
-    state["deductible_amount"] = deductible
-    state["payout_amount"] = max(0.0, min(claimed, limit) - deductible) if is_eligible and limit > 0 else claimed
-
-    _audit(
-        state,
-        f"Coverage eligible: {is_eligible} (claimed={claimed}, limit={limit}, "
-        f"deductible={deductible}, estimated payout={state['payout_amount']})"
-    )
-    return state
-
-
-# ---------- Node 5: Document Requirement Checker ----------
-def document_requirement_checker(state: ClaimState, db: Optional[Session] = None) -> ClaimState:
-    extracted: Dict[str, Any] = state.get("extracted_data") or {}
-    claim_type = extracted.get("claim_type", "")
-    required_doc_types = DOCUMENT_REQUIREMENTS.get(str(claim_type), [])
-
-    if not required_doc_types:
-        state["missing_documents"] = []
-        _audit(state, f"Document check: claim_type '{claim_type}' requires no documents")
-        return state
-
-    uploaded_list: List[str] = state.get("uploaded_documents") or []
-    uploaded_types: Set[str] = set(uploaded_list)
-    missing = [doc for doc in required_doc_types if doc not in uploaded_types]
-
-    state["missing_documents"] = missing
-    _audit(state, f"Document check: required={required_doc_types}, uploaded={list(uploaded_types)}, missing={missing}")
-    return state
-
-
-# ---------- Node 6: Fraud Detector ----------
-FRAUD_PROMPT = """Analyze this insurance claim for fraud risk.
-Evaluate:
-1. Is the claimed amount unusually high for this incident type?
-2. Does the damage description match the incident date/type?
-3. Are there inconsistencies in the narrative?
-
-Return ONLY valid JSON, no markdown, no explanation:
-{{
-  "fraud_score": <integer 0-100>,
-  "flags": ["list of string flags, empty if none"]
-}}
-
-Claim Details:
-- Policy ID: {policy_id}
-- Policy Type: {policy_type}
-- Coverage Limit: {coverage_limit}
-- Claimed Amount: {claimed_amount}
-- Incident Date: {incident_date}
-- Damage Description: {damage_description}
-"""
-
-def fraud_detector(state: ClaimState) -> ClaimState:
-    extracted: Dict[str, Any] = state.get("extracted_data") or {}
-    policy: Dict[str, Any] = state.get("policy_details") or {}
-
-    prompt = FRAUD_PROMPT.format(
-        policy_id=extracted.get("policy_id", "N/A"),
-        policy_type=policy.get("policy_type", "N/A"),
-        coverage_limit=policy.get("coverage_limit", "N/A"),
-        claimed_amount=extracted.get("claimed_amount", "N/A"),
-        incident_date=extracted.get("incident_date", "N/A"),
-        damage_description=extracted.get("damage_description", "N/A"),
-    )
-
-    try:
-        response = llm.invoke(prompt)
-        content = response.content
-        raw = content if isinstance(content, str) else str(content)
-        raw = raw.strip()
-        raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
-        result = json.loads(raw)
-        score = int(result.get("fraud_score", 0))
-        flags = list(result.get("flags", []))
-    except Exception as exc:
-        logger.warning("fraud_detector LLM failed (%s), running heuristic rules", exc)
-        score = 0
-        flags = []
-
-    claimed = float(extracted.get("claimed_amount") or 0.0)
-    limit = float(policy.get("coverage_limit") or 0.0)
-    if limit > 0 and claimed > 0.8 * limit:
-        score = max(score, 45)
-        flags.append("HIGH_CLAIM_AMOUNT_NEAR_LIMIT")
-
-    state["fraud_score"] = float(score)
-    state["fraud_flags"] = flags
-    _audit(state, f"Fraud check complete: score={score}, flags={flags}")
-    return state
-
-
-# ---------- Node 7: Route Decision (Adjuster Assignment) ----------
-def route_decision(state: ClaimState, db: Optional[Session] = None) -> ClaimState:
-    if db is None:
-        state["assigned_adjuster"] = None
-        return state
-
-    adjusters = db.query(Adjuster).filter(Adjuster.status == "active").all()
-    if not adjusters:
-        state["assigned_adjuster"] = None
-        _audit(state, "Adjuster routing: no active adjusters found in database")
-        return state
-
-    least_loaded = min(adjusters, key=lambda a: a.current_cases)
-    least_loaded.current_cases += 1
-    db.commit()
-
-    state["assigned_adjuster"] = {
-        "id": str(least_loaded.id),
-        "name": least_loaded.name,
-        "email": least_loaded.email,
-        "specialization": least_loaded.specialization,
-        "current_cases": least_loaded.current_cases,
-    }
-    _audit(state, f"Assigned to adjuster '{least_loaded.name}' (current_cases now={least_loaded.current_cases})")
-    return state
-
-
-# ---------- Node 8: Response Formatter ----------
-def response_formatter(state: ClaimState) -> ClaimState:
-    if not state.get("policy_valid"):
-        message = (
-            f"Your claim under ticket {state.get('ticket_id')} has been denied. "
-            "Reason: The policy ID provided could not be verified or is not currently active."
-        )
-        state["final_decision"] = "denied"
-        state["closure_status"] = "closed"
-
-    elif not state.get("coverage_eligible"):
-        message = (
-            f"Your claim under ticket {state.get('ticket_id')} has been denied. "
-            "Reason: The claim details or amount do not meet the coverage terms of your policy."
-        )
-        state["final_decision"] = "denied"
-        state["closure_status"] = "closed"
-
-    elif state.get("missing_documents"):
-        missing_labels = [DOCUMENT_LABELS.get(d, d.replace("_", " ")) for d in state.get("missing_documents", [])]
-        message = (
-            f"Your claim (ticket {state.get('ticket_id')}) is eligible for coverage, but requires additional documentation: "
-            f"{', '.join(missing_labels)}. Please upload these documents to complete your claim."
-        )
-        state["final_decision"] = "manual_review"
-        state["closure_status"] = "awaiting_user"
-
-    elif state.get("fraud_score", 0) > 60:
-        adjuster = state.get("assigned_adjuster") or {}
-        message = (
-            f"Your claim (ticket {state.get('ticket_id')}) has been flagged for adjuster review due to validation flags: "
-            f"{', '.join(state.get('fraud_flags', []))}. Assigned to {adjuster.get('name', 'an adjuster')}."
-        )
-        state["final_decision"] = "flagged_for_review"
-        state["closure_status"] = "pending_review"
-
-    else:
-        adjuster = state.get("assigned_adjuster") or {}
-        message = (
-            f"Your claim has been approved. Ticket {state.get('ticket_id')}. "
-            f"Approved payout: ₹{state.get('payout_amount', 0):,.0f} "
-            f"after a ₹{state.get('deductible_amount', 0):,.0f} deductible. "
-            f"Assigned to {adjuster.get('name', 'an adjuster')} for processing."
-        )
-        state["final_decision"] = "approved"
-        state["closure_status"] = "closed"
-
-    state["response_message"] = message
-    state["spoken_response"] = message
-    _audit(state, f"Final decision: {state['final_decision']} ({state['closure_status']})")
-    return state
-
-
-# =============================================================================
-# Conversational Turn Nodes
-# =============================================================================
-
-UNKNOWN_SENTINEL = "UNKNOWN"
-
-CORRECTION_MARKERS = (
-    "actually", "sorry, i meant", "i meant to say", "no wait", "correction",
-    "let me correct", "scratch that", "i said that wrong",
-)
-DONT_KNOW_MARKERS = ("i don't know", "i dont know", "not sure", "no idea", "i'll check")
-DEFER_MARKERS = ("i'll provide it later", "later", "not right now", "i'll get back to you")
-REPEAT_MARKERS = ("repeat that", "say that again", "come again", "what was that", "pardon")
-
-
+# ---------------------------------------------------------------------------
+# Node 3: Conversational Turn Processor
+# ---------------------------------------------------------------------------
 def _detect_utterance_intent(text: str) -> str:
+    """Classify user utterance into conversational control intents."""
     lowered = text.lower().strip()
     if any(m in lowered for m in REPEAT_MARKERS):
         return "repeat"
@@ -510,13 +327,16 @@ def _detect_utterance_intent(text: str) -> str:
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
+    """
+    Process conversational turn intents.
+    """
     utterance = state.get("claim_text", "")
     state["last_user_utterance"] = utterance
     intent = _detect_utterance_intent(utterance)
     target_field = state.get("next_question_field")
 
     if intent == "repeat":
-        _audit(state, f"User asked to repeat. Re-emitting question for '{target_field}'.")
+        _audit(state, f"User requested repeat. Re-emitting question for '{target_field}'.")
         state["conversation_status"] = "in_progress"
         state["_skip_extraction"] = True
         return state
@@ -543,9 +363,15 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     return state
 
 
+# ---------------------------------------------------------------------------
+# Node 4: Next Question Generator
+# ---------------------------------------------------------------------------
 def next_question_generator(state: ClaimState) -> ClaimState:
+    """
+    Generate targeted voice prompt for the first missing required field.
+    """
     if state.get("_skip_extraction") and state.get("next_question"):
-        _audit(state, "Re-emitting previous question.")
+        _audit(state, "Re-emitting previous question on repeat turn.")
         return state
 
     missing = state.get("missing_fields", [])
@@ -556,40 +382,25 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
     field = missing[0]
     state["next_question_field"] = field
-    state["next_question"] = FIELD_PROMPTS.get(field, f"Could you tell me {field.replace('_', ' ')}?")
+    state["next_question"] = FIELD_PROMPTS.get(field, f"Could you provide your {field.replace('_', ' ')}?")
     state["conversation_status"] = "in_progress"
     _audit(state, f"Generated next question for '{field}': '{state['next_question']}'")
     return state
 
 
-def document_request_generator(state: ClaimState) -> ClaimState:
-    missing_docs = state.get("missing_documents", [])
-    if missing_docs:
-        labels = [DOCUMENT_LABELS.get(d, d.replace("_", " ")) for d in missing_docs]
-        prompt = (
-            f"Thank you. I have all the claim details. To complete your claim, please upload: "
-            f"{', '.join(labels)}. You can use the upload button on your screen."
-        )
-        state["next_question"] = prompt
-        state["next_question_field"] = "documents"
-        state["awaiting_document_request"] = True
-        state["conversation_status"] = "awaiting_documents"
-        _audit(state, f"Prompting user for missing documents: {missing_docs}")
-    else:
-        state["awaiting_document_request"] = False
-        state["conversation_status"] = "intake_complete"
-
-    return state
-
-
+# ---------------------------------------------------------------------------
+# Node 5: Intake Completion Marker
+# ---------------------------------------------------------------------------
 def intake_completion_marker(state: ClaimState) -> ClaimState:
+    """
+    Mark conversation intake as complete once all mandatory fields are collected.
+    """
     ticket_id = state.get("ticket_id", "your claim")
     state["conversation_status"] = "intake_complete"
     state["next_question"] = (
-        f"Thank you for reporting your claim. Your ticket ID is {ticket_id}. "
-        "We have collected all your details and required documents. "
-        "Your claim intake is complete and submitted for automated evaluation."
+        f"Thank you for providing all the required details. Your ticket ID is {ticket_id}. "
+        "Your claim intake is complete and submitted for review."
     )
     state["next_question_field"] = ""
-    _audit(state, "Claim intake conversation complete; all mandatory fields & docs present.")
+    _audit(state, f"Claim intake conversation complete for ticket {ticket_id}.")
     return state

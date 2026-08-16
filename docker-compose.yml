@@ -6,7 +6,6 @@ services:
       POSTGRES_PASSWORD: DBpassword
       POSTGRES_DB: insurance_claims
     ports: ["5433:5432"]
-    # Enable the extension automatically on first startup:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -19,7 +18,6 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-      # FIX 5: AWS_REGION passed so S3 URLs use virtual-hosted style
       AWS_REGION: ap-south-1
     depends_on: [postgres]
 
@@ -27,11 +25,6 @@ services:
     build: ./frontend
     ports: ["3000:3000"]
     environment:
-      # FIX 6: NEXT_PUBLIC_API_URL is embedded at build time into the JS bundle.
-      # "localhost:8000" works when the BROWSER (not the container) calls the API,
-      # which is correct for this client-side-only Next.js app accessed from the
-      # host machine. If you deploy behind a reverse proxy or need SSR calls to
-      # hit the backend service directly, change this to: http://backend:8000
       NEXT_PUBLIC_API_URL: http://localhost:8000
 
 volumes:
