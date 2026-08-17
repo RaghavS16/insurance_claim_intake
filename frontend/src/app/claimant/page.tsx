@@ -64,6 +64,8 @@ export default function ClaimantPage() {
   const audioQueueRef = useRef<HTMLAudioElement[]>([]);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const isPlayingRef = useRef<boolean>(false);
+  const isSpeakingFallbackRef = useRef<boolean>(false);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   // Authenticate user on load
   useEffect(() => {
@@ -230,6 +232,10 @@ export default function ClaimantPage() {
           activeAudioRef.current.pause();
           activeAudioRef.current = null;
         }
+        if ("speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+          isSpeakingFallbackRef.current = false;
+        }
         audioQueueRef.current = [];
         isPlayingRef.current = false;
         setPartialSegments(new Map());
@@ -341,6 +347,26 @@ export default function ClaimantPage() {
         });
         if ("speechSynthesis" in window) {
           const utterance = new SpeechSynthesisUtterance(text);
+          utteranceRef.current = utterance; // Prevent Chrome garbage collection
+          
+          utterance.onstart = () => {
+            isSpeakingFallbackRef.current = true;
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "tts_started" }));
+            }
+          };
+          utterance.onend = () => {
+            isSpeakingFallbackRef.current = false;
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
+            }
+          };
+          utterance.onerror = () => {
+            isSpeakingFallbackRef.current = false;
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
+            }
+          };
           window.speechSynthesis.speak(utterance);
         }
 
@@ -402,7 +428,7 @@ export default function ClaimantPage() {
       workletNodeRef.current = workletNode;
 
       workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState === WebSocket.OPEN && !isSpeakingFallbackRef.current) {
           ws.send(e.data);
         }
       };

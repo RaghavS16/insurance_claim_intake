@@ -29,7 +29,7 @@ def synthesize(text: str) -> bytes:
         raise TTSError("Cannot synthesize empty text.")
 
     # Read from environment directly to support dynamic test overrides
-    piper_voice_model = os.environ.get("PIPER_VOICE_MODEL")
+    piper_voice_model = os.environ.get("PIPER_VOICE_MODEL", settings.PIPER_VOICE_MODEL)
     if not piper_voice_model:
         raise TTSError("PIPER_VOICE_MODEL environment variable is not configured.")
 

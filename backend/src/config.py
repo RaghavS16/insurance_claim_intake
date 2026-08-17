@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # LLM / Ollama
     OLLAMA_BASE_URL: str = Field("http://localhost:11434", description="Ollama API base URL")
-    OLLAMA_MODEL: str = Field("llama3.1:8b", description="Ollama model name")
+    OLLAMA_MODEL: str = Field("qwen2.5:1.5b", description="Ollama model name")
 
     # Voice Pipeline
     PIPER_BIN: str = Field("piper", description="Path or command for Piper TTS executable")
