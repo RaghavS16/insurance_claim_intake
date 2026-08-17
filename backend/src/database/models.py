@@ -73,6 +73,7 @@ class Claim(Base):
 
     id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     ticket_id = Column(String, unique=True, nullable=False)
+    customer_id = Column(String, nullable=True, default=None)
     policy_id = _UUID(ForeignKey("policies.id"), nullable=True, default=None)
     claim_date = Column(Date, default=date.today)
     incident_date = Column(Date)

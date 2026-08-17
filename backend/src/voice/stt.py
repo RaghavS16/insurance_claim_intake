@@ -108,6 +108,16 @@ def _pcm16_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
     return buf.read()
 
 
+def _is_hallucination(text: str) -> bool:
+    """Check if the transcribed text matches common Whisper hallucinations during silence."""
+    cleaned = text.strip().lower().rstrip(".,?!")
+    hallucinations = {
+        "thank you", "thank you very much", "you", "bye", "bye-bye", "bye bye",
+        "um", "uh", "go ahead", "thanks", "thank you so much"
+    }
+    return cleaned in hallucinations
+
+
 def _run_whisper(pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float]:
     """
     Run faster-whisper on pcm_bytes and return (text, confidence).
@@ -141,6 +151,9 @@ def _run_whisper(pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float
     try:
         model = get_model()
         text, confidence = _transcribe(model)
+        if _is_hallucination(text):
+            logger.info("Filtered Whisper hallucination: %r (conf=%.2f)", text, confidence)
+            return "", 0.0
         logger.debug("Whisper: %d bytes → %r (conf=%.2f)", len(pcm_bytes), text, confidence)
         return text, confidence
     except RuntimeError as re_err:
@@ -150,6 +163,9 @@ def _run_whisper(pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float
             try:
                 _model = WhisperModel(settings.STT_MODEL_SIZE, device="cpu", compute_type="int8")
                 text, confidence = _transcribe(_model)
+                if _is_hallucination(text):
+                    logger.info("Filtered Whisper hallucination on CPU fallback: %r", text)
+                    return "", 0.0
                 return text, confidence
             except Exception as cpu_err:
                 logger.exception("CPU fallback transcription failed: %s", cpu_err)

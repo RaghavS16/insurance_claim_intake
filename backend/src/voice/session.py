@@ -23,6 +23,10 @@ class VoiceSession:
     segmenter: UtteranceSegmenter = field(default_factory=UtteranceSegmenter)
     turn_number: int = 0
 
+    # Conversational state tracking
+    agent_speaking: bool = False
+    state: str = "listening"  # listening, thinking, speaking
+
     # Separate sequence counters for claimant and agent transcript segments
     _claimant_seq: int = field(default=0, repr=False)
     _agent_seq: int = field(default=0, repr=False)

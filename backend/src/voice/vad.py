@@ -13,6 +13,8 @@ SpeechEndpointDetector — new preferred class used by the streaming voice pipel
   Silence threshold is configurable via settings.VAD_SILENCE_MS (default 800ms).
 """
 import collections
+import math
+import struct
 from typing import Generator, List, Optional, Tuple
 
 import webrtcvad
@@ -47,6 +49,21 @@ def frame_generator(audio_bytes: bytes) -> Generator[Frame, None, None]:
         yield Frame(audio_bytes[offset:offset + FRAME_BYTES], timestamp, duration)
         timestamp += duration
         offset += FRAME_BYTES
+
+
+def calculate_rms(frame_bytes: bytes) -> float:
+    """Calculate the Root Mean Square (RMS) energy of a 16-bit PCM mono audio frame."""
+    if not frame_bytes:
+        return 0.0
+    count = len(frame_bytes) // 2
+    if count == 0:
+        return 0.0
+    try:
+        samples = struct.unpack(f"<{count}h", frame_bytes)
+    except struct.error:
+        return 0.0
+    sum_squares = sum(s * s for s in samples)
+    return math.sqrt(sum_squares / count)
 
 
 class SpeechEndpointDetector:
@@ -90,7 +107,7 @@ class SpeechEndpointDetector:
         self._voiced_frames: List[Frame] = []
         self._leftover = b""
 
-    def feed(self, chunk: bytes) -> List[Tuple[bytes, bool]]:
+    def feed(self, chunk: bytes, tts_active: bool = False) -> List[Tuple[bytes, bool]]:
         """
         Feed raw PCM16 bytes. Returns a list of (audio_chunk, is_endpoint) tuples.
 
@@ -108,13 +125,16 @@ class SpeechEndpointDetector:
             self._leftover = self._leftover[len(frames) * FRAME_BYTES:]
 
         for frame in frames:
-            is_speech = self._vad.is_speech(frame.bytes, SAMPLE_RATE)
+            rms = calculate_rms(frame.bytes)
+            rms_threshold = 350 if tts_active else 150
+            is_speech = self._vad.is_speech(frame.bytes, SAMPLE_RATE) and (rms >= rms_threshold)
 
             if not self._in_speech:
                 self._start_ring.append((frame, is_speech))
                 voiced_count = sum(1 for _, s in self._start_ring if s)
                 assert self._start_ring.maxlen is not None
-                if voiced_count >= int(0.8 * self._start_ring.maxlen):
+                onset_threshold = 0.9 if tts_active else 0.8
+                if voiced_count >= int(onset_threshold * self._start_ring.maxlen):
                     self._in_speech = True
                     # Include the onset ring buffer to avoid clipping
                     self._voiced_frames.extend(f for f, _ in self._start_ring)
@@ -202,7 +222,8 @@ class UtteranceSegmenter:
             self._leftover = self._leftover[consumed:]
 
         for frame in frames:
-            is_speech = self._vad.is_speech(frame.bytes, SAMPLE_RATE)
+            rms = calculate_rms(frame.bytes)
+            is_speech = self._vad.is_speech(frame.bytes, SAMPLE_RATE) and (rms >= 150)
 
             if not self._triggered:
                 self._start_ring.append((frame, is_speech))

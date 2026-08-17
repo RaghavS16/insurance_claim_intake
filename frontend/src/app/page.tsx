@@ -27,32 +27,36 @@ interface TranscriptSegment {
   timestamp?: number;
 }
 
-/** Conversation history item (finalized segments + initial agent message) */
 interface ConversationTurn {
   turn: number;
   speaker: "user" | "agent";
   text: string;
-  /** Tracks whether this entry originated from a streaming segment */
   segment_id?: string;
   global_seq?: number;
   timestamp?: number;
 }
 
 const SUPPORTED_INSURANCE_TYPES = [
-  { id: "motor", name: "Motor", icon: "🚗", desc: "Vehicle accident, collision, or damage" },
-  { id: "health", name: "Health", icon: "🏥", desc: "Hospitalization, surgery, or medical care" },
-  { id: "senior_health", name: "Senior Health", icon: "🩺", desc: "Elderly parent / senior citizen medical care" },
-  { id: "home", name: "Home", icon: "🏠", desc: "Fire, roof leak, plumbing, or property damage" },
-  { id: "travel", name: "Travel", icon: "✈️", desc: "Lost luggage, trip cancellation, flight delay" },
-  { id: "cyber", name: "Cyber", icon: "🔒", desc: "Ransomware, malware, hacking, or online fraud" },
+  { id: "motor", name: "Motor", icon: "🚗", desc: "Vehicle accident or damage" },
+  { id: "health", name: "Health", icon: "🏥", desc: "Medical care & surgery" },
+  { id: "senior_health", name: "Senior Health", icon: "🩺", desc: "Elderly parent medical care" },
+  { id: "home", name: "Home", icon: "🏠", desc: "Property & utility damage" },
+  { id: "travel", name: "Travel", icon: "✈️", desc: "Trip delays & lost luggage" },
+  { id: "cyber", name: "Cyber", icon: "🔒", desc: "Ransomware & fraud claims" },
 ];
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
+const MOCK_USERS = [
+  { id: "claimant_john", name: "John Doe (Motor Policy)", policyId: "MOT-5521" },
+  { id: "claimant_jane", name: "Jane Smith (Home Policy)", policyId: "HOME456" },
+  { id: "claimant_bob", name: "Bob Johnson (Health Policy)", policyId: "HLT-7789" },
+];
+
 export default function ClaimIntakePage() {
+  const [userId, setUserId] = useState<string>("");
+  const [userName, setUserName] = useState<string>("");
   const [ticketId, setTicketId] = useState<string>("");
   const [conversationStatus, setConversationStatus] = useState<string>("not_started");
+  const [agentState, setAgentState] = useState<string>("listening"); // listening, thinking, speaking
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
   const [missingFields, setMissingFields] = useState<string[]>([
     "policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"
@@ -63,34 +67,89 @@ export default function ClaimIntakePage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [confirmed, setConfirmed] = useState<boolean>(false);
   const [submittedMessage, setSubmittedMessage] = useState<string>("");
-  /** Visible error banner — shown instead of silent console.error */
   const [errorBanner, setErrorBanner] = useState<string>("");
 
-  // Active partial segments (keyed by segment_id) — updated in real time
+  // Active partial segments (keyed by segment_id)
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const audioQueueRef = useRef<HTMLAudioElement[]>([]);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const isPlayingRef = useRef<boolean>(false);
 
-  // Auto-scroll chat to latest message
+  // Sync auth from localStorage on load
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [history, partialSegments]);
+    const cachedUid = localStorage.getItem("X-User-ID");
+    const cachedName = localStorage.getItem("X-User-Name");
+    if (cachedUid && cachedName) {
+      setUserId(cachedUid);
+      setUserName(cachedName);
+    }
+  }, []);
+
+  // Smart Auto-Scroll to bottom
+  const scrollToBottom = useCallback((force = false) => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const threshold = 150;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+    if (force || isNearBottom) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom(true);
+  }, [history.length, scrollToBottom]);
+
+  useEffect(() => {
+    scrollToBottom(false);
+  }, [partialSegments, agentState, scrollToBottom]);
+
+  // Handle Logout
+  const handleLogout = () => {
+    if (isRecording) {
+      stopVoiceRecording();
+    }
+    localStorage.removeItem("X-User-ID");
+    localStorage.removeItem("X-User-Name");
+    setUserId("");
+    setUserName("");
+    setTicketId("");
+    setHistory([]);
+    setExtractedData({});
+    setConversationStatus("not_started");
+  };
+
+  // Login handler
+  const handleLogin = (user: typeof MOCK_USERS[0]) => {
+    localStorage.setItem("X-User-ID", user.id);
+    localStorage.setItem("X-User-Name", user.name);
+    setUserId(user.id);
+    setUserName(user.name);
+  };
 
   // ---------------------------------------------------------------------------
   // Session initialization
   // ---------------------------------------------------------------------------
   const initSession = useCallback(async () => {
+    if (!userId) return;
     try {
       setLoading(true);
       setErrorBanner("");
-      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
+        method: "POST",
+        headers: {
+          "X-User-ID": userId,
+        },
+      });
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}`);
       }
@@ -108,7 +167,7 @@ export default function ClaimIntakePage() {
           speaker: "agent",
           text: data.initial_message || "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
           global_seq: 0,
-          timestamp: Date.now() - 1000
+          timestamp: Date.now() - 1000,
         },
       ]);
     } catch (err) {
@@ -117,23 +176,16 @@ export default function ClaimIntakePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    let ignore = false;
-    const load = async () => {
-      if (!ignore) {
-        await initSession();
-      }
-    };
-    load();
-    return () => {
-      ignore = true;
-    };
-  }, [initSession]);
+    if (userId) {
+      initSession();
+    }
+  }, [userId, initSession]);
 
   // ---------------------------------------------------------------------------
-  // Audio queue playback — plays TTS responses sequentially
+  // Audio queue playback
   // ---------------------------------------------------------------------------
   const enqueueAudio = useCallback((blob: Blob) => {
     const url = URL.createObjectURL(blob);
@@ -148,14 +200,12 @@ export default function ClaimIntakePage() {
       isPlayingRef.current = true;
       activeAudioRef.current = next;
 
-      // Event listener: playback started physically
       next.onplay = () => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "tts_started" }));
         }
       };
 
-      // Event listener: playback finished or interrupted
       const onStopPlayback = () => {
         URL.revokeObjectURL(url);
         isPlayingRef.current = false;
@@ -195,7 +245,7 @@ export default function ClaimIntakePage() {
       }
 
       if (msg.type === "barge_in") {
-        console.log("Barge-in event received: stopping active agent playback and clearing audio queue");
+        console.log("Interruption detected: stopping agent playback");
         if (activeAudioRef.current) {
           activeAudioRef.current.pause();
           activeAudioRef.current = null;
@@ -203,6 +253,10 @@ export default function ClaimIntakePage() {
         audioQueueRef.current = [];
         isPlayingRef.current = false;
         setPartialSegments(new Map());
+
+      } else if (msg.type === "agent_state") {
+        const state = msg.state as string;
+        setAgentState(state);
 
       } else if (msg.type === "transcript") {
         const speaker = msg.speaker as string;
@@ -217,7 +271,6 @@ export default function ClaimIntakePage() {
 
         if (speaker === "claimant") {
           if (!isFinal) {
-            // Update partial segment in-place (does not create new history item)
             setPartialSegments((prev) => {
               const next = new Map(prev);
               next.set(segmentId, {
@@ -234,7 +287,6 @@ export default function ClaimIntakePage() {
               return next;
             });
           } else {
-            // Final: remove from partials, add to history (or update if already there)
             setPartialSegments((prev) => {
               const next = new Map(prev);
               next.delete(segmentId);
@@ -242,7 +294,6 @@ export default function ClaimIntakePage() {
             });
             if (text && text.trim()) {
               setHistory((prev) => {
-                // Check if there's already a history entry for this segment_id
                 const existing = prev.findIndex((t) => t.segment_id === segmentId);
                 if (existing !== -1) {
                   const updated = [...prev];
@@ -251,7 +302,7 @@ export default function ClaimIntakePage() {
                     text,
                     segment_id: segmentId,
                     global_seq: globalSeq,
-                    timestamp: timestamp
+                    timestamp: timestamp,
                   };
                   return updated;
                 }
@@ -261,17 +312,16 @@ export default function ClaimIntakePage() {
                   text,
                   segment_id: segmentId,
                   global_seq: globalSeq,
-                  timestamp: timestamp
+                  timestamp: timestamp,
                 }];
               });
             }
           }
         } else if (speaker === "agent") {
-          // Agent transcript arrives from LLM text — add directly to history
           setHistory((prev) => {
             const existing = prev.findIndex((t) => t.segment_id === segmentId);
             if (existing !== -1) {
-              return prev; // already present (no duplicates)
+              return prev;
             }
             return [...prev, {
               turn: prev.length + 1,
@@ -279,7 +329,7 @@ export default function ClaimIntakePage() {
               text,
               segment_id: segmentId,
               global_seq: globalSeq,
-              timestamp: timestamp
+              timestamp: timestamp,
             }];
           });
         }
@@ -297,7 +347,6 @@ export default function ClaimIntakePage() {
       } else if (msg.type === "agent_text_fallback") {
         const text = msg.text as string;
         const globalSeq = msg.global_seq as number | undefined;
-        // Display in history if not already there (via transcript event)
         setHistory((prev) => {
           const last = prev[prev.length - 1];
           if (last && last.speaker === "agent" && last.text === text) {
@@ -308,10 +357,9 @@ export default function ClaimIntakePage() {
             speaker: "agent",
             text,
             global_seq: globalSeq,
-            timestamp: Date.now()
+            timestamp: Date.now(),
           }];
         });
-        // Play via Web Speech API
         if ("speechSynthesis" in window) {
           const utterance = new SpeechSynthesisUtterance(text);
           window.speechSynthesis.speak(utterance);
@@ -319,27 +367,25 @@ export default function ClaimIntakePage() {
 
       } else if (msg.type === "error") {
         const detail = msg.detail as string;
-        // Show visible error (not just console.error)
         setErrorBanner(detail || "An unexpected error occurred.");
 
       } else if (msg.type === "session_end") {
         setIsRecording(false);
       }
-
     } else if (event.data instanceof Blob) {
       enqueueAudio(event.data);
     }
   }, [enqueueAudio]);
 
   // ---------------------------------------------------------------------------
-  // Voice recording — AudioWorklet path
+  // Voice recording
   // ---------------------------------------------------------------------------
   const startVoiceRecording = async () => {
-    if (!ticketId) return;
+    if (!ticketId || !userId) return;
     setErrorBanner("");
 
     try {
-      const wsUrl = API_BASE.replace(/^http/, "ws") + `/ws/claims/${ticketId}/voice`;
+      const wsUrl = API_BASE.replace(/^http/, "ws") + `/ws/claims/${ticketId}/voice?user_id=${userId}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -349,7 +395,7 @@ export default function ClaimIntakePage() {
         setPartialSegments(new Map());
       };
       ws.onerror = () => {
-        setErrorBanner("WebSocket connection error. Please check your network and try again.");
+        setErrorBanner("WebSocket connection error. Please reconnect.");
         setIsRecording(false);
       };
 
@@ -358,13 +404,11 @@ export default function ClaimIntakePage() {
         setTimeout(() => reject(new Error("WebSocket connection timeout")), 8000);
       });
 
-      // Request microphone with echo cancellation and noise suppression
-      // Echo cancellation (AEC) prevents agent TTS from being captured by the mic
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: 16000,
           channelCount: 1,
-          echoCancellation: true,     // AEC: primary defence against TTS echo
+          echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
@@ -375,22 +419,12 @@ export default function ClaimIntakePage() {
       const audioContext = new AudioCtx({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
 
-      // Load AudioWorklet processor module
-      try {
-        await audioContext.audioWorklet.addModule("/audio-processor.js");
-      } catch (workletErr) {
-        // AudioWorklet not supported (very old browser) — fall back to ScriptProcessorNode
-        console.warn("AudioWorklet not supported, falling back to ScriptProcessorNode:", workletErr);
-        _startScriptProcessorFallback(audioContext, stream, ws);
-        setIsRecording(true);
-        return;
-      }
+      await audioContext.audioWorklet.addModule("/audio-processor.js");
 
       const source = audioContext.createMediaStreamSource(stream);
       const workletNode = new AudioWorkletNode(audioContext, "pcm16-processor");
       workletNodeRef.current = workletNode;
 
-      // Receive PCM16 chunks from the AudioWorklet thread
       workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(e.data);
@@ -398,7 +432,6 @@ export default function ClaimIntakePage() {
       };
 
       source.connect(workletNode);
-      // Do NOT connect workletNode to destination — we don't want to hear ourselves
       setIsRecording(true);
 
     } catch (err) {
@@ -407,33 +440,6 @@ export default function ClaimIntakePage() {
       setIsRecording(false);
     }
   };
-
-  /**
-   * Fallback to ScriptProcessorNode for browsers without AudioWorklet support.
-   * Deprecated but retained for compatibility.
-   */
-  function _startScriptProcessorFallback(
-    audioContext: AudioContext,
-    stream: MediaStream,
-    ws: WebSocket,
-  ) {
-    const source = audioContext.createMediaStreamSource(stream);
-    // ScriptProcessorNode is deprecated but retained as fallback for browsers without AudioWorklet
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    processor.onaudioprocess = (e) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        ws.send(pcm16.buffer);
-      }
-    };
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-  }
 
   const stopVoiceRecording = () => {
     if (workletNodeRef.current) {
@@ -449,16 +455,13 @@ export default function ClaimIntakePage() {
       streamRef.current = null;
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      // Send end_session to trigger the backend to flush ASR and respond,
-      // but do NOT close the WebSocket here. The backend will close it cleanly
-      // after sending the final agent response, or ws.onclose will handle it.
       wsRef.current.send(JSON.stringify({ type: "end_session" }));
     }
     setIsRecording(false);
   };
 
   // ---------------------------------------------------------------------------
-  // Text-based fallback intake
+  // Converged Text submission
   // ---------------------------------------------------------------------------
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -466,6 +469,17 @@ export default function ClaimIntakePage() {
 
     const userText = textInput.trim();
     setTextInput("");
+
+    // If WebSocket is open and recording is active, route through WS to get TTS (Issue 11)
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "text_input",
+        text: userText,
+      }));
+      return;
+    }
+
+    // Text Fallback (HTTP path) if not using voice WebSocket
     setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text: userText, timestamp: Date.now() }]);
     setLoading(true);
     setErrorBanner("");
@@ -473,7 +487,10 @@ export default function ClaimIntakePage() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/intake`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-ID": userId,
+        },
         body: JSON.stringify({
           ticket_id: ticketId,
           claim_text: userText,
@@ -498,7 +515,7 @@ export default function ClaimIntakePage() {
           turn: prev.length + 1,
           speaker: "agent",
           text: data.message || "Thank you for providing those details.",
-          timestamp: Date.now()
+          timestamp: Date.now(),
         },
       ]);
     } catch (err) {
@@ -519,7 +536,10 @@ export default function ClaimIntakePage() {
       setLoading(true);
       const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-ID": userId,
+        },
         body: JSON.stringify({ confirmed: true }),
       });
       if (!res.ok) {
@@ -538,54 +558,88 @@ export default function ClaimIntakePage() {
     }
   };
 
+  // Render Login state
+  if (!userId) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans p-4 selection:bg-cyan-500 selection:text-white">
+        <div className="max-w-md w-full bg-slate-900/60 border border-slate-800 rounded-3xl p-8 backdrop-blur-md shadow-2xl text-center flex flex-col gap-6">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-3xl mx-auto shadow-lg shadow-cyan-500/20">
+            🎙️
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Claimant Portal</h1>
+            <p className="text-sm text-slate-400 mt-2 leading-relaxed">
+              Securely file and manage your insurance claims using our interactive voice assistant. Please select your identity to begin.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 mt-2">
+            {MOCK_USERS.map((user) => (
+              <button
+                key={user.id}
+                onClick={() => handleLogin(user)}
+                className="w-full p-4 rounded-2xl bg-slate-950/50 hover:bg-slate-800 border border-slate-800/80 hover:border-cyan-500/50 hover:text-white text-slate-300 text-left transition duration-300 flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-semibold text-sm">{user.name}</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Policy: {user.policyId}</div>
+                </div>
+                <span className="text-cyan-400">→</span>
+              </button>
+            ))}
+          </div>
+          <div className="text-[10px] text-slate-600 uppercase tracking-widest mt-2 border-t border-slate-800/60 pt-4">
+            Phase 1 Secure Sandbox
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const completedFieldsCount = 5 - missingFields.length;
   const progressPercent = Math.round((completedFieldsCount / 5) * 100);
 
-  // Merge history + active partial segments for rendering
+  // Grab the single live user bubble segment text if speaking
   const activePartials = Array.from(partialSegments.values()).sort((a, b) => a.sequence - b.sequence);
+  const liveClaimantText = activePartials.length > 0 ? activePartials[0].text : "";
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
-      {/* Top Header */}
-      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-30 px-6 py-4 flex items-center justify-between shadow-lg shadow-black/40">
+      {/* Sleek Claimant Header */}
+      <header className="border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md sticky top-0 z-30 px-6 py-4 flex items-center justify-between shadow-lg shadow-black/20">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-xl shadow-md shadow-cyan-500/20">
             🎙️
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              Voice Claim Intake
-              <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 font-medium">
-                Phase 1 Active
-              </span>
+            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
+              Insurance Assistant
             </h1>
-            <p className="text-xs text-slate-400">Speech-driven insurance FNOL &amp; structured data gathering</p>
+            <p className="text-[11px] text-slate-400">Claimant Voice Intake FNOL</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs">
-            <span className="text-slate-400">Ticket:</span>
-            <span className="font-mono font-semibold text-cyan-300">{ticketId || "Connecting..."}</span>
+        <div className="flex items-center gap-3">
+          <div className="hidden md:flex flex-col text-right">
+            <span className="text-xs font-semibold text-slate-200">{userName}</span>
+            <span className="text-[9px] text-slate-500">Authorized Session</span>
           </div>
           <button
-            onClick={initSession}
-            disabled={loading}
-            className="px-3.5 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 rounded-lg transition"
+            onClick={handleLogout}
+            className="px-3.5 py-1.5 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 border border-slate-700 rounded-xl transition"
           >
-            New Session
+            Switch User
           </button>
         </div>
       </header>
 
       {/* Error Banner */}
       {errorBanner && (
-        <div className="mx-4 mt-3 flex items-start gap-3 bg-rose-950/70 border border-rose-600/50 rounded-xl px-4 py-3 text-sm text-rose-200 shadow-md">
-          <span className="text-rose-400 shrink-0 mt-0.5">⚠️</span>
-          <span className="flex-1">{errorBanner}</span>
+        <div className="mx-6 mt-4 flex items-start gap-3 bg-rose-950/70 border border-rose-600/50 rounded-2xl px-4 py-3.5 text-xs text-rose-200 shadow-md">
+          <span className="text-rose-400 shrink-0">⚠️</span>
+          <span className="flex-1 leading-normal">{errorBanner}</span>
           <button
             onClick={() => setErrorBanner("")}
-            className="text-rose-400 hover:text-rose-200 shrink-0 text-lg leading-none"
+            className="text-rose-400 hover:text-rose-200 shrink-0 text-base leading-none"
             aria-label="Dismiss error"
           >
             ×
@@ -594,172 +648,148 @@ export default function ClaimIntakePage() {
       )}
 
       {/* Main Grid */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-        {/* Left Column: Supported Categories & Live Conversation */}
-        <section className="lg:col-span-7 flex flex-col gap-4">
-
-          {/* Supported 6 Insurance Types Banner */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center justify-between">
-              <span>Supported Insurance Types (Strict 6)</span>
-              <span className="text-[10px] text-cyan-400 lowercase">voice-classified</span>
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+        
+        {/* Left Column: Dialogue Chat Interface */}
+        <section className="lg:col-span-7 flex flex-col gap-4 overflow-hidden h-[calc(100vh-140px)] min-h-[500px]">
+          
+          {/* Active Status Header Card */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                  agentState === "speaking" ? "bg-cyan-400" : agentState === "thinking" ? "bg-amber-400" : "bg-emerald-400"
+                }`}></span>
+                <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                  agentState === "speaking" ? "bg-cyan-500" : agentState === "thinking" ? "bg-amber-500" : "bg-emerald-500"
+                }`}></span>
+              </span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                {agentState === "speaking" ? "Assistant is speaking" : agentState === "thinking" ? "Assistant is thinking..." : isRecording ? "Listening..." : "Silent"}
+              </span>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {SUPPORTED_INSURANCE_TYPES.map((type) => {
-                const isSelected = extractedData.claim_type === type.id;
+            {ticketId && (
+              <span className="font-mono text-[10px] text-slate-500">Ticket: {ticketId}</span>
+            )}
+          </div>
+
+          {/* Conversation Chat Log */}
+          <div className="flex-1 bg-slate-900/30 border border-slate-800/80 rounded-3xl p-5 flex flex-col overflow-hidden shadow-inner">
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+              
+              {/* Message turns */}
+              {history.map((turn, idx) => {
+                const isAgent = turn.speaker === "agent";
                 return (
                   <div
-                    key={type.id}
-                    className={`p-2.5 rounded-xl border transition-all flex items-start gap-2.5 ${
-                      isSelected
-                        ? "bg-cyan-950/60 border-cyan-500 text-cyan-100 shadow-md shadow-cyan-500/10 scale-[1.02]"
-                        : "bg-slate-950/40 border-slate-800/80 text-slate-300 hover:border-slate-700"
-                    }`}
+                    key={`hist-${idx}`}
+                    className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
                   >
-                    <span className="text-xl">{type.icon}</span>
-                    <div className="min-w-0">
-                      <div className="font-medium text-xs truncate flex items-center gap-1">
-                        {type.name}
-                        {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>}
+                    {isAgent && (
+                      <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sm shrink-0">
+                        🤖
                       </div>
-                      <div className="text-[10px] text-slate-400 truncate">{type.desc}</div>
+                    )}
+                    <div
+                      className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
+                        isAgent
+                          ? "bg-slate-900/80 text-slate-100 border border-slate-800 rounded-tl-sm"
+                          : "bg-gradient-to-tr from-cyan-600 to-blue-600 text-white rounded-tr-sm shadow-md shadow-cyan-500/5"
+                      }`}
+                    >
+                      {turn.text}
                     </div>
                   </div>
                 );
               })}
-            </div>
-          </div>
 
-          {/* Conversation Chat Log */}
-          <div className="flex-1 min-h-[380px] max-h-[500px] bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col overflow-hidden shadow-inner">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
-              <span className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                Live Intake Dialogue
-              </span>
-              <span className="text-xs text-slate-500">{history.length} turns</span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {/* Finalized conversation history */}
-              {(() => {
-                const sortedHistory = [...history].sort((a, b) => {
-                  if (a.global_seq !== undefined && b.global_seq !== undefined) {
-                    return a.global_seq - b.global_seq;
-                  }
-                  const aTime = a.timestamp || 0;
-                  const bTime = b.timestamp || 0;
-                  if (aTime !== bTime) {
-                    return aTime - bTime;
-                  }
-                  return a.turn - b.turn;
-                });
-                return sortedHistory.map((turn, idx) => {
-                  const isAgent = turn.speaker === "agent";
-                  return (
-                    <div
-                      key={`hist-${idx}-${turn.segment_id ?? idx}`}
-                      className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
-                    >
-                      {isAgent && (
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-sm shadow-md shrink-0">
-                          🤖
-                        </div>
-                      )}
-                      <div
-                        className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
-                          isAgent
-                            ? "bg-slate-800/90 text-slate-100 border border-slate-700/80 rounded-tl-sm"
-                            : "bg-cyan-600 text-white rounded-tr-sm shadow-cyan-900/30"
-                        }`}
-                      >
-                        {turn.text}
-                      </div>
-                      {!isAgent && (
-                        <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0">
-                          👤
-                        </div>
-                      )}
-                    </div>
-                  );
-                });
-              })()}
-
-              {/* Active partial transcript segments (streaming, in-place update) */}
-              {activePartials.map((seg) => (
-                <div
-                  key={`partial-${seg.segment_id}`}
-                  className="flex items-start gap-3 justify-end"
-                >
-                  <div className="max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm leading-relaxed whitespace-pre-line bg-cyan-700/60 text-white rounded-tr-sm border border-cyan-500/30 italic">
-                    {seg.text}
-                    <span className="inline-block ml-1 w-1.5 h-3.5 bg-cyan-300 animate-pulse rounded-sm align-middle" />
-                  </div>
-                  <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0">
-                    👤
+              {/* Streaming Single Live User Bubble (Issue 8) */}
+              {liveClaimantText && (
+                <div className="flex items-start gap-3 justify-end">
+                  <div className="max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm leading-relaxed bg-cyan-950/60 text-cyan-100 border border-cyan-500/25 rounded-tr-sm italic">
+                    {liveClaimantText}
+                    <span className="inline-block ml-1 w-1.5 h-3.5 bg-cyan-400 animate-pulse rounded-sm align-middle" />
                   </div>
                 </div>
-              ))}
+              )}
 
-              <div ref={messagesEndRef} />
+              {/* Typing / Thinking Indicator (Issue 9) */}
+              {agentState === "thinking" && (
+                <div className="flex items-start gap-3 justify-start animate-fade-in">
+                  <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sm shrink-0">
+                    🤖
+                  </div>
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-4 py-3.5 text-sm flex gap-1 items-center shadow-sm">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce"></span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.2s]"></span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.4s]"></span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Voice & Text Input Controls */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+          {/* Dynamic Voice & Text Input Controls */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 shadow-sm flex flex-col gap-4">
             <div className="flex items-center justify-between">
+              
+              {/* Mic Controls (with Micro-animations) */}
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   id="voice-toggle-btn"
                   onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
                   disabled={loading || confirmed}
-                  className={`px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all shadow-lg active:scale-95 ${
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 relative ${
                     isRecording
-                      ? "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 animate-pulse"
-                      : "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/20"
+                      ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 scale-105"
+                      : "bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500 hover:text-white"
                   }`}
                 >
-                  <span className="text-lg">{isRecording ? "⏹️" : "🎙️"}</span>
-                  <span>{isRecording ? "Stop Speaking" : "Speak to Agent"}</span>
+                  {isRecording && (
+                    <span className="absolute inset-0 rounded-full bg-rose-600 animate-ping opacity-25"></span>
+                  )}
+                  <span className="text-xl">{isRecording ? "⏹️" : "🎙️"}</span>
                 </button>
-                {isRecording && (
-                  <span className="text-xs text-rose-400 flex items-center gap-1.5 font-medium animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                    Listening...
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-slate-200">
+                    {isRecording ? "Microphone active" : "Speak to file claim"}
                   </span>
-                )}
+                  <span className="text-[10px] text-slate-500">
+                    {isRecording ? "Click to stop recording" : "Uses voice activity detection"}
+                  </span>
+                </div>
               </div>
 
+              {/* Submit / Confirm button */}
               {conversationStatus === "confirming" && !confirmed && (
                 <button
                   id="confirm-submit-btn"
                   onClick={handleConfirmSubmit}
                   disabled={loading}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-xl shadow-md shadow-emerald-900/30 active:scale-95 transition"
+                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs rounded-2xl shadow-md shadow-emerald-950/20 active:scale-95 transition"
                 >
                   ✓ Confirm &amp; Submit Claim
                 </button>
               )}
             </div>
 
-            {/* Text Fallback Form */}
+            {/* Input form */}
             <form onSubmit={handleTextSubmit} className="flex gap-2">
               <input
                 id="text-input"
                 type="text"
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder={isRecording ? "Listening via microphone..." : "Or type your response here..."}
-                disabled={isRecording || loading || confirmed}
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
+                placeholder={isRecording ? "Speak now or type here to interrupt..." : "Type your response here..."}
+                disabled={loading || confirmed}
+                className="flex-1 bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
               />
               <button
                 id="text-submit-btn"
                 type="submit"
-                disabled={!textInput.trim() || isRecording || loading || confirmed}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-sm font-medium rounded-xl border border-slate-700 transition"
+                disabled={!textInput.trim() || loading || confirmed}
+                className="px-5 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-2xl border border-slate-700 transition"
               >
                 Send
               </button>
@@ -768,88 +798,88 @@ export default function ClaimIntakePage() {
 
         </section>
 
-        {/* Right Column: Structured Extracted Claim Data & Checklist */}
-        <aside className="lg:col-span-5 flex flex-col gap-4">
-
-          {/* Progress Card */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Intake Progress</span>
-              <span className="text-xs font-bold text-cyan-400">{progressPercent}% Completed</span>
+        {/* Right Column: Structured Extracted Claim Data & Progress */}
+        <aside className="lg:col-span-5 flex flex-col gap-4 h-[calc(100vh-140px)] min-h-[500px] overflow-y-auto pr-1">
+          
+          {/* Progress Widget */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Intake Progress</span>
+              <span className="text-xs font-extrabold text-cyan-400">{progressPercent}%</span>
             </div>
-            <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
               <div
-                className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full rounded-full transition-all duration-500"
+                className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full rounded-full transition-all duration-500"
                 style={{ width: `${progressPercent}%` }}
               ></div>
             </div>
           </div>
 
-          {/* Structured Claim Object Details */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h2 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>📋</span> Structured Claim State
+          {/* Structured Claim State Card */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5.5 shadow-sm flex flex-col gap-4.5">
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-3">
+              <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <span>📋</span> Collected Details
               </h2>
               <span
-                className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold uppercase tracking-wider border ${
+                className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
                   confirmed
-                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                     : conversationStatus === "confirming"
-                    ? "bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse"
-                    : "bg-cyan-500/20 text-cyan-300 border-cyan-500/40"
+                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
+                    : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                 }`}
               >
-                {confirmed ? "Submitted" : conversationStatus}
+                {confirmed ? "Submitted" : conversationStatus === "collecting" ? "Collecting Info" : conversationStatus}
               </span>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+            <div className="space-y-3.5 text-xs">
+              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
                 <span className="text-slate-400 font-medium">Policy ID</span>
-                <span className="font-mono font-semibold text-slate-100">
-                  {extractedData.policy_id || <span className="text-slate-600 font-normal italic">Waiting for voice/text...</span>}
+                <span className="font-mono font-semibold text-slate-200">
+                  {extractedData.policy_id || <span className="text-slate-600 font-normal italic">Pending...</span>}
                 </span>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Insurance Type</span>
+              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Insurance Category</span>
                 <span className="font-semibold text-cyan-300 capitalize">
-                  {extractedData.claim_type || <span className="text-slate-600 font-normal italic">Pending classification</span>}
+                  {extractedData.claim_type || <span className="text-slate-600 font-normal italic">Unclassified</span>}
                 </span>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
                 <span className="text-slate-400 font-medium">Incident Date</span>
-                <span className="font-medium text-slate-100">
-                  {extractedData.incident_date || <span className="text-slate-600 font-normal italic">Not recorded</span>}
+                <span className="font-medium text-slate-200">
+                  {extractedData.incident_date || <span className="text-slate-600 font-normal italic text-slate-500">Not detected</span>}
                 </span>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Estimated Amount</span>
+              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Claim Estimate</span>
                 <span className="font-bold text-emerald-400">
                   {extractedData.claimed_amount != null
                     ? `₹${Number(extractedData.claimed_amount).toLocaleString("en-IN")}`
-                    : <span className="text-slate-600 font-normal italic">Pending estimate</span>}
+                    : <span className="text-slate-600 font-normal italic">Calculating...</span>}
                 </span>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1">
+              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex flex-col gap-1.5">
                 <span className="text-slate-400 font-medium">Incident Description</span>
-                <p className="text-slate-200 leading-relaxed text-[11px]">
-                  {extractedData.damage_description || <span className="text-slate-600 italic">No description provided yet.</span>}
+                <p className="text-slate-300 leading-relaxed text-[11px]">
+                  {extractedData.damage_description || <span className="text-slate-600 italic">Please describe the accident or incident details.</span>}
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Mandatory Fields Checklist */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-              Intake Field Checklist
+          {/* Checklist Widget */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">
+              Field Validation Check
             </h3>
             <div className="space-y-2 text-xs">
               {[
-                { id: "claim_type", label: "Insurance Type (Strict 6)" },
-                { id: "damage_description", label: "Incident Details / Narrative" },
-                { id: "incident_date", label: "Date of Incident" },
+                { id: "claim_type", label: "Insurance Category" },
+                { id: "damage_description", label: "Incident Details" },
+                { id: "incident_date", label: "Date of Occurrence" },
                 { id: "policy_id", label: "Policy Number" },
                 { id: "claimed_amount", label: "Estimated Loss Amount" },
               ].map((f) => {
@@ -857,24 +887,24 @@ export default function ClaimIntakePage() {
                 return (
                   <div
                     key={f.id}
-                    className={`flex items-center justify-between p-2 rounded-lg border ${
+                    className={`flex items-center justify-between p-2.5 rounded-xl border ${
                       isProvided
-                        ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-200"
-                        : "bg-slate-950/30 border-slate-800 text-slate-400"
+                        ? "bg-emerald-950/10 border-emerald-900/20 text-emerald-200"
+                        : "bg-slate-950/20 border-slate-800/60 text-slate-500"
                     }`}
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-2 text-[11px]">
                       <span className={isProvided ? "text-emerald-400" : "text-slate-600"}>
                         {isProvided ? "✓" : "○"}
                       </span>
                       {f.label}
                     </span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded-md font-semibold uppercase ${
-                        isProvided ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"
+                      className={`text-[9px] px-2 py-0.5 rounded-md font-bold uppercase ${
+                        isProvided ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/25" : "bg-slate-800/60 text-slate-500"
                       }`}
                     >
-                      {isProvided ? "Collected" : "Required"}
+                      {isProvided ? "Verified" : "Missing"}
                     </span>
                   </div>
                 );
@@ -882,20 +912,19 @@ export default function ClaimIntakePage() {
             </div>
           </div>
 
-          {/* Confirmation Banner */}
+          {/* Submission Completion Screen Card */}
           {confirmed && (
-            <div className="bg-emerald-950/60 border border-emerald-500/60 rounded-2xl p-4 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/40">
-              <div className="flex items-center gap-2 font-bold text-sm text-emerald-300">
-                <span>🎉</span> Claim Confirmed &amp; Saved
+            <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-3xl p-5 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/20 animate-scale-up">
+              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-400">
+                <span>🎉</span> Claim Successfully Filed
               </div>
-              <p className="text-xs text-emerald-200/90 leading-relaxed">
-                {submittedMessage || "Your structured claim intake is complete. Ticket ID: " + ticketId}
+              <p className="text-xs text-emerald-300 leading-relaxed mt-1">
+                {submittedMessage || "Your structured claim intake has been finalized. Ticket reference: " + ticketId}
               </p>
             </div>
           )}
 
         </aside>
-
       </main>
     </div>
   );

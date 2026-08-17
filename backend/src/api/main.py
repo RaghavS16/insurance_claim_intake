@@ -34,10 +34,42 @@ from src.utils.logger import app_logger
 logger = app_logger
 
 
+from src.api.voice_ws import process_claimant_turn
+
+def get_current_user_id(request: Request) -> str:
+    """Dependency helper to get the authenticated user ID."""
+    uid = request.headers.get("X-User-ID")
+    if not uid:
+        auth = request.headers.get("Authorization")
+        if auth and auth.startswith("Bearer "):
+            uid = auth[7:].strip()
+    if not uid:
+        if settings.ENVIRONMENT == "test":
+            return "TEST_USER_ID"
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required: X-User-ID or Authorization header is missing."
+        )
+    return uid
+
+
+
 def _init_db_and_seeds():
     """Ensure database schema is created and seed initial canonical records if empty."""
     try:
         Base.metadata.create_all(bind=engine)
+        
+        # Safe SQLite migration: dynamically add customer_id to claims if missing
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if "claims" in inspector.get_table_names():
+            columns = [c["name"] for c in inspector.get_columns("claims")]
+            if "customer_id" not in columns:
+                logger.info("Database auto-migration: adding customer_id to claims table")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN customer_id VARCHAR"))
+                    conn.commit()
+
         db = SessionLocal()
         # Seed policies if empty
         if db.query(Policy).first() is None:
@@ -165,13 +197,14 @@ class ClaimConfirmRequest(BaseModel):
 
 
 @app.post("/api/v1/claims/voice-session")
-def start_voice_session(db: Session = Depends(get_db)):
+def start_voice_session(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
     Create a new draft claim session and return ticket_id for WebSocket voice streaming.
     """
     ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
     claim = Claim(
         ticket_id=ticket_id,
+        customer_id=user_id,
         input_mode="voice",
         status="draft",
         conversation_status="not_started",
@@ -185,7 +218,7 @@ def start_voice_session(db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/claims/intake")
-def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
+async def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
     Process user claim utterance, extract mandatory fields, and evaluate missing fields.
     If fields are missing, returns next question prompt for claimant.
@@ -195,6 +228,9 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
         claim = db.query(Claim).filter(Claim.ticket_id == request.ticket_id).first()
         if not claim:
             raise HTTPException(status_code=404, detail="ticket_id not found")
+        # Enforce claim ownership authorization
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     # Short-circuit if already evaluated to prevent overwriting confirmed data
     if claim and getattr(claim, "status", None) in ("evaluated",):
@@ -208,20 +244,19 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
         }
 
     ticket_id = request.ticket_id or (claim.ticket_id if claim else f"CLAIM-{uuid.uuid4().hex[:8].upper()}")
-    prior_state: Dict[str, Any] = dict(getattr(claim, "pipeline_state", None) or {})
 
-    initial_state = {
-        **prior_state,
-        "claim_text": request.claim_text,
-        "input_mode": request.input_mode,
-        "ticket_id": ticket_id,
-    }
+    if claim is None:
+        claim = Claim(ticket_id=ticket_id, customer_id=user_id, input_mode=request.input_mode, status="draft")
+        db.add(claim)
+        db.flush()
+
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    turn_num = prior_turns + 1
 
     try:
-        graph = build_conversation_graph()
-        result = graph.invoke(initial_state)
+        result = await process_claimant_turn(db, claim, request.claim_text, request.input_mode, turn_num)
     except Exception as exc:
-        logger.exception("intake_claim: conversation graph invocation failed")
+        logger.exception("intake_claim: conversation turn processing failed")
         raise HTTPException(
             status_code=503,
             detail=(
@@ -230,37 +265,6 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
                 f"(Error: {type(exc).__name__})"
             ),
         )
-
-    if claim is None:
-        claim = Claim(ticket_id=ticket_id, input_mode=request.input_mode, status="draft")
-        db.add(claim)
-        db.flush()
-
-    setattr(claim, "pipeline_state", dict(result))
-    setattr(claim, "claim_type", result.get("extracted_data", {}).get("claim_type"))
-    setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
-    setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
-    setattr(claim, "conversation_status", result.get("conversation_status", "collecting"))
-
-    if result.get("extraction_confidence") is not None:
-        setattr(claim, "extraction_confidence", float(result["extraction_confidence"]))
-
-    incident_date_str = result.get("extracted_data", {}).get("incident_date")
-    if incident_date_str:
-        try:
-            setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-
-    # Persist turns in conversation_turns table
-    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
-    turn_num = prior_turns + 1
-    db.add(ConversationTurn(claim_id=claim.id, turn_number=turn_num, speaker="user", text=request.claim_text))
-    agent_msg = result.get("next_question") or result.get("message", "")
-    if agent_msg:
-        db.add(ConversationTurn(claim_id=claim.id, turn_number=turn_num, speaker="agent", text=agent_msg))
-
-    db.commit()
 
     return {
         "ticket_id": ticket_id,
@@ -275,13 +279,17 @@ def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/claims/{ticket_id}/confirm")
-def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmRequest(), db: Session = Depends(get_db)):
+def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmRequest(), db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
     Confirm collected claim details and submit structured claim.
     """
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    # Enforce claim ownership authorization
+    if claim.customer_id and claim.customer_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     state = dict(getattr(claim, "pipeline_state", None) or {})
 
@@ -359,18 +367,22 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
         "response_message": eval_result.get("response_message"),
         "spoken_response": eval_result.get("spoken_response"),
         "fraud_score": claim.fraud_score,
-        "fraud_flags": claim.fraud_flags,
+        "fraud_flags": eval_result.get("fraud_flags"),
     }
 
 
 @app.get("/api/v1/claims/{ticket_id}/conversation")
-def get_conversation_history(ticket_id: str, db: Session = Depends(get_db)):
+def get_conversation_history(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
     Fetch the complete chronological conversation turns for a claim.
     """
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    # Enforce claim ownership authorization
+    if claim.customer_id and claim.customer_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     turns = (
         db.query(ConversationTurn)
@@ -390,13 +402,18 @@ def get_conversation_history(ticket_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/claims/{ticket_id}")
-def get_claim(ticket_id: str, db: Session = Depends(get_db)):
+def get_claim(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
     Retrieve current status and structured state of a claim.
     """
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    # Enforce claim ownership authorization
+    if claim.customer_id and claim.customer_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+
     state = claim.pipeline_state or {}
     return {
         "ticket_id": claim.ticket_id,
@@ -416,11 +433,11 @@ def get_claim(ticket_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/claims")
-def list_claims(db: Session = Depends(get_db)):
+def list_claims(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """
-    List most recent claims.
+    List most recent claims owned by the authenticated user.
     """
-    claims = db.query(Claim).order_by(Claim.created_at.desc()).limit(50).all()
+    claims = db.query(Claim).filter(Claim.customer_id == user_id).order_by(Claim.created_at.desc()).limit(50).all()
     results = []
     for c in claims:
         st = c.pipeline_state or {}
@@ -456,6 +473,7 @@ async def upload_document(
     document_type: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Upload supporting claim evidence document (Phase 2 compatibility).
@@ -463,6 +481,10 @@ async def upload_document(
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    # Enforce claim ownership authorization
+    if claim.customer_id and claim.customer_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     content = await file.read()
     if len(content) < MIN_UPLOAD_SIZE_BYTES:
@@ -505,11 +527,16 @@ async def upload_document(
 
 
 @app.get("/api/v1/claims/{ticket_id}/documents")
-def list_claim_documents(ticket_id: str, db: Session = Depends(get_db)):
+def list_claim_documents(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
     """List uploaded documents for a claim."""
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
+
+    # Enforce claim ownership authorization
+    if claim.customer_id and claim.customer_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+
     docs = db.query(Document).filter(Document.claim_id == claim.id).all()
     return [
         {

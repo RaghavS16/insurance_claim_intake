@@ -50,6 +50,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
+from src.config import settings
 from src.database.session import SessionLocal
 from src.database.models import Claim, ConversationTurn
 from src.agents.graph import build_conversation_graph
@@ -73,14 +74,27 @@ _OUTBOUND_QUEUE_MAX = 100
 # Database helpers
 # ---------------------------------------------------------------------------
 
-def _persist_turn(db: Session, claim: Claim, speaker: str, text: str, turn_number: int) -> None:
-    """Persist one conversation turn. Non-fatal on failure."""
+async def process_claimant_turn(
+    db: Session,
+    claim: Claim,
+    user_text: str,
+    input_mode: str,
+    turn_number: int
+) -> Dict[str, Any]:
+    """
+    Common function to process a single turn: runs conversation graph, updates claim,
+    and persists turns in DB.
+    """
+    from datetime import datetime
+    prior_state = dict(getattr(claim, "pipeline_state", None) or {})
+
+    # Persist claimant turn
     try:
         turn = ConversationTurn(
             claim_id=claim.id,
             turn_number=turn_number,
-            speaker=speaker,
-            text=text,
+            speaker="user",
+            text=user_text,
         )
         db.add(turn)
         db.commit()
@@ -88,56 +102,73 @@ def _persist_turn(db: Session, claim: Claim, speaker: str, text: str, turn_numbe
         logger.warning("Failed to persist conversation turn: %s", exc)
         db.rollback()
 
-
-async def _run_turn(db: Session, claim: Claim, voice_session: VoiceSession, user_text: str) -> Dict[str, Any]:
-    """
-    Run one conversation-graph turn in a thread pool (non-blocking from event loop),
-    update claim record, and persist turn history.
-    """
-    prior_state = dict(getattr(claim, "pipeline_state", None) or {})
-    turn_number = voice_session.next_turn()
-
-    # Persist claimant turn (sync DB call — run in thread)
-    await asyncio.get_event_loop().run_in_executor(
-        None, _persist_turn, db, claim, "user", user_text, turn_number
-    )
-
     graph_input = {
         **prior_state,
         "claim_text": user_text,
         "ticket_id": claim.ticket_id,
-        "input_mode": "voice",
+        "input_mode": input_mode,
     }
 
-    # Run LangGraph in thread to avoid blocking the event loop
     graph = build_conversation_graph()
     result = await asyncio.get_event_loop().run_in_executor(None, lambda: graph.invoke(graph_input))
 
     setattr(claim, "pipeline_state", dict(result))
-    setattr(claim, "conversation_status", result.get("conversation_status", "collecting"))
     setattr(claim, "claim_type", result.get("extracted_data", {}).get("claim_type"))
     setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
     setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
+    setattr(claim, "conversation_status", result.get("conversation_status", "collecting"))
 
     if result.get("extraction_confidence") is not None:
         setattr(claim, "extraction_confidence", float(result["extraction_confidence"]))
 
-    def _commit():
+    incident_date_str = result.get("extracted_data", {}).get("incident_date")
+    if incident_date_str:
         try:
+            setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+
+    try:
+        db.commit()
+    except Exception as exc:
+        logger.warning("Failed to commit claim state update: %s", exc)
+        db.rollback()
+
+    agent_text = result.get("next_question") or result.get("message", "")
+    if agent_text:
+        try:
+            agent_turn = ConversationTurn(
+                claim_id=claim.id,
+                turn_number=turn_number,
+                speaker="agent",
+                text=agent_text,
+            )
+            db.add(agent_turn)
             db.commit()
         except Exception as exc:
-            logger.warning("Failed to commit claim state update: %s", exc)
+            logger.warning("Failed to persist agent conversation turn: %s", exc)
             db.rollback()
 
-    await asyncio.get_event_loop().run_in_executor(None, _commit)
-
-    agent_text = result.get("next_question", "")
-    if agent_text:
-        await asyncio.get_event_loop().run_in_executor(
-            None, _persist_turn, db, claim, "agent", agent_text, turn_number
-        )
-
     return result
+
+
+async def change_agent_state(
+    voice_session: VoiceSession,
+    state: str,
+    outbound_queue: asyncio.Queue
+) -> None:
+    """Change current agent conversation state and broadcast event to the client."""
+    voice_session.state = state
+    voice_session.agent_speaking = (state == "speaking")
+    logger.info("Voice session state changed: %s", state)
+    await outbound_queue.put({
+        "json": {
+            "type": "agent_state",
+            "state": state,
+            "global_seq": voice_session.next_global_sequence(),
+            "timestamp": time.time()
+        }
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -181,47 +212,53 @@ async def _claimant_audio_ingester(
 
         # Run VAD on incoming chunk. We process this even during TTS to support barge-in.
         was_in_speech = detector.is_in_speech
-        events = detector.feed(chunk)
+        events = detector.feed(chunk, tts_active=voice_session.agent_speaking)
         is_in_speech = detector.is_in_speech
 
         # Barge-in Detection: transition from silent/listening to speech onset
         if is_in_speech and not was_in_speech:
-            # 1. Increment generation version to void active/queued runs
-            gen_id = voice_session.increment_generation()
-            
-            # 2. Preemptively cancel active turn task
-            active_task = session_context.get("active_turn_task")
-            if active_task and not active_task.done():
-                active_task.cancel()
-                logger.info("Barge-in: cancelled active turn task for generation_id %d", gen_id)
-            
-            # 3. Drain conversation queue
-            while not conversation_queue.empty():
-                try:
-                    conversation_queue.get_nowait()
-                    conversation_queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
+            if voice_session.agent_speaking:
+                # 1. Increment generation version to void active/queued runs
+                gen_id = voice_session.increment_generation()
+                
+                # 2. Preemptively cancel active turn task
+                active_task = session_context.get("active_turn_task")
+                if active_task and not active_task.done():
+                    active_task.cancel()
+                    logger.info("Barge-in: cancelled active turn task for generation_id %d", gen_id)
+                
+                # 3. Drain conversation queue
+                while not conversation_queue.empty():
+                    try:
+                        conversation_queue.get_nowait()
+                        conversation_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
 
-            # 4. Drain ASR inference queue
-            while not asr_inference_queue.empty():
-                try:
-                    asr_inference_queue.get_nowait()
-                    asr_inference_queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
+                # 4. Drain ASR inference queue
+                while not asr_inference_queue.empty():
+                    try:
+                        asr_inference_queue.get_nowait()
+                        asr_inference_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
 
-            # 5. Clear echo suppression window
-            voice_session.clear_echo_suppression()
+                # 5. Clear echo suppression window
+                voice_session.clear_echo_suppression()
 
-            # 6. Send barge_in notification to client immediately
-            await outbound_queue.put({
-                "json": {
-                    "type": "barge_in",
-                    "global_seq": voice_session.next_global_sequence(),
-                    "timestamp": time.time()
-                }
-            })
+                # 6. Send barge_in notification to client immediately
+                await outbound_queue.put({
+                    "json": {
+                        "type": "barge_in",
+                        "global_seq": voice_session.next_global_sequence(),
+                        "timestamp": time.time()
+                    }
+                })
+
+                # Change state back to listening
+                await change_agent_state(voice_session, "listening", outbound_queue)
+            else:
+                gen_id = voice_session.generation_id
 
             # 7. Start new claimant segment
             current_segment_id, current_sequence = voice_session.next_claimant_segment_id()
@@ -426,6 +463,9 @@ async def _conversation_worker(
             logger.debug("Conversation: ignoring stale turn item")
             continue
 
+        # Set state to thinking
+        await change_agent_state(voice_session, "thinking", outbound_queue)
+
         # Run turn processing inside a cancellable task
         turn_task = asyncio.create_task(_process_turn_task(
             db, claim, voice_session, item["text"], item["segment_id"],
@@ -453,7 +493,8 @@ async def _process_turn_task(
 ) -> None:
     """Process a single turn task, updating state and running TTS."""
     try:
-        result = await _run_turn(db, claim, voice_session, user_text)
+        turn_number = voice_session.next_turn()
+        result = await process_claimant_turn(db, claim, user_text, "voice", turn_number)
     except Exception:
         logger.exception("Conversation turn failed for claim %s", claim.ticket_id)
         if generation_id == voice_session.generation_id:
@@ -463,6 +504,7 @@ async def _process_turn_task(
                     "detail": "We encountered an issue processing your response. Please try speaking again.",
                 }
             })
+            await change_agent_state(voice_session, "listening", outbound_queue)
         return
 
     # Check generation again after LLM completes
@@ -484,8 +526,9 @@ async def _process_turn_task(
         }
     })
 
-    agent_text = result.get("next_question", "")
+    agent_text = result.get("next_question") or result.get("message", "")
     if not agent_text:
+        await change_agent_state(voice_session, "listening", outbound_queue)
         return
 
     # Agent transcript — emitted directly from LLM text, not from ASR
@@ -520,13 +563,15 @@ async def _process_turn_task(
         })
     except Exception as exc:
         logger.warning("TTS synthesis error: %s. Sending fallback text event.", exc)
-        await outbound_queue.put({
-            "json": {
-                "type": "agent_text_fallback",
-                "text": agent_text,
-                "generation_id": generation_id
-            }
-        })
+        if generation_id == voice_session.generation_id:
+            await outbound_queue.put({
+                "json": {
+                    "type": "agent_text_fallback",
+                    "text": agent_text,
+                    "generation_id": generation_id
+                }
+            })
+            await change_agent_state(voice_session, "listening", outbound_queue)
 
 
 # ---------------------------------------------------------------------------
@@ -571,21 +616,39 @@ async def _send_loop(
 # ---------------------------------------------------------------------------
 
 @router.websocket("/ws/claims/{ticket_id}/voice")
-async def voice_conversation(websocket: WebSocket, ticket_id: str):
+async def voice_conversation(websocket: WebSocket, ticket_id: str, user_id: Optional[str] = None):
     """
     WebSocket endpoint for bidirectional audio streaming.
     Decoupled queue worker pattern prevents any STT/LLM/TTS latency from blocking audio ingestion.
     """
-    await websocket.accept()
-    db = SessionLocal()
-    stop_event = asyncio.Event()
+    # Enforce authentication and authorization checks (Phase 1)
+    if not user_id:
+        if settings.ENVIRONMENT == "test":
+            user_id = "TEST_USER_ID"
+        else:
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "detail": "Authentication required: missing user_id."})
+            await websocket.close(code=4401)
+            return
 
+    db = SessionLocal()
     try:
         claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
         if not claim:
+            await websocket.accept()
             await websocket.send_json({"type": "error", "detail": "Claim ticket_id not found."})
             await websocket.close(code=4404)
             return
+
+        # Check authorization / ownership
+        if claim.customer_id and claim.customer_id != user_id:
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
+            await websocket.close(code=4403)
+            return
+
+        await websocket.accept()
+        stop_event = asyncio.Event()
 
         voice_session = VoiceSession(ticket_id=ticket_id)
 
@@ -625,7 +688,7 @@ async def voice_conversation(websocket: WebSocket, ticket_id: str):
             name=f"send-{ticket_id}",
         )
 
-        logger.info("Voice session started: %s", ticket_id)
+        logger.info("Voice session started: %s (user=%s)", ticket_id, user_id)
 
         try:
             while True:
@@ -650,16 +713,65 @@ async def voice_conversation(websocket: WebSocket, ticket_id: str):
                         logger.info("Client requested end_session for %s", ticket_id)
                         break
 
+                    # Support manual text submission over the WebSocket (Issue 11)
+                    elif msg_type == "text_input":
+                        user_text = payload.get("text", "")
+                        if user_text.strip():
+                            # If agent is speaking, treat text input as interruption/barge-in
+                            if voice_session.agent_speaking:
+                                gen_id = voice_session.increment_generation()
+                                active_task = session_context.get("active_turn_task")
+                                if active_task and not active_task.done():
+                                    active_task.cancel()
+                                    logger.info("Barge-in (text): cancelled active turn task for generation_id %d", gen_id)
+                                while not conversation_queue.empty():
+                                    try:
+                                        conversation_queue.get_nowait()
+                                        conversation_queue.task_done()
+                                    except asyncio.QueueEmpty:
+                                        break
+                                voice_session.clear_echo_suppression()
+                                await change_agent_state(voice_session, "listening", outbound_queue)
+                            else:
+                                gen_id = voice_session.generation_id
+
+                            seg_id, seq = voice_session.next_claimant_segment_id()
+                            
+                            # Send final transcript event immediately so claimant bubble updates
+                            await outbound_queue.put({
+                                "json": {
+                                    "type": "transcript",
+                                    "speaker": "claimant",
+                                    "segment_id": seg_id,
+                                    "sequence": seq,
+                                    "text": user_text,
+                                    "is_final": True,
+                                    "confidence": 1.0,
+                                    "start_ts": time.time(),
+                                    "end_ts": time.time(),
+                                    "global_seq": voice_session.next_global_sequence(),
+                                    "timestamp": time.time()
+                                }
+                            })
+                            
+                            # Queue conversation turn task
+                            await conversation_queue.put({
+                                "text": user_text,
+                                "raw_text": user_text,
+                                "segment_id": seg_id,
+                                "sequence": seq,
+                                "generation_id": gen_id
+                            })
+
                     # Precise control: client signals that TTS playback has physically started
                     elif msg_type == "tts_started":
-                        # Suppress VAD trigger of TTS playback echo.
-                        # Disabling is cleared explicitly when tts_stopped is sent,
-                        # or on barge-in speech onset.
                         voice_session.suppress_echo_for(1800.0)  # 30-min safety timeout
+                        await change_agent_state(voice_session, "speaking", outbound_queue)
 
                     # Precise control: client signals that TTS playback finished or stopped
                     elif msg_type == "tts_stopped":
                         voice_session.clear_echo_suppression()
+                        await change_agent_state(voice_session, "listening", outbound_queue)
 
         except WebSocketDisconnect:
             logger.info("Voice session %s disconnected cleanly.", ticket_id)
@@ -672,18 +784,27 @@ async def voice_conversation(websocket: WebSocket, ticket_id: str):
         finally:
             stop_event.set()
 
-        # Wait for workers to finish gracefully
+        # 1. Wait for processing workers to finish generating outbound messages
         try:
             await asyncio.wait_for(
-                asyncio.gather(ingest_task, asr_task, conv_task, send_task, return_exceptions=True),
-                timeout=5.0,
+                asyncio.gather(ingest_task, asr_task, conv_task, return_exceptions=True),
+                timeout=3.0,
             )
         except asyncio.TimeoutError:
-            logger.warning("Workers for %s did not stop within timeout — cancelling.", ticket_id)
-            for task in (ingest_task, asr_task, conv_task, send_task):
+            logger.warning("Processing workers for %s did not stop within timeout — cancelling.", ticket_id)
+            for task in (ingest_task, asr_task, conv_task):
                 task.cancel()
 
+        # 2. Queue the session_end event so it is processed by the send loop
         await outbound_queue.put({"json": {"type": "session_end"}})
+
+        # 3. Wait for send loop to drain the queue and transmit everything
+        try:
+            await asyncio.wait_for(send_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Send worker for %s did not finish within timeout — cancelling.", ticket_id)
+            send_task.cancel()
+
         logger.info("Voice session ended: %s", ticket_id)
 
     finally:
