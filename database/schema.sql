@@ -8,6 +8,21 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";  -- for gen_random_uuid()
 
 -- -------------------------
+-- Users
+-- -------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name       VARCHAR NOT NULL,
+    email           VARCHAR UNIQUE NOT NULL,
+    phone           VARCHAR,
+    password_hash   VARCHAR NOT NULL,
+    role            VARCHAR NOT NULL CHECK (role IN ('CLAIMANT', 'ADJUSTER')),
+    status          VARCHAR NOT NULL DEFAULT 'active',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- -------------------------
 -- Policies
 -- -------------------------
 CREATE TABLE IF NOT EXISTS policies (
@@ -42,6 +57,8 @@ CREATE TABLE IF NOT EXISTS claims (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ticket_id             VARCHAR UNIQUE NOT NULL,
     policy_id             UUID REFERENCES policies(id),
+    claimant_id           UUID REFERENCES users(id),
+    customer_id           VARCHAR,
     claim_date            DATE NOT NULL DEFAULT CURRENT_DATE,
     incident_date         DATE,
     claim_type            VARCHAR,          -- health | senior_health | home | travel | motor | cyber
@@ -117,4 +134,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
     action    VARCHAR NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     details   JSONB NOT NULL DEFAULT '{}'
+);
+
+-- -------------------------
+-- Knowledge Documents
+-- -------------------------
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_type   VARCHAR NOT NULL CHECK (document_type IN ('POLICY_WORDING', 'IRDAI_REGULATION')),
+    title           VARCHAR NOT NULL,
+    version         VARCHAR NOT NULL,
+    file_reference  VARCHAR NOT NULL,
+    status          VARCHAR NOT NULL DEFAULT 'active',
+    effective_date  DATE NOT NULL,
+    uploaded_by     UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -37,6 +37,22 @@ else:
 Base = declarative_base()
 
 
+class User(Base):
+    """Registered application user (CLAIMANT or ADJUSTER)."""
+    __tablename__ = "users"
+
+    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    full_name = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    phone = Column(String, nullable=True)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, nullable=False)  # CLAIMANT | ADJUSTER
+    status = Column(String, nullable=False, default="active")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                         onupdate=lambda: datetime.now(timezone.utc))
+
+
 class Policy(Base):
     """Insurance policy record."""
     __tablename__ = "policies"
@@ -73,6 +89,7 @@ class Claim(Base):
 
     id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     ticket_id = Column(String, unique=True, nullable=False)
+    claimant_id = _UUID(ForeignKey("users.id"), nullable=True, default=None)
     customer_id = Column(String, nullable=True, default=None)
     policy_id = _UUID(ForeignKey("policies.id"), nullable=True, default=None)
     claim_date = Column(Date, default=date.today)
@@ -156,3 +173,20 @@ class AuditLog(Base):
     action = Column(String, nullable=False)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     details = _JSONB(default=dict)
+
+
+class KnowledgeDocument(Base):
+    """Versioned policy wording / IRDAI regulations documents."""
+    __tablename__ = "knowledge_documents"
+
+    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_type = Column(String, nullable=False)  # POLICY_WORDING | IRDAI_REGULATION
+    title = Column(String, nullable=False)
+    version = Column(String, nullable=False)
+    file_reference = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    effective_date = Column(Date, nullable=False)
+    uploaded_by = _UUID(ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                         onupdate=lambda: datetime.now(timezone.utc))

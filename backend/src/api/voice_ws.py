@@ -616,23 +616,48 @@ async def _send_loop(
 # ---------------------------------------------------------------------------
 
 @router.websocket("/ws/claims/{ticket_id}/voice")
-async def voice_conversation(websocket: WebSocket, ticket_id: str, user_id: Optional[str] = None):
+async def voice_conversation(
+    websocket: WebSocket,
+    ticket_id: str,
+    user_id: Optional[str] = None,
+    token: Optional[str] = None
+):
     """
     WebSocket endpoint for bidirectional audio streaming.
     Decoupled queue worker pattern prevents any STT/LLM/TTS latency from blocking audio ingestion.
     """
-    # Enforce authentication and authorization checks (Phase 1)
-    if not user_id:
-        if settings.ENVIRONMENT == "test":
-            user_id = "TEST_USER_ID"
-        else:
-            await websocket.accept()
-            await websocket.send_json({"type": "error", "detail": "Authentication required: missing user_id."})
-            await websocket.close(code=4401)
-            return
+    from src.utils.auth import verify_token
+    from src.database.models import User
 
     db = SessionLocal()
     try:
+        # Enforce authentication and authorization checks (Phase 1 / JWT)
+        if token:
+            payload = verify_token(token)
+            if payload:
+                user_id = payload.get("sub")
+            else:
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "detail": "Authentication required: Invalid or expired token."})
+                await websocket.close(code=4401)
+                return
+
+        if not user_id:
+            if settings.ENVIRONMENT == "test":
+                user_id = "TEST_USER_ID"
+            else:
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "detail": "Authentication required: missing token or user_id."})
+                await websocket.close(code=4401)
+                return
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user and settings.ENVIRONMENT != "test":
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "detail": "Authentication required: User not found."})
+            await websocket.close(code=4403)
+            return
+
         claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
         if not claim:
             await websocket.accept()
@@ -640,12 +665,24 @@ async def voice_conversation(websocket: WebSocket, ticket_id: str, user_id: Opti
             await websocket.close(code=4404)
             return
 
-        # Check authorization / ownership
-        if claim.customer_id and claim.customer_id != user_id:
-            await websocket.accept()
-            await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
-            await websocket.close(code=4403)
-            return
+        # Check authorization / ownership (Claimants only view their own claims; Adjusters can view all)
+        if user and user.role == "CLAIMANT":
+            if claim.claimant_id and str(claim.claimant_id) != user_id:
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
+                await websocket.close(code=4403)
+                return
+            if claim.customer_id and claim.customer_id != user_id:
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
+                await websocket.close(code=4403)
+                return
+        elif not user and settings.ENVIRONMENT == "test":
+            if claim.customer_id and claim.customer_id != user_id:
+                await websocket.accept()
+                await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
+                await websocket.close(code=4403)
+                return
 
         await websocket.accept()
         stop_event = asyncio.Event()

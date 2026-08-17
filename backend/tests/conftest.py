@@ -24,8 +24,9 @@ os.environ["ENVIRONMENT"] = "test"
 # 2. Import application models and session
 from src.config import settings  # noqa: E402
 from src.api.main import app  # noqa: E402
-from src.database.models import Base, Policy, Adjuster  # noqa: E402
+from src.database.models import Base, Policy, Adjuster, User, KnowledgeDocument  # noqa: E402
 from src.database.session import get_db, engine as app_engine  # noqa: E402
+from src.utils.auth import get_password_hash  # noqa: E402
 
 # 3. Create tables using the test engine
 Base.metadata.create_all(bind=app_engine)
@@ -69,9 +70,23 @@ def _seed_db(db):
     ]
 
     for spec, name, email in test_adjusters:
-        if db.query(Adjuster).filter(Adjuster.email == email).first() is None:
+        adj = db.query(Adjuster).filter(Adjuster.email == email).first()
+        uid = adj.id if adj else str(uuid.uuid4())
+        
+        usr = db.query(User).filter(User.email == email).first()
+        if not usr:
+            db.add(User(
+                id=uid,
+                full_name=name,
+                email=email,
+                password_hash=get_password_hash("AdjusterPassword123!"),
+                role="ADJUSTER",
+                status="active"
+            ))
+        
+        if not adj:
             db.add(Adjuster(
-                id=str(uuid.uuid4()),
+                id=uid,
                 name=name,
                 email=email,
                 specialization=spec,

@@ -13,45 +13,110 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal
-from src.database.models import Base, Claim, Document, Policy, Adjuster, ConversationTurn
+from src.database.models import Base, Claim, Document, Policy, Adjuster, ConversationTurn, User, KnowledgeDocument
 from src.agents.graph import build_conversation_graph, build_evaluation_graph
 from src.agents.evaluation import DOCUMENT_REQUIREMENTS
 from src.api.voice_ws import router as voice_router
 from src.utils.logger import app_logger
+from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
 
 logger = app_logger
 
 
 from src.api.voice_ws import process_claimant_turn
 
-def get_current_user_id(request: Request) -> str:
-    """Dependency helper to get the authenticated user ID."""
-    uid = request.headers.get("X-User-ID")
+security_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    """Extract and verify JWT token to fetch the currently authenticated user."""
+    token = None
+    if credentials:
+        token = credentials.credentials
+    
+    uid = None
+    if token:
+        payload = verify_token(token)
+        if payload:
+            uid = payload.get("sub")
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated: Invalid or expired token."
+            )
+    else:
+        # Fallback to header for testing/backward compatibility
+        uid = request.headers.get("X-User-ID")
+
     if not uid:
-        auth = request.headers.get("Authorization")
-        if auth and auth.startswith("Bearer "):
-            uid = auth[7:].strip()
-    if not uid:
+        if settings.ENVIRONMENT == "test" and not request.headers.get("X-Test-No-Fallback"):
+            uid = "TEST_USER_ID"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required: missing token or X-User-ID header."
+            )
+
+    # Fetch user
+    user = db.query(User).filter(User.id == uid).first()
+    if not user:
         if settings.ENVIRONMENT == "test":
-            return "TEST_USER_ID"
+            # Autocreate mock user dynamically to prevent breaking existing Phase 1 tests
+            user = db.query(User).filter(User.email == f"{uid.lower()}@test.com").first()
+            if not user:
+                user = User(
+                    id=uid,
+                    full_name=uid,
+                    email=f"{uid.lower()}@test.com",
+                    phone="",
+                    password_hash=get_password_hash("test-password"),
+                    role="CLAIMANT",
+                    status="active"
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required: X-User-ID or Authorization header is missing."
+            detail="Authentication required: User not found."
         )
-    return uid
+    return user
 
+
+def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
+    """Dependency helper to get the authenticated user ID string."""
+    return str(current_user.id)
+
+
+def require_role(allowed_roles: List[str]):
+    """Enforce that the authenticated user possesses an allowed role."""
+    def dependency(current_user: User = Depends(get_current_user)):
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied: Role '{current_user.role}' not permitted."
+            )
+        return current_user
+    return dependency
 
 
 def _init_db_and_seeds():
@@ -59,18 +124,26 @@ def _init_db_and_seeds():
     try:
         Base.metadata.create_all(bind=engine)
         
-        # Safe SQLite migration: dynamically add customer_id to claims if missing
+        # Safe SQLite migration: dynamically add customer_id/claimant_id to claims if missing
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
         if "claims" in inspector.get_table_names():
             columns = [c["name"] for c in inspector.get_columns("claims")]
-            if "customer_id" not in columns:
-                logger.info("Database auto-migration: adding customer_id to claims table")
-                with engine.connect() as conn:
+            with engine.connect() as conn:
+                if "customer_id" not in columns:
+                    logger.info("Database auto-migration: adding customer_id to claims table")
                     conn.execute(text("ALTER TABLE claims ADD COLUMN customer_id VARCHAR"))
+                    conn.commit()
+                if "claimant_id" not in columns:
+                    logger.info("Database auto-migration: adding claimant_id to claims table")
+                    # SQLite does not support FK constraints directly in ALTER TABLE without recreating,
+                    # but we can add the column as VARCHAR/TEXT fallback.
+                    col_type = "UUID REFERENCES users(id)" if settings.DATABASE_URL.startswith("postgresql") else "VARCHAR"
+                    conn.execute(text(f"ALTER TABLE claims ADD COLUMN claimant_id {col_type}"))
                     conn.commit()
 
         db = SessionLocal()
+        
         # Seed policies if empty
         if db.query(Policy).first() is None:
             canonical_policies = [
@@ -104,16 +177,37 @@ def _init_db_and_seeds():
                 ("cyber", "Neha Kapoor", "neha.cyber@insure.co"),
             ]
             for spec, name, email in canonical_adjusters:
+                uid = str(uuid.uuid4())
                 db.add(Adjuster(
-                    id=str(uuid.uuid4()),
+                    id=uid,
                     name=name,
                     email=email,
                     specialization=spec,
                     claims_assigned=0,
                     is_active=True,
                 ))
+                # Seed matching user credentials
+                db.add(User(
+                    id=uid,
+                    full_name=name,
+                    email=email,
+                    password_hash=get_password_hash("AdjusterPassword123!"),
+                    role="ADJUSTER",
+                    status="active"
+                ))
+
+            # Seed default claimant john@test.com
+            db.add(User(
+                id="claimant_john",
+                full_name="John Doe",
+                email="john@test.com",
+                password_hash=get_password_hash("ClaimantPassword123!"),
+                role="CLAIMANT",
+                status="active"
+            ))
+
             db.commit()
-            logger.info("Database schema initialized and canonical policies seeded.")
+            logger.info("Database schema initialized and canonical records seeded.")
         db.close()
     except Exception as exc:
         logger.warning("Database schema check notice: %s", exc)
@@ -196,15 +290,111 @@ class ClaimConfirmRequest(BaseModel):
     confirmed: bool = Field(True, description="True to confirm and submit claim")
 
 
+# ---------------------------------------------------------------------------
+# Auth Request Models
+# ---------------------------------------------------------------------------
+class SignUpRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=100)
+    email: str = Field(..., min_length=3, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    password: str = Field(..., min_length=6)
+    confirm_password: str = Field(..., min_length=6)
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ClaimReviewRequest(BaseModel):
+    final_decision: str
+    closure_status: str
+
+
+# ---------------------------------------------------------------------------
+# Auth Endpoints
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/auth/signup")
+def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
+    if payload.password != payload.confirm_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
+    
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered.")
+    
+    hashed_pwd = get_password_hash(payload.password)
+    new_user = User(
+        full_name=payload.full_name,
+        email=payload.email,
+        phone=payload.phone,
+        password_hash=hashed_pwd,
+        role="CLAIMANT",  # Automatically enforce CLAIMANT role on signup
+        status="active"
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {
+        "id": str(new_user.id),
+        "full_name": new_user.full_name,
+        "email": new_user.email,
+        "phone": new_user.phone,
+        "role": new_user.role,
+        "status": new_user.status
+    }
+
+
+@app.post("/api/v1/auth/login")
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user or not verify_password(payload.password, str(user.password_hash)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or password.")
+    
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user.id),
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role
+        }
+    }
+
+
+@app.post("/api/v1/auth/logout")
+def logout():
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/api/v1/auth/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return {
+        "id": str(current_user.id),
+        "full_name": current_user.full_name,
+        "email": current_user.email,
+        "phone": current_user.phone,
+        "role": current_user.role,
+        "status": current_user.status
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Intake & Conversational Field Collection
+# ---------------------------------------------------------------------------
 @app.post("/api/v1/claims/voice-session")
-def start_voice_session(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def start_voice_session(db: Session = Depends(get_db), current_user: User = Depends(require_role(["CLAIMANT"]))):
     """
     Create a new draft claim session and return ticket_id for WebSocket voice streaming.
     """
     ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
     claim = Claim(
         ticket_id=ticket_id,
-        customer_id=user_id,
+        claimant_id=current_user.id,
+        customer_id=str(current_user.id),
         input_mode="voice",
         status="draft",
         conversation_status="not_started",
@@ -218,19 +408,24 @@ def start_voice_session(db: Session = Depends(get_db), user_id: str = Depends(ge
 
 
 @app.post("/api/v1/claims/intake")
-async def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+async def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Process user claim utterance, extract mandatory fields, and evaluate missing fields.
     If fields are missing, returns next question prompt for claimant.
     """
     claim = None
+    user_id = str(current_user.id)
     if request.ticket_id:
         claim = db.query(Claim).filter(Claim.ticket_id == request.ticket_id).first()
         if not claim:
             raise HTTPException(status_code=404, detail="ticket_id not found")
-        # Enforce claim ownership authorization
-        if claim.customer_id and claim.customer_id != user_id:
-            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        
+        # Enforce claim ownership authorization for CLAIMANTs
+        if current_user.role == "CLAIMANT":
+            if claim.claimant_id and str(claim.claimant_id) != user_id:
+                raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+            if claim.customer_id and claim.customer_id != user_id:
+                raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     # Short-circuit if already evaluated to prevent overwriting confirmed data
     if claim and getattr(claim, "status", None) in ("evaluated",):
@@ -246,7 +441,14 @@ async def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db
     ticket_id = request.ticket_id or (claim.ticket_id if claim else f"CLAIM-{uuid.uuid4().hex[:8].upper()}")
 
     if claim is None:
-        claim = Claim(ticket_id=ticket_id, customer_id=user_id, input_mode=request.input_mode, status="draft")
+        # Sign up enforces that claimant_id must match authenticated user
+        claim = Claim(
+            ticket_id=ticket_id,
+            claimant_id=current_user.id,
+            customer_id=user_id,
+            input_mode=request.input_mode,
+            status="draft"
+        )
         db.add(claim)
         db.flush()
 
@@ -279,7 +481,7 @@ async def intake_claim(request: ClaimIntakeRequest, db: Session = Depends(get_db
 
 
 @app.post("/api/v1/claims/{ticket_id}/confirm")
-def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmRequest(), db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmRequest(), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Confirm collected claim details and submit structured claim.
     """
@@ -288,8 +490,12 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
     # Enforce claim ownership authorization
-    if claim.customer_id and claim.customer_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+    user_id = str(current_user.id)
+    if current_user.role == "CLAIMANT":
+        if claim.claimant_id and str(claim.claimant_id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     state = dict(getattr(claim, "pipeline_state", None) or {})
 
@@ -337,7 +543,7 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
         logger.exception("Evaluation pipeline failed for claim %s", ticket_id)
         raise HTTPException(status_code=500, detail=f"Claim evaluation failed: {exc}")
 
-    # Persist evaluation outcomes — use setattr to satisfy the type-checker on Column types
+    # Persist evaluation outcomes
     setattr(claim, "status", "evaluated")
     setattr(claim, "conversation_status", "intake_complete")
     if eval_result.get("final_decision") is not None:
@@ -346,7 +552,7 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
         setattr(claim, "closure_status", eval_result["closure_status"])
     if eval_result.get("fraud_score") is not None:
         setattr(claim, "fraud_score", eval_result["fraud_score"])
-    claim.fraud_flags = eval_result.get("fraud_flags", [])  # type: ignore[assignment]
+    claim.fraud_flags = eval_result.get("fraud_flags", [])
     setattr(claim, "pipeline_state", dict(eval_result))
 
     adj = eval_result.get("assigned_adjuster")
@@ -372,7 +578,7 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
 
 
 @app.get("/api/v1/claims/{ticket_id}/conversation")
-def get_conversation_history(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def get_conversation_history(ticket_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Fetch the complete chronological conversation turns for a claim.
     """
@@ -380,9 +586,13 @@ def get_conversation_history(ticket_id: str, db: Session = Depends(get_db), user
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # Enforce claim ownership authorization
-    if claim.customer_id and claim.customer_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+    # Enforce claim ownership authorization for CLAIMANTS
+    user_id = str(current_user.id)
+    if current_user.role == "CLAIMANT":
+        if claim.claimant_id and str(claim.claimant_id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     turns = (
         db.query(ConversationTurn)
@@ -402,7 +612,7 @@ def get_conversation_history(ticket_id: str, db: Session = Depends(get_db), user
 
 
 @app.get("/api/v1/claims/{ticket_id}")
-def get_claim(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def get_claim(ticket_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Retrieve current status and structured state of a claim.
     """
@@ -410,9 +620,13 @@ def get_claim(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depe
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # Enforce claim ownership authorization
-    if claim.customer_id and claim.customer_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+    # Enforce claim ownership authorization for CLAIMANTS
+    user_id = str(current_user.id)
+    if current_user.role == "CLAIMANT":
+        if claim.claimant_id and str(claim.claimant_id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     state = claim.pipeline_state or {}
     return {
@@ -433,11 +647,17 @@ def get_claim(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depe
 
 
 @app.get("/api/v1/claims")
-def list_claims(db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def list_claims(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     List most recent claims owned by the authenticated user.
     """
-    claims = db.query(Claim).filter(Claim.customer_id == user_id).order_by(Claim.created_at.desc()).limit(50).all()
+    user_id = str(current_user.id)
+    # If the user is an ADJUSTER, they can view claims through the adjuster dashboard API,
+    # but here they get their own claims if any.
+    claims = db.query(Claim).filter(
+        (Claim.claimant_id == current_user.id) | (Claim.customer_id == user_id)
+    ).order_by(Claim.created_at.desc()).limit(50).all()
+    
     results = []
     for c in claims:
         st = c.pipeline_state or {}
@@ -473,7 +693,7 @@ async def upload_document(
     document_type: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user_id: str = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload supporting claim evidence document (Phase 2 compatibility).
@@ -482,9 +702,13 @@ async def upload_document(
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # Enforce claim ownership authorization
-    if claim.customer_id and claim.customer_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+    # Enforce claim ownership authorization for CLAIMANTS
+    user_id = str(current_user.id)
+    if current_user.role == "CLAIMANT":
+        if claim.claimant_id and str(claim.claimant_id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     content = await file.read()
     if len(content) < MIN_UPLOAD_SIZE_BYTES:
@@ -527,15 +751,19 @@ async def upload_document(
 
 
 @app.get("/api/v1/claims/{ticket_id}/documents")
-def list_claim_documents(ticket_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)):
+def list_claim_documents(ticket_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List uploaded documents for a claim."""
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="ticket_id not found")
 
-    # Enforce claim ownership authorization
-    if claim.customer_id and claim.customer_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+    # Enforce claim ownership authorization for CLAIMANTS
+    user_id = str(current_user.id)
+    if current_user.role == "CLAIMANT":
+        if claim.claimant_id and str(claim.claimant_id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        if claim.customer_id and claim.customer_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
 
     docs = db.query(Document).filter(Document.claim_id == claim.id).all()
     return [
@@ -548,3 +776,150 @@ def list_claim_documents(ticket_id: str, db: Session = Depends(get_db), user_id:
         }
         for d in docs
     ]
+
+
+# ---------------------------------------------------------------------------
+# Adjuster Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/adjuster/claims")
+def adjuster_list_claims(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ADJUSTER"]))
+):
+    """Retrieve all claims in the system for adjuster review."""
+    claims = db.query(Claim).order_by(Claim.created_at.desc()).all()
+    results = []
+    for c in claims:
+        st = c.pipeline_state or {}
+        results.append({
+            "id": str(c.id),
+            "ticket_id": c.ticket_id,
+            "claim_type": c.claim_type,
+            "status": c.status,
+            "conversation_status": c.conversation_status,
+            "final_decision": c.final_decision,
+            "closure_status": c.closure_status,
+            "extracted_data": st.get("extracted_data") or {},
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "claimant_id": str(c.claimant_id) if c.claimant_id else None,
+        })
+    return results
+
+
+@app.post("/api/v1/adjuster/claims/{ticket_id}/review")
+def adjuster_review_claim(
+    ticket_id: str,
+    payload: ClaimReviewRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ADJUSTER"]))
+):
+    """Update a claim's decision and status as an adjuster."""
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    
+    setattr(claim, "final_decision", payload.final_decision)
+    setattr(claim, "closure_status", payload.closure_status)
+    db.commit()
+    return {"message": "Claim reviewed successfully", "ticket_id": ticket_id}
+
+
+# ---------------------------------------------------------------------------
+# Policy Wording and IRDAI Document Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/knowledge")
+def list_knowledge_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ADJUSTER"]))
+):
+    """Retrieve versioned policy wording and IRDAI regulation documents."""
+    docs = db.query(KnowledgeDocument).order_by(KnowledgeDocument.effective_date.desc()).all()
+    return [
+        {
+            "id": str(d.id),
+            "document_type": d.document_type,
+            "title": d.title,
+            "version": d.version,
+            "file_reference": d.file_reference,
+            "status": d.status,
+            "effective_date": d.effective_date.isoformat(),
+            "uploaded_by": str(d.uploaded_by),
+            "created_at": d.created_at.isoformat()
+        }
+        for d in docs
+    ]
+
+
+@app.post("/api/v1/knowledge")
+async def upload_knowledge_document(
+    title: str = Form(...),
+    version: str = Form(...),
+    document_type: str = Form(...),
+    effective_date: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ADJUSTER"]))
+):
+    """Upload a new versioned policy wording or IRDAI regulation document."""
+    if document_type not in ("POLICY_WORDING", "IRDAI_REGULATION"):
+        raise HTTPException(status_code=400, detail="Invalid document_type. Must be POLICY_WORDING or IRDAI_REGULATION.")
+    
+    try:
+        eff_date = datetime.strptime(effective_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid effective_date format. Must be YYYY-MM-DD.")
+    
+    # Save the uploaded file locally
+    upload_dir = Path("uploads/knowledge")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    doc_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    file_path = upload_dir / f"{doc_id}{ext}"
+    
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    new_doc = KnowledgeDocument(
+        id=doc_id,
+        title=title,
+        version=version,
+        document_type=document_type,
+        file_reference=str(file_path),
+        status="active",
+        effective_date=eff_date,
+        uploaded_by=current_user.id
+    )
+    db.add(new_doc)
+    db.commit()
+    db.refresh(new_doc)
+    
+    return {
+        "id": str(new_doc.id),
+        "title": new_doc.title,
+        "version": new_doc.version,
+        "document_type": new_doc.document_type,
+        "status": new_doc.status,
+        "effective_date": new_doc.effective_date.isoformat(),
+        "uploaded_by": str(new_doc.uploaded_by)
+    }
+
+
+from fastapi.responses import FileResponse
+
+@app.get("/api/v1/knowledge/{doc_id}/download")
+def download_knowledge_document(
+    doc_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ADJUSTER"]))
+):
+    """Download a specific knowledge document file."""
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    
+    if not os.path.exists(str(doc.file_reference)):
+        raise HTTPException(status_code=404, detail="Physical document file not found.")
+    
+    return FileResponse(str(doc.file_reference), filename=f"{doc.title}_{doc.version}")
