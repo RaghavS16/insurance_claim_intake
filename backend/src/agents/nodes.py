@@ -327,31 +327,111 @@ User utterance: "{claim_text}"
 # ---------------------------------------------------------------------------
 # Node 1: Intent & Turn Preprocessor
 # ---------------------------------------------------------------------------
+INTENT_PROMPT = """Classify the user's conversational intent for an insurance claim intake chatbot.
+You must return a JSON object with a single key "intent", whose value is exactly one of the following labels:
+- "gratitude": Expressing thanks (e.g., "thank you", "thanks", "much appreciated").
+- "greeting": Saying hello (e.g., "hello", "hi", "hey there", "good morning").
+- "closing": Saying goodbye or ending the chat (e.g., "bye", "goodbye", "I'm done", "that's all").
+- "acknowledgement": Acknowledging/understanding (e.g., "ok", "okay", "got it", "understood").
+- "confusion": Expressing confusion or asking for help (e.g., "what do you mean?", "I don't understand", "what is this?").
+- "correction": Correcting a field or detail (e.g., "actually it was on the 5th", "no, change that to 5000").
+- "affirmation": Affirming, confirming, or saying yes (e.g., "yes", "yeah", "yup", "that is correct", "looks good").
+- "rejection": Rejecting, saying no, or denying (e.g., "no", "nope", "that's wrong", "not correct").
+- "defer": Expressing they don't know the information or want to provide it later (e.g., "I don't know", "skip that", "later").
+- "repeat": Asking to repeat the question (e.g., "repeat that", "what did you say?", "pardon").
+- "normal_claim_input": Providing details about the claim, policy number, date, amount, description of damage, or other new details (e.g., "my policy number is 12345", "it happened yesterday", "the repair costs 500").
+
+Input Utterance: "{text}"
+
+Return ONLY valid JSON matching this schema:
+{{
+  "intent": "gratitude|greeting|closing|acknowledgement|confusion|correction|affirmation|rejection|defer|repeat|normal_claim_input"
+}}
+"""
+
+
 def _detect_utterance_intent(text: str) -> str:
     """Classify user utterance into conversational control intents."""
     lowered = text.lower().strip()
     if not lowered:
         return "empty"
 
-    if any(m in lowered for m in REPEAT_MARKERS):
+    # 1. Repeat check
+    if lowered in REPEAT_MARKERS or lowered in ("repeat", "repeat that", "say that again", "what did you say", "what was that"):
         return "repeat"
 
-    if any(m in lowered for m in CORRECTION_MARKERS):
-        return "correction"
-
+    # 2. Defer check (using direct/phrase matching for dont know / defer)
     if any(m in lowered for m in DONT_KNOW_MARKERS) or any(m in lowered for m in DEFER_MARKERS):
         return "defer"
 
+    # 3. Correction check
+    if any(m in lowered for m in CORRECTION_MARKERS):
+        return "correction"
+
+    # 4. Gratitude check
+    if lowered in ("thank you", "thanks", "thank you so much", "thanks a lot", "thank you very much"):
+        return "gratitude"
+
+    # 5. Greeting check
+    if lowered in ("hello", "hi", "hey", "good morning", "good afternoon", "good evening"):
+        return "greeting"
+
+    # 6. Closing check
+    if lowered in ("bye", "goodbye", "talk later", "talk to you later", "i'm done", "im done", "that is all", "that's all"):
+        return "closing"
+
+    # 7. Rejection / Affirmation checks (short phrases / single words)
     words = set(re.findall(r"\b\w+\b", lowered))
 
-    # Check rejection BEFORE affirmation so "incorrect" is rejected
+    if len(words) <= 3:
+        # Check rejection BEFORE affirmation so "incorrect" is rejected
+        if any(p == lowered for p in REJECTION_PHRASES) or bool(words & REJECTION_WORDS):
+            return "rejection"
+
+        if any(p == lowered for p in AFFIRMATION_PHRASES) or bool(words & AFFIRMATION_WORDS):
+            return "affirmation"
+
+    # Ambiguous or complex utterances -> route to the LLM for structured output
+    try:
+        sanitized = _sanitize_claim_text(text)
+        resp = llm.invoke(INTENT_PROMPT.format(text=sanitized))
+        raw_content = getattr(resp, "content", resp)
+        content = " ".join(str(c) for c in raw_content) if isinstance(raw_content, list) else str(raw_content)
+        m_json = re.search(r"\{.*\}", content, re.DOTALL)
+        if m_json:
+            parsed = json.loads(m_json.group(0))
+            intent = parsed.get("intent")
+            valid_intents = {
+                "gratitude", "greeting", "closing", "acknowledgement",
+                "confusion", "correction", "affirmation", "rejection",
+                "defer", "repeat", "normal_claim_input"
+            }
+            if intent in valid_intents:
+                return intent
+    except Exception as exc:
+        logger.debug("LLM intent classification failed: %s", exc)
+
+    # Fallback to broad marker matches if LLM failed
+    if any(m in lowered for m in REPEAT_MARKERS):
+        return "repeat"
+    if any(m in lowered for m in CORRECTION_MARKERS):
+        return "correction"
+    if any(m in lowered for m in DONT_KNOW_MARKERS) or any(m in lowered for m in DEFER_MARKERS):
+        return "defer"
     if any(p in lowered for p in REJECTION_PHRASES) or bool(words & REJECTION_WORDS):
         return "rejection"
-
     if any(p in lowered for p in AFFIRMATION_PHRASES) or bool(words & AFFIRMATION_WORDS):
         return "affirmation"
+    
+    # Precise fallback checks to avoid substring matches on words like 'hit'
+    if any(m in lowered for m in ("thank you", "appreciate it")) or "thanks" in words:
+        return "gratitude"
+    if any(m in lowered for m in ("good morning", "good afternoon", "good evening")) or bool(words & {"hello", "hi", "hey"}):
+        return "greeting"
+    if any(m in lowered for m in ("talk later", "im done", "i'm done")) or bool(words & {"goodbye", "bye"}):
+        return "closing"
 
-    return "normal"
+    return "normal_claim_input"
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
@@ -367,6 +447,7 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     state.setdefault("unknown_fields", [])
     state["_skip_extraction"] = False
     state["deferral_message"] = None
+    state["_skip_all"] = False
 
     if not raw_text:
         state["_skip_extraction"] = True
@@ -381,13 +462,54 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     intent = _detect_utterance_intent(raw_text)
     target_field = state.get("next_question_field")
     awaiting_conf = state.get("awaiting_confirmation", False)
+    current_status = state.get("conversation_status", "collecting")
+
+    # Fix the "thank you after completion" bug specifically
+    # if conversation_status is already "claimant_confirmed", "submitted", or "completed" AND the new intent is gratitude/closing/acknowledgement
+    if current_status in ("claimant_confirmed", "submitted", "completed") and intent in ("gratitude", "closing", "acknowledgement"):
+        state["_skip_extraction"] = True
+        state["_skip_all"] = True
+        
+        if intent == "gratitude":
+            next_q = "You're very welcome! Let me know if you need anything else."
+        elif intent == "closing":
+            next_q = "Goodbye! Have a great day."
+        else: # acknowledgement
+            next_q = "Understood. Please let me know if you need any further assistance."
+            
+        state["next_question"] = next_q
+        state["message"] = next_q
+        state["next_question_field"] = ""
+        _audit(state, f"Short-circuited turn processor due to status '{current_status}' and intent '{intent}' after completion.")
+        return state
+
+    # Gratitude/greeting/closing intents must be detected and handled BEFORE claim_extractor ever runs, regardless of conversation_status
+    if intent == "greeting":
+        state["_skip_extraction"] = True
+        state["_greeting_prefix"] = "Hello! "
+        _audit(state, "Claimant greeted the agent. Skipping extraction.")
+        
+    elif intent == "gratitude":
+        state["_skip_extraction"] = True
+        state["_gratitude_prefix"] = "You're welcome! "
+        _audit(state, "Claimant expressed gratitude. Skipping extraction.")
+        
+    elif intent == "closing":
+        state["_skip_extraction"] = True
+        state["_skip_all"] = True
+        next_q = "Goodbye! Please let me know when you are ready to continue."
+        state["next_question"] = next_q
+        state["message"] = next_q
+        state["next_question_field"] = ""
+        _audit(state, "Claimant initiated closing during intake. Skipping extraction.")
+        return state
 
     # 1. User in confirmation state
     if awaiting_conf:
         if intent == "affirmation":
             state["confirmed"] = True
             state["awaiting_confirmation"] = False
-            state["conversation_status"] = "intake_complete"
+            state["conversation_status"] = "claimant_confirmed"
             state["_skip_extraction"] = True
             _audit(state, "Claimant confirmed all extracted intake details.")
             return state
@@ -515,6 +637,9 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
     """
     Evaluates required fields and computes extraction confidence.
     """
+    if state.get("_skip_all"):
+        return state
+
     data = state.get("extracted_data") or {}
     field_status = state.get("field_status") or {}
     unknowns = set(state.get("unknown_fields") or [])
@@ -536,7 +661,7 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
 
     if state.get("confirmed"):
         state["awaiting_confirmation"] = False
-        state["conversation_status"] = "intake_complete"
+        state["conversation_status"] = "claimant_confirmed"
     elif not missing:
         state["awaiting_confirmation"] = True
         state["conversation_status"] = "confirming"
@@ -558,10 +683,13 @@ def next_question_generator(state: ClaimState) -> ClaimState:
     - Structured confirmation prompt before final submission
     - Final intake completion message
     """
-    # 1. Intake complete
-    if state.get("confirmed"):
-        summary = _build_confirmation_summary(state.get("extracted_data", {}))
-        msg = f"Thank you! Your claim details have been confirmed and recorded.\n{summary}"
+    if state.get("_skip_all"):
+        return state
+
+    # 1. Intake complete / Claimant confirmed
+    # "Never re-emit _build_confirmation_summary() outside the single turn where the claimant is first asked to confirm."
+    if state.get("conversation_status") == "claimant_confirmed" or state.get("confirmed"):
+        msg = "Thank you! Your claim details have been confirmed."
         state["next_question"] = msg
         state["next_question_field"] = ""
         state["message"] = msg
@@ -569,11 +697,16 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
     # 2. Awaiting confirmation
     if state.get("awaiting_confirmation"):
-        summary = _build_confirmation_summary(state.get("extracted_data", {}))
-        msg = (
-            f"I have collected all the basic details for your claim:\n{summary}\n"
-            "Does everything look correct? Please say yes to confirm and submit, or let me know if you would like to change anything."
-        )
+        if state.get("summary_already_shown"):
+            msg = "Does everything look correct? Please say yes to confirm, or let me know what needs to be changed."
+        else:
+            summary = _build_confirmation_summary(state.get("extracted_data", {}))
+            msg = (
+                f"I have collected all the basic details for your claim:\n{summary}\n"
+                "Does everything look correct? Please say yes to confirm and submit, or let me know if you would like to change anything."
+            )
+            state["summary_already_shown"] = True
+            
         state["next_question"] = msg
         state["next_question_field"] = "confirmation"
         state["message"] = msg
@@ -598,7 +731,16 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
     ack_prefix = ""
     deferral_msg = state.get("deferral_message")
-    if deferral_msg:
+    
+    # Check for greeting/gratitude prefixes popped from state
+    greeting_prefix = state.pop("_greeting_prefix", None)
+    gratitude_prefix = state.pop("_gratitude_prefix", None)
+    
+    if greeting_prefix:
+        ack_prefix = greeting_prefix
+    elif gratitude_prefix:
+        ack_prefix = gratitude_prefix
+    elif deferral_msg:
         ack_prefix = f"{deferral_msg} "
     else:
         recent = state.get("recently_extracted_fields", [])
@@ -639,6 +781,75 @@ def _build_confirmation_summary(data: Dict[str, Any]) -> str:
         f"• Insurance Type: {ctype_disp}\n"
         f"• Policy ID: {pol_id}\n"
         f"• Incident Date: {date_val}\n"
-        f"• Incident Details: {desc}\n"
         f"• Estimated Amount: {amt_disp}"
     )
+
+
+RESPONSE_GENERATION_PROMPT = """You are the conversational agent for an insurance claim intake system.
+Your job is to generate the natural phrasing for the next response to the claimant.
+You MUST follow these rules strictly:
+1. Only use the facts given in the extracted data. Never invent a policy number, date, amount, or description. If a fact is not present, do not state it.
+2. Formulate your response based on the 'Action / Status' and 'Target Field' provided by the state machine.
+3. Keep your response concise, empathetic, and professional.
+4. Do not ask for fields that are not missing.
+5. If the user corrected a field, acknowledge the specific correction.
+6. Output ONLY the spoken text, without any internal JSON, reasoning, or XML.
+
+Action / Status: {conversation_status}
+Target Field to Ask: {target_field}
+Extracted Facts:
+{extracted_facts}
+Missing Fields: {missing_fields}
+Recently Extracted/Corrected Fields: {recently_extracted}
+Recent Conversation History:
+{history}
+
+Generate the exact text to speak/show to the user:
+"""
+
+def natural_response_generator(state: ClaimState) -> ClaimState:
+    """
+    Final step: Generates grounded conversational phrasing using the LLM,
+    falling back to the deterministic wording if the LLM fails.
+    """
+    if state.get("_skip_all"):
+        return state
+
+    history = state.get("conversation_history", [])[-3:]
+    history_str = "\n".join(f"{h['speaker']}: {h['text']}" for h in history) if history else "None"
+    
+    extracted_data = state.get("extracted_data", {})
+    facts_str = _build_confirmation_summary(extracted_data) if extracted_data else "None"
+    
+    missing = state.get("missing_fields", [])
+    recent = state.get("recently_extracted_fields", [])
+    
+    # We tell the LLM if we are asking for full confirmation or just a quick follow up
+    status = state.get("conversation_status", "unknown")
+    if status == "confirming":
+        if state.get("summary_already_shown"):
+            status = "confirming (already showed summary, just asking for final yes/no)"
+        else:
+            status = "confirming (first time, please read out the extracted facts summary)"
+            
+    try:
+        prompt = RESPONSE_GENERATION_PROMPT.format(
+            conversation_status=status,
+            target_field=state.get("next_question_field") or "None",
+            extracted_facts=facts_str,
+            missing_fields=", ".join(missing) if missing else "None",
+            recently_extracted=", ".join(recent) if recent else "None",
+            history=history_str
+        )
+        resp = llm.invoke(prompt)
+        content = getattr(resp, "content", resp)
+        text = " ".join(str(c) for c in content) if isinstance(content, list) else str(content)
+        text = text.strip()
+        
+        if text:
+            state["next_question"] = text
+            state["message"] = text
+    except Exception as exc:
+        logger.debug("LLM natural response generation failed: %s", exc)
+        
+    return state

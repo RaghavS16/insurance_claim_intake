@@ -529,10 +529,15 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
     docs = db.query(Document).filter(Document.claim_id == claim.id).all()
     uploaded_doc_types = [d.document_type for d in docs]
 
+    # Set to submitted stage before running evaluation
+    setattr(claim, "conversation_status", "submitted")
+    db.commit()
+
     eval_input = {
         **state,
         "ticket_id": ticket_id,
         "confirmed": True,
+        "conversation_status": "submitted",
         "uploaded_documents": uploaded_doc_types,
     }
 
@@ -545,7 +550,8 @@ def confirm_claim(ticket_id: str, request: ClaimConfirmRequest = ClaimConfirmReq
 
     # Persist evaluation outcomes
     setattr(claim, "status", "evaluated")
-    setattr(claim, "conversation_status", "intake_complete")
+    setattr(claim, "conversation_status", "completed")
+    eval_result["conversation_status"] = "completed"
     if eval_result.get("final_decision") is not None:
         setattr(claim, "final_decision", eval_result["final_decision"])
     if eval_result.get("closure_status") is not None:

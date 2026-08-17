@@ -27,7 +27,7 @@ class ClaimState(TypedDict, total=False):
     extraction_confidence: float
 
     # ---- Conversational Turn Management ----
-    conversation_status: str             # "not_started" | "collecting" | "confirming" | "intake_complete"
+    conversation_status: str             # "not_started" | "collecting" | "confirming" | "claimant_confirmed" | "submitted" | "completed"
     turn_number: int                     # Monotonically increasing turn count
     conversation_history: List[Dict[str, Any]]  # [{turn, speaker, text}]
     next_question: str                   # Natural question or confirmation prompt to be spoken via TTS / displayed
@@ -36,6 +36,11 @@ class ClaimState(TypedDict, total=False):
     unknown_fields: List[str]            # Fields explicitly marked unknown/deferred by user
     _skip_extraction: bool               # Internal routing flag for repeat/defer turns
     _rejection_active: bool              # Internal flag when user rejects confirmation
+    _skip_all: bool                      # Internal short-circuiting flag for post-intake turns
+    _greeting_prefix: Optional[str]
+    _gratitude_prefix: Optional[str]
+    summary_already_shown: Optional[bool] # Track if confirmation summary has been displayed
+
 
     # ---- Phase 2 Extensibility Interfaces ----
     documents: List[Dict[str, Any]]

@@ -259,7 +259,7 @@ class TestPhase1Conversations:
         )
         result = graph.invoke(state)
         assert result["confirmed"] is True
-        assert result["conversation_status"] == "intake_complete"
+        assert result["conversation_status"] == "claimant_confirmed"
         assert "confirmed" in result["next_question"].lower()
 
     # 10. Smoke test scenario: "I had a bike accident yesterday and the front of my bike was damaged."
@@ -299,5 +299,88 @@ class TestPhase1Conversations:
         res4 = graph.invoke(turn4_state)
 
         assert res4["confirmed"] is True
-        assert res4["conversation_status"] == "intake_complete"
+        assert res4["conversation_status"] == "claimant_confirmed"
         assert "confirmed" in res4["next_question"].lower()
+
+    # 11. Test thank you after completion bug fix
+    def test_thank_you_after_completion_short_circuits(self):
+        graph = build_conversation_graph()
+        
+        # Test claimant_confirmed status
+        state1 = _base_state(
+            conversation_status="claimant_confirmed",
+            extracted_data={
+                "claim_type": "motor",
+                "policy_id": "ABC12345",
+                "incident_date": "2025-07-15",
+                "damage_description": "Car bumper dented",
+                "claimed_amount": 50000.0,
+            },
+            missing_fields=[],
+            awaiting_confirmation=False,
+            confirmed=True,
+            claim_text="thank you",
+        )
+        res1 = graph.invoke(state1)
+        assert res1["conversation_status"] == "claimant_confirmed"
+        assert "welcome" in res1["next_question"].lower()
+        # Ensure we didn't re-emit summary
+        assert "policy id" not in res1["next_question"].lower()
+        assert "insurance type" not in res1["next_question"].lower()
+
+        # Test completed status
+        state2 = _base_state(
+            conversation_status="completed",
+            extracted_data={
+                "claim_type": "motor",
+                "policy_id": "ABC12345",
+                "incident_date": "2025-07-15",
+                "damage_description": "Car bumper dented",
+                "claimed_amount": 50000.0,
+            },
+            missing_fields=[],
+            awaiting_confirmation=False,
+            confirmed=True,
+            claim_text="bye",
+        )
+        res2 = graph.invoke(state2)
+        assert res2["conversation_status"] == "completed"
+        assert "goodbye" in res2["next_question"].lower()
+
+    # 12. Correction utterance after confirmation
+    def test_correction_after_confirmation_does_not_regress_status(self):
+        graph = build_conversation_graph()
+        state = _base_state(
+            conversation_status="claimant_confirmed",
+            extracted_data={
+                "claim_type": "motor",
+                "policy_id": "ABC12345",
+                "incident_date": "2025-07-15",
+                "damage_description": "Car bumper dented",
+                "claimed_amount": 50000.0,
+            },
+            missing_fields=[],
+            awaiting_confirmation=False,
+            confirmed=True,
+            claim_text="Actually, make the amount 60000 rupees",
+        )
+        result = graph.invoke(state)
+        # It should update the field but not regress to collecting
+        assert result["extracted_data"]["claimed_amount"] == 60000.0
+        assert result["conversation_status"] in ("claimant_confirmed", "confirming", "completed")
+        # Ensure it doesn't drop to collecting
+        assert result["conversation_status"] != "collecting"
+
+    # 13. Test LLM fallback
+    def test_llm_offline_fallback_produces_non_empty_message(self):
+        graph = build_conversation_graph()
+        state = _base_state(
+            claim_text="I had a bike accident yesterday.",
+        )
+        # Even though LLM raises ConnectionError via mock, fallback string should be returned
+        result = graph.invoke(state)
+        assert result["next_question"]
+        assert len(result["next_question"]) > 5
+        assert result["message"]
+        assert len(result["message"]) > 5
+

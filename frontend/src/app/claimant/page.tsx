@@ -113,10 +113,6 @@ export default function ClaimantPage() {
     scrollToBottom(true);
   }, [history.length, scrollToBottom]);
 
-  useEffect(() => {
-    scrollToBottom(false);
-  }, [partialSegments, agentState, scrollToBottom]);
-
   // Handle Logout
   const handleLogout = () => {
     if (isRecording) {
@@ -522,7 +518,7 @@ export default function ClaimantPage() {
       }
       const data = await res.json();
       setConfirmed(true);
-      setConversationStatus("intake_complete");
+      setConversationStatus("completed");
       setSubmittedMessage(data.response_message || "Claim submitted and recorded successfully!");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -608,9 +604,6 @@ export default function ClaimantPage() {
                 {agentState === "speaking" ? "Assistant is speaking" : agentState === "thinking" ? "Assistant is thinking..." : isRecording ? "Listening..." : "Silent"}
               </span>
             </div>
-            {ticketId && (
-              <span className="font-mono text-[10px] text-slate-500">Ticket: {ticketId}</span>
-            )}
           </div>
 
           {/* Conversation Chat Log */}
@@ -667,76 +660,83 @@ export default function ClaimantPage() {
 
           {/* Input Controls */}
           <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 shadow-sm flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  id="voice-toggle-btn"
-                  onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-                  disabled={loading || confirmed}
-                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 relative ${
-                    isRecording
-                      ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 scale-105"
-                      : "bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500 hover:text-white"
-                  }`}
-                >
-                  {isRecording && (
-                    <span className="absolute inset-0 rounded-full bg-rose-600 animate-ping opacity-25"></span>
-                  )}
-                  <span className="text-xl">{isRecording ? "⏹️" : "🎙️"}</span>
-                </button>
-                <div className="flex flex-col">
-                  <span className="text-xs font-semibold text-slate-200">
-                    {isRecording ? "Microphone active" : "Speak to file claim"}
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    {isRecording ? "Click to stop recording" : "Uses voice activity detection"}
-                  </span>
-                </div>
+            {(conversationStatus === "completed" || conversationStatus === "submitted") ? (
+              <div className="flex flex-col items-center justify-center py-4 text-slate-400">
+                <span className="text-2xl mb-2">✅</span>
+                <p className="text-sm font-medium text-slate-300">Claim intake is complete.</p>
+                <p className="text-xs mt-1 text-slate-500">The assistant is no longer accepting input.</p>
               </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      id="voice-toggle-btn"
+                      onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                      disabled={loading || confirmed}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 relative ${
+                        isRecording
+                          ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 scale-105"
+                          : "bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500 hover:text-white"
+                      }`}
+                    >
+                      {isRecording && (
+                        <span className="absolute inset-0 rounded-full bg-rose-600 animate-ping opacity-25"></span>
+                      )}
+                      <span className="text-xl">{isRecording ? "⏹️" : "🎙️"}</span>
+                    </button>
+                    <div className="flex flex-col">
+                      <span className="text-xs font-semibold text-slate-200">
+                        {isRecording ? "Microphone active" : "Speak to file claim"}
+                      </span>
+                      <span className="text-[10px] text-slate-500">
+                        {isRecording ? "Click to stop recording" : "Uses voice activity detection"}
+                      </span>
+                    </div>
+                  </div>
 
-              {conversationStatus === "confirming" && !confirmed && (
-                <button
-                  id="confirm-submit-btn"
-                  onClick={handleConfirmSubmit}
-                  disabled={loading}
-                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs rounded-2xl shadow-md shadow-emerald-950/20 active:scale-95 transition"
-                >
-                  ✓ Confirm &amp; Submit Claim
-                </button>
-              )}
-            </div>
+                  {(conversationStatus === "confirming" || conversationStatus === "claimant_confirmed") && (
+                    <button
+                      id="confirm-submit-btn"
+                      onClick={handleConfirmSubmit}
+                      disabled={loading}
+                      className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs rounded-2xl shadow-md shadow-emerald-950/20 active:scale-95 transition"
+                    >
+                      ✓ Confirm &amp; Submit Claim
+                    </button>
+                  )}
+                </div>
 
-            <form onSubmit={handleTextSubmit} className="flex gap-2">
-              <input
-                id="text-input"
-                type="text"
-                value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
-                placeholder={isRecording ? "Speak now or type here to interrupt..." : "Type your response here..."}
-                disabled={loading || confirmed}
-                className="flex-1 bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
-              />
-              <button
-                id="text-submit-btn"
-                type="submit"
-                disabled={!textInput.trim() || loading || confirmed}
-                className="px-5 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-2xl border border-slate-700 transition"
-              >
-                Send
-              </button>
-            </form>
+                <form onSubmit={handleTextSubmit} className="flex gap-2">
+                  <input
+                    id="text-input"
+                    type="text"
+                    value={textInput}
+                    onChange={(e) => setTextInput(e.target.value)}
+                    placeholder={isRecording ? "Speak now or type here to interrupt..." : "Type your response here..."}
+                    disabled={loading || confirmed}
+                    className="flex-1 bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
+                  />
+                  <button
+                    id="text-submit-btn"
+                    type="submit"
+                    disabled={!textInput.trim() || loading || confirmed}
+                    className="px-5 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-2xl border border-slate-700 transition"
+                  >
+                    Send
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </section>
 
         {/* Right Column: Structured Extracted Claim Data & Progress */}
         <aside className="lg:col-span-5 flex flex-col gap-4 h-[calc(100vh-140px)] min-h-[500px] overflow-y-auto pr-1">
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Intake Progress</span>
-              <span className="text-xs font-extrabold text-cyan-400">{progressPercent}%</span>
-            </div>
-            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+          {/* Slim Progress Bar */}
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl px-5 py-3 shadow-sm flex flex-col gap-2">
+            <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800">
               <div
                 className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full rounded-full transition-all duration-500"
                 style={{ width: `${progressPercent}%` }}
@@ -751,14 +751,24 @@ export default function ClaimantPage() {
               </h2>
               <span
                 className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
-                  confirmed
+                  conversationStatus === "completed" || conversationStatus === "submitted"
                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    : conversationStatus === "confirming"
+                    : conversationStatus === "confirming" || conversationStatus === "claimant_confirmed"
                     ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
                     : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                 }`}
               >
-                {confirmed ? "Submitted" : conversationStatus === "collecting" ? "Collecting Info" : conversationStatus}
+                {conversationStatus === "completed"
+                  ? "Completed"
+                  : conversationStatus === "submitted"
+                  ? "Submitted"
+                  : conversationStatus === "claimant_confirmed"
+                  ? "Claimant Confirmed"
+                  : conversationStatus === "confirming"
+                  ? "Confirming"
+                  : conversationStatus === "collecting"
+                  ? "Collecting Info"
+                  : conversationStatus}
               </span>
             </div>
 
@@ -798,49 +808,7 @@ export default function ClaimantPage() {
             </div>
           </div>
 
-          {/* Checklist Widget */}
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 shadow-sm">
-            <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Field Validation Check
-            </h3>
-            <div className="space-y-2 text-xs">
-              {[
-                { id: "claim_type", label: "Insurance Category" },
-                { id: "damage_description", label: "Incident Details" },
-                { id: "incident_date", label: "Date of Occurrence" },
-                { id: "policy_id", label: "Policy Number" },
-                { id: "claimed_amount", label: "Estimated Loss Amount" },
-              ].map((f) => {
-                const isProvided = !missingFields.includes(f.id);
-                return (
-                  <div
-                    key={f.id}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border ${
-                      isProvided
-                        ? "bg-emerald-950/10 border-emerald-900/20 text-emerald-200"
-                        : "bg-slate-950/20 border-slate-800/60 text-slate-500"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2 text-[11px]">
-                      <span className={isProvided ? "text-emerald-400" : "text-slate-600"}>
-                        {isProvided ? "✓" : "○"}
-                      </span>
-                      {f.label}
-                    </span>
-                    <span
-                      className={`text-[9px] px-2 py-0.5 rounded-md font-bold uppercase ${
-                        isProvided ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/25" : "bg-slate-800/60 text-slate-500"
-                      }`}
-                    >
-                      {isProvided ? "Verified" : "Missing"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {confirmed && (
+          {conversationStatus === "completed" && (
             <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-3xl p-5 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/20 animate-scale-up">
               <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-400">
                 <span>🎉</span> Claim Successfully Filed
