@@ -18,15 +18,16 @@ interface ConversationTurn {
   text: string;
 }
 
-interface UploadedDocument {
-  document_id: string;
-  document_type: string;
-  filename: string;
-  uploaded_at?: string | null;
-}
+const SUPPORTED_INSURANCE_TYPES = [
+  { id: "motor", name: "Motor", icon: "🚗", desc: "Vehicle accident, collision, or damage" },
+  { id: "health", name: "Health", icon: "🏥", desc: "Hospitalization, surgery, or medical care" },
+  { id: "senior_health", name: "Senior Health", icon: "🩺", desc: "Elderly parent / senior citizen medical care" },
+  { id: "home", name: "Home", icon: "🏠", desc: "Fire, roof leak, plumbing, or property damage" },
+  { id: "travel", name: "Travel", icon: "✈️", desc: "Lost luggage, trip cancellation, flight delay" },
+  { id: "cyber", name: "Cyber", icon: "🔒", desc: "Ransomware, malware, hacking, or online fraud" },
+];
 
 export default function ClaimIntakePage() {
-  const [activeTab, setActiveTab] = useState<"intake" | "documents">("intake");
   const [ticketId, setTicketId] = useState<string>("");
   const [conversationStatus, setConversationStatus] = useState<string>("not_started");
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
@@ -39,21 +40,20 @@ export default function ClaimIntakePage() {
   const [textInput, setTextInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [confirmed, setConfirmed] = useState<boolean>(false);
-  const [confirmationMessage, setConfirmationMessage] = useState<string>("");
-
-  // Documents tab state
-  const [documentsList, setDocumentsList] = useState<UploadedDocument[]>([]);
-  const [selectedDocType, setSelectedDocType] = useState<string>("damage_photo");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [docUploadLoading, setDocUploadLoading] = useState<boolean>(false);
-  const [docUploadMessage, setDocUploadMessage] = useState<string>("");
+  const [submittedMessage, setSubmittedMessage] = useState<string>("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Initialize a new claim session
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history]);
+
+  // Initialize a new voice claim intake session
   const initSession = useCallback(async () => {
     try {
       setLoading(true);
@@ -62,11 +62,10 @@ export default function ClaimIntakePage() {
       setTicketId(data.ticket_id);
       setConversationStatus("collecting");
       setConfirmed(false);
-      setConfirmationMessage("");
+      setSubmittedMessage("");
       setExtractedData({});
       setFieldStatus({});
       setMissingFields(["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]);
-      setDocumentsList([]);
       setHistory([
         {
           turn: 1,
@@ -93,33 +92,6 @@ export default function ClaimIntakePage() {
       ignore = true;
     };
   }, [initSession]);
-
-  // Fetch documents for the current ticket
-  const fetchDocuments = useCallback(async () => {
-    if (!ticketId) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/documents`);
-      if (res.ok) {
-        const data = await res.json();
-        setDocumentsList(data);
-      }
-    } catch (err) {
-      console.error("Failed to fetch documents:", err);
-    }
-  }, [ticketId]);
-
-  useEffect(() => {
-    let ignore = false;
-    const loadDocs = async () => {
-      if (activeTab === "documents" && ticketId && !ignore) {
-        await fetchDocuments();
-      }
-    };
-    loadDocs();
-    return () => {
-      ignore = true;
-    };
-  }, [activeTab, ticketId, fetchDocuments]);
 
   // Text-based fallback intake
   const handleTextSubmit = async (e: React.FormEvent) => {
@@ -157,7 +129,7 @@ export default function ClaimIntakePage() {
         {
           turn: prev.length + 1,
           speaker: "agent",
-          text: data.message || "Thank you for the information.",
+          text: data.message || "Thank you for providing those details.",
         },
       ]);
     } catch (err) {
@@ -238,7 +210,7 @@ export default function ClaimIntakePage() {
         } else if (event.data instanceof Blob) {
           const audioUrl = URL.createObjectURL(event.data);
           const audio = new Audio(audioUrl);
-          audio.play().catch((e) => console.warn("Audio autoplay blocked:", e));
+          audio.play().catch((e) => console.warn("Audio autoplay prevented:", e));
         }
       };
 
@@ -246,7 +218,7 @@ export default function ClaimIntakePage() {
         setIsRecording(false);
       };
     } catch (err) {
-      console.error("Voice streaming failed:", err);
+      console.error("Voice streaming initialization failed:", err);
       setIsRecording(false);
     }
   };
@@ -259,435 +231,350 @@ export default function ClaimIntakePage() {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
     }
-    if (wsRef.current) {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "end_session" }));
       wsRef.current.close();
     }
     setIsRecording(false);
   };
 
-  // Explicit confirmation button handler
-  const handleConfirm = async () => {
-    if (!ticketId) return;
-    setLoading(true);
+  // Submit and confirm claim explicitly
+  const handleConfirmSubmit = async () => {
+    if (!ticketId || loading) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/intake`, {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticket_id: ticketId,
-          claim_text: "Yes, everything is correct.",
-          input_mode: "text",
-        }),
+        body: JSON.stringify({ confirmed: true }),
       });
       const data = await res.json();
       setConfirmed(true);
       setConversationStatus("intake_complete");
-      setConfirmationMessage(data.message || "Your claim intake is complete and submitted for review.");
-      setHistory((prev) => [
-        ...prev,
-        { turn: prev.length + 1, speaker: "user", text: "Yes, everything is correct." },
-        { turn: prev.length + 2, speaker: "agent", text: data.message || "Perfect! Your claim intake is complete." },
-      ]);
+      setSubmittedMessage(data.response_message || "Claim submitted and recorded successfully!");
     } catch (err) {
-      console.error("Confirmation error:", err);
+      console.error("Confirm failed:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Document upload handler
-  const handleDocumentUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ticketId || !selectedFile || docUploadLoading) return;
-
-    setDocUploadLoading(true);
-    setDocUploadMessage("");
-
-    const formData = new FormData();
-    formData.append("document_type", selectedDocType);
-    formData.append("file", selectedFile);
-
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/documents`, {
-        method: "POST",
-        body: formData,
-      });
-      if (res.ok) {
-        setDocUploadMessage("Document uploaded successfully!");
-        setSelectedFile(null);
-        fetchDocuments();
-      } else {
-        const err = await res.json();
-        setDocUploadMessage(`Upload failed: ${err.detail || "Error"}`);
-      }
-    } catch {
-      setDocUploadMessage("Upload error: Could not reach server.");
-    } finally {
-      setDocUploadLoading(false);
-    }
-  };
-
-  const filledFieldsCount = Object.values(fieldStatus).filter((s) => s === "provided").length;
-  const confidencePercent = Math.round((filledFieldsCount / 5) * 100);
+  const completedFieldsCount = 5 - missingFields.length;
+  const progressPercent = Math.round((completedFieldsCount / 5) * 100);
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8">
-      {/* Header */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-800 gap-4">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-950/60 border border-blue-800/60 rounded-full text-xs font-semibold text-blue-400 mb-2">
-            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-            Review 1: Voice & Conversational Claim Intake
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+      {/* Top Header */}
+      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-30 px-6 py-4 flex items-center justify-between shadow-lg shadow-black/40">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-xl shadow-md shadow-cyan-500/20">
+            🎙️
           </div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white">
-            Insurance Claim Intake Voice Agent
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Natural voice conversation, multi-field extraction, and real-time state confirmation
-          </p>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+              Voice Claim Intake
+              <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 font-medium">
+                Phase 1 Active
+              </span>
+            </h1>
+            <p className="text-xs text-slate-400">Speech-driven insurance FNOL & structured data gathering</p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <span className="text-xs text-slate-500 block font-mono">TICKET ID</span>
-            <span className="text-sm font-mono font-semibold text-blue-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 inline-block">
-              {ticketId || "GENERATING..."}
-            </span>
+        <div className="flex items-center gap-4">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs">
+            <span className="text-slate-400">Ticket:</span>
+            <span className="font-mono font-semibold text-cyan-300">{ticketId || "Connecting..."}</span>
           </div>
+
           <button
-            onClick={() => void initSession()}
-            className="px-3 py-2 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition"
+            onClick={initSession}
+            disabled={loading}
+            className="px-3.5 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 rounded-lg transition"
           >
             New Session
           </button>
         </div>
       </header>
 
-      {/* Tab Navigation */}
-      <div className="flex gap-4 mt-6 border-b border-slate-800">
-        <button
-          onClick={() => setActiveTab("intake")}
-          className={`pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition ${
-            activeTab === "intake"
-              ? "border-blue-500 text-blue-400"
-              : "border-transparent text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <span>🎙️</span>
-          <span>Voice Claim Intake (Review 1)</span>
-        </button>
-        <button
-          onClick={() => setActiveTab("documents")}
-          className={`pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition ${
-            activeTab === "documents"
-              ? "border-blue-500 text-blue-400"
-              : "border-transparent text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <span>📄</span>
-          <span>Supporting Documents (Review 2/3)</span>
-          {documentsList.length > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] text-blue-300">
-              {documentsList.length}
-            </span>
-          )}
-        </button>
-      </div>
+      {/* Main Grid */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Left Column: Supported Categories & Live Conversation */}
+        <section className="lg:col-span-7 flex flex-col gap-4">
+          
+          {/* Supported 6 Insurance Types Banner */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center justify-between">
+              <span>Supported Insurance Types (Strict 6)</span>
+              <span className="text-[10px] text-cyan-400 lowercase">voice-classified</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {SUPPORTED_INSURANCE_TYPES.map((type) => {
+                const isSelected = extractedData.claim_type === type.id;
+                return (
+                  <div
+                    key={type.id}
+                    className={`p-2.5 rounded-xl border transition-all flex items-start gap-2.5 ${
+                      isSelected
+                        ? "bg-cyan-950/60 border-cyan-500 text-cyan-100 shadow-md shadow-cyan-500/10 scale-[1.02]"
+                        : "bg-slate-950/40 border-slate-800/80 text-slate-300 hover:border-slate-700"
+                    }`}
+                  >
+                    <span className="text-xl">{type.icon}</span>
+                    <div className="min-w-0">
+                      <div className="font-medium text-xs truncate flex items-center gap-1">
+                        {type.name}
+                        {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate">{type.desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
-      {/* Tab 1: Voice Claim Intake (Hero Experience) */}
-      {activeTab === "intake" && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
-          {/* Left Column: Live Conversation & Audio Controls */}
-          <section className="lg:col-span-7 flex flex-col gap-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col h-[540px]">
-              <div className="flex justify-between items-center pb-4 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${isRecording ? "bg-red-500 animate-ping" : "bg-emerald-500"}`}></span>
-                  <h2 className="text-sm font-semibold text-slate-200">Conversation Stream</h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-md uppercase">
-                    Status: {conversationStatus}
-                  </span>
-                </div>
-              </div>
+          {/* Conversation Chat Log */}
+          <div className="flex-1 min-h-[380px] max-h-[500px] bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col overflow-hidden shadow-inner">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                Live Intake Dialogue
+              </span>
+              <span className="text-xs text-slate-500">{history.length} turns</span>
+            </div>
 
-              {/* Conversation Turn Messages */}
-              <div className="flex-1 overflow-y-auto py-4 space-y-3.5 pr-1">
-                {history.map((item, idx) => (
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {history.map((turn, idx) => {
+                const isAgent = turn.speaker === "agent";
+                return (
                   <div
                     key={idx}
-                    className={`flex gap-3 ${item.speaker === "user" ? "justify-end" : "justify-start"}`}
+                    className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
                   >
-                    {item.speaker === "agent" && (
-                      <div className="w-8 h-8 rounded-full bg-blue-600/30 border border-blue-500/50 flex items-center justify-center text-xs font-bold text-blue-300 shrink-0">
-                        AI
+                    {isAgent && (
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-sm shadow-md shrink-0">
+                        🤖
                       </div>
                     )}
                     <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-line ${
-                        item.speaker === "user"
-                          ? "bg-blue-600 text-white rounded-tr-none shadow-md"
-                          : "bg-slate-800 border border-slate-700/60 text-slate-200 rounded-tl-none"
+                      className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
+                        isAgent
+                          ? "bg-slate-800/90 text-slate-100 border border-slate-700/80 rounded-tl-sm"
+                          : "bg-cyan-600 text-white rounded-tr-sm shadow-cyan-900/30"
                       }`}
                     >
-                      <p className="leading-relaxed">{item.text}</p>
+                      {turn.text}
                     </div>
-                    {item.speaker === "user" && (
-                      <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-xs font-bold text-slate-200 shrink-0">
-                        YOU
+                    {!isAgent && (
+                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0">
+                        👤
                       </div>
                     )}
                   </div>
-                ))}
-                {loading && (
-                  <div className="flex gap-2 items-center text-xs text-slate-400 animate-pulse pl-11">
-                    <span>Assistant is thinking...</span>
-                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          {/* Voice & Text Input Controls */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                  disabled={loading || confirmed}
+                  className={`px-5 py-2.5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all shadow-lg active:scale-95 ${
+                    isRecording
+                      ? "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 animate-pulse"
+                      : "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/20"
+                  }`}
+                >
+                  <span className="text-lg">{isRecording ? "⏹️" : "🎙️"}</span>
+                  <span>{isRecording ? "Stop Speaking" : "Speak to Agent"}</span>
+                </button>
+                {isRecording && (
+                  <span className="text-xs text-rose-400 flex items-center gap-1.5 font-medium animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                    Listening to voice...
+                  </span>
                 )}
               </div>
 
-              {/* Confirmation Action Box (When state is 'confirming') */}
               {conversationStatus === "confirming" && !confirmed && (
-                <div className="p-3 bg-blue-950/40 border border-blue-800/50 rounded-xl mb-3 flex items-center justify-between gap-3">
-                  <div className="text-xs text-blue-300">
-                    <span className="font-semibold block text-blue-200">Confirmation Ready</span>
-                    You can say <span className="font-mono text-white font-bold">&quot;Yes&quot;</span> or click to confirm.
-                  </div>
-                  <button
-                    onClick={() => void handleConfirm()}
-                    disabled={loading}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shadow-md whitespace-nowrap"
-                  >
-                    ✓ Confirm Claim
-                  </button>
-                </div>
+                <button
+                  onClick={handleConfirmSubmit}
+                  disabled={loading}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-xl shadow-md shadow-emerald-900/30 active:scale-95 transition"
+                >
+                  ✓ Confirm & Submit Claim
+                </button>
               )}
+            </div>
 
-              {/* Voice & Text Input Controls */}
-              <div className="pt-4 border-t border-slate-800 space-y-3">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-                    className={`flex-1 py-3 px-4 rounded-xl font-medium text-sm flex items-center justify-center gap-2.5 transition shadow-lg ${
-                      isRecording
-                        ? "bg-red-600 hover:bg-red-700 text-white animate-pulse"
-                        : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white"
+            {/* Text Fallback Form */}
+            <form onSubmit={handleTextSubmit} className="flex gap-2">
+              <input
+                type="text"
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                placeholder={isRecording ? "Listening via microphone..." : "Or type your response here..."}
+                disabled={isRecording || loading || confirmed}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
+              />
+              <button
+                type="submit"
+                disabled={!textInput.trim() || isRecording || loading || confirmed}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-sm font-medium rounded-xl border border-slate-700 transition"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+
+        </section>
+
+        {/* Right Column: Structured Extracted Claim Data & Checklist */}
+        <aside className="lg:col-span-5 flex flex-col gap-4">
+          
+          {/* Progress Card */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Intake Progress</span>
+              <span className="text-xs font-bold text-cyan-400">{progressPercent}% Completed</span>
+            </div>
+            <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full rounded-full transition-all duration-500"
+                style={{ width: `${progressPercent}%` }}
+              ></div>
+            </div>
+          </div>
+
+          {/* Structured Claim Object Details */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <span>📋</span> Structured Claim State
+              </h2>
+              <span
+                className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold uppercase tracking-wider border ${
+                  confirmed
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    : conversationStatus === "confirming"
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse"
+                    : "bg-cyan-500/20 text-cyan-300 border-cyan-500/40"
+                }`}
+              >
+                {confirmed ? "Submitted" : conversationStatus}
+              </span>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Policy ID */}
+              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Policy ID</span>
+                <span className="font-mono font-semibold text-slate-100">
+                  {extractedData.policy_id || <span className="text-slate-600 font-normal italic">Waiting for voice/text...</span>}
+                </span>
+              </div>
+
+              {/* Insurance Type */}
+              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Insurance Type</span>
+                <span className="font-semibold text-cyan-300 capitalize">
+                  {extractedData.claim_type || <span className="text-slate-600 font-normal italic">Pending classification</span>}
+                </span>
+              </div>
+
+              {/* Incident Date */}
+              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Incident Date</span>
+                <span className="font-medium text-slate-100">
+                  {extractedData.incident_date || <span className="text-slate-600 font-normal italic">Not recorded</span>}
+                </span>
+              </div>
+
+              {/* Claimed / Estimated Amount */}
+              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-medium">Estimated Amount</span>
+                <span className="font-bold text-emerald-400">
+                  {extractedData.claimed_amount != null
+                    ? `₹${Number(extractedData.claimed_amount).toLocaleString("en-IN")}`
+                    : <span className="text-slate-600 font-normal italic">Pending estimate</span>}
+                </span>
+              </div>
+
+              {/* Description */}
+              <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1">
+                <span className="text-slate-400 font-medium">Incident Description</span>
+                <p className="text-slate-200 leading-relaxed text-[11px]">
+                  {extractedData.damage_description || <span className="text-slate-600 italic">No description provided yet.</span>}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Mandatory Fields Checklist */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 shadow-sm">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              Intake Field Checklist
+            </h3>
+            <div className="space-y-2 text-xs">
+              {[
+                { id: "claim_type", label: "Insurance Type (Strict 6)" },
+                { id: "damage_description", label: "Incident Details / Narrative" },
+                { id: "incident_date", label: "Date of Incident" },
+                { id: "policy_id", label: "Policy Number" },
+                { id: "claimed_amount", label: "Estimated Loss Amount" },
+              ].map((f) => {
+                const isProvided = !missingFields.includes(f.id);
+                return (
+                  <div
+                    key={f.id}
+                    className={`flex items-center justify-between p-2 rounded-lg border ${
+                      isProvided
+                        ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-200"
+                        : "bg-slate-950/30 border-slate-800 text-slate-400"
                     }`}
                   >
-                    <span className="text-lg">🎙️</span>
-                    <span>{isRecording ? "Listening... Click to Stop" : "Start Voice Intake"}</span>
-                  </button>
-                </div>
-
-                {/* Text Fallback Form */}
-                <form onSubmit={handleTextSubmit} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={textInput}
-                    onChange={(e) => setTextInput(e.target.value)}
-                    placeholder="Or type your reply (e.g., 'ABC12345' or 'Actually, amount is 60000')..."
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={loading || !textInput.trim()}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-sm font-medium rounded-xl transition"
-                  >
-                    Send
-                  </button>
-                </form>
-              </div>
-            </div>
-          </section>
-
-          {/* Right Column: Live Extraction State & Collected Checklist */}
-          <section className="lg:col-span-5 flex flex-col gap-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
-              <div>
-                <div className="flex justify-between items-center mb-1.5">
-                  <h2 className="text-sm font-semibold text-slate-200">Extraction Progress</h2>
-                  <span className="text-xs font-mono font-bold text-blue-400">{confidencePercent}% Complete</span>
-                </div>
-                <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                  <div
-                    className="bg-gradient-to-r from-blue-500 to-emerald-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${confidencePercent}%` }}
-                  ></div>
-                </div>
-              </div>
-
-              {/* Extracted Mandatory Fields Checklist */}
-              <div className="space-y-2.5">
-                <h3 className="text-xs font-semibold text-slate-400 tracking-wider uppercase">Collected Information</h3>
-
-                {[
-                  { label: "Policy Number", key: "policy_id", val: extractedData.policy_id },
-                  { label: "Incident Date", key: "incident_date", val: extractedData.incident_date },
-                  {
-                    label: "Insurance Type",
-                    key: "claim_type",
-                    val: extractedData.claim_type
-                      ? {
-                          motor: "Motor",
-                          health: "Health",
-                          senior_health: "Senior Health",
-                          home: "Home",
-                          travel: "Travel",
-                          cyber: "Cyber",
-                          auto: "Motor",
-                        }[extractedData.claim_type.toLowerCase()] || extractedData.claim_type
-                      : null,
-                  },
-                  { label: "Incident Description", key: "damage_description", val: extractedData.damage_description },
-                  {
-                    label: "Estimated Amount",
-                    key: "claimed_amount",
-                    val: extractedData.claimed_amount ? `₹${extractedData.claimed_amount.toLocaleString()}` : null,
-                  },
-                ].map((field) => {
-                  const status = fieldStatus[field.key] || (field.val ? "provided" : "missing");
-                  const isProvided = status === "provided";
-                  const isDeferred = status === "deferred";
-
-                  return (
-                    <div
-                      key={field.key}
-                      className={`p-3 rounded-xl border flex justify-between items-start text-xs transition ${
-                        isProvided
-                          ? "bg-slate-950/60 border-emerald-900/40 text-slate-200"
-                          : isDeferred
-                          ? "bg-slate-950/40 border-amber-900/40 text-slate-300"
-                          : "bg-slate-950/20 border-slate-800/80 text-slate-500"
+                    <span className="flex items-center gap-2">
+                      <span className={isProvided ? "text-emerald-400" : "text-slate-600"}>
+                        {isProvided ? "✓" : "○"}
+                      </span>
+                      {f.label}
+                    </span>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-md font-semibold uppercase ${
+                        isProvided ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"
                       }`}
                     >
-                      <div>
-                        <span className="font-semibold block text-slate-300">{field.label}</span>
-                        <span className="font-mono text-slate-400 break-all">{field.val || (isDeferred ? "Deferred for later" : "Not provided")}</span>
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          isProvided
-                            ? "bg-emerald-950/80 text-emerald-400 border border-emerald-800"
-                            : isDeferred
-                            ? "bg-amber-950/60 text-amber-400 border border-amber-800/60"
-                            : "bg-slate-800 text-slate-400 border border-slate-700"
-                        }`}
-                      >
-                        {isProvided ? "✓ CAPTURED" : isDeferred ? "○ DEFERRED" : "○ MISSING"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Status Box */}
-              {conversationStatus === "intake_complete" ? (
-                <div className="p-3.5 bg-emerald-950/40 border border-emerald-800/50 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
-                    <span className="text-base">✓</span>
-                    <span>Claim Intake Complete & Confirmed!</span>
-                  </div>
-                  <p className="text-[11px] text-emerald-200/80">
-                    {confirmationMessage || `Ticket ${ticketId} is now ready for evaluation.`}
-                  </p>
-                </div>
-              ) : conversationStatus === "confirming" ? (
-                <div className="p-3.5 bg-blue-950/40 border border-blue-800/50 rounded-xl">
-                  <div className="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-1">
-                    <span>💬</span>
-                    <span>Awaiting Confirmation</span>
-                  </div>
-                  <p className="text-[11px] text-slate-300">
-                    Please review the details in the chat. Speak &quot;Yes&quot; to seal the intake or state any corrections.
-                  </p>
-                </div>
-              ) : (
-                <div className="p-3 bg-slate-950/50 border border-slate-800 rounded-xl">
-                  <span className="text-[11px] text-slate-400 block">
-                    Remaining fields to collect: <span className="text-blue-400 font-mono">{missingFields.join(", ") || "None"}</span>
-                  </span>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* Tab 2: Supporting Documents (Cleanly Isolated) */}
-      {activeTab === "documents" && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl mt-6 space-y-6">
-          <div>
-            <h2 className="text-lg font-bold text-white">Supporting Documentation</h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Upload photos or damage estimates for claim ticket <span className="font-mono text-blue-400 font-semibold">{ticketId}</span>.
-              (Note: Supporting documents are evaluated in Review 2/3 and do not block Review 1 voice intake.)
-            </p>
-          </div>
-
-          <form onSubmit={handleDocumentUpload} className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-4 max-w-xl">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Document Type</label>
-              <select
-                value={selectedDocType}
-                onChange={(e) => setSelectedDocType(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-              >
-                <option value="damage_photo">Damage Photo (JPG, PNG)</option>
-                <option value="repair_estimate">Repair Cost Estimate (PDF, JPG)</option>
-                <option value="fir">Police Report / FIR (PDF, JPG)</option>
-                <option value="medical_bill">Medical Bill (PDF, JPG)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Select File</label>
-              <input
-                type="file"
-                accept=".jpg,.jpeg,.png,.pdf,.webp"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                className="w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-500"
-              />
-            </div>
-
-            {docUploadMessage && (
-              <p className={`text-xs ${docUploadMessage.includes("success") ? "text-emerald-400" : "text-red-400"}`}>
-                {docUploadMessage}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={docUploadLoading || !selectedFile}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition"
-            >
-              {docUploadLoading ? "Uploading..." : "Upload Document"}
-            </button>
-          </form>
-
-          {/* Uploaded Documents List */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Uploaded Documents</h3>
-            {documentsList.length === 0 ? (
-              <p className="text-xs text-slate-500 italic">No documents uploaded for this claim ticket yet.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {documentsList.map((doc) => (
-                  <div key={doc.document_id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-semibold text-slate-200 block">{doc.filename}</span>
-                      <span className="text-[10px] text-slate-500 uppercase font-mono">{doc.document_type}</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">
-                      UPLOADED
+                      {isProvided ? "Collected" : "Required"}
                     </span>
                   </div>
-                ))}
-              </div>
-            )}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-    </main>
+
+          {/* Confirmation Banner */}
+          {confirmed && (
+            <div className="bg-emerald-950/60 border border-emerald-500/60 rounded-2xl p-4 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/40 animate-fade-in">
+              <div className="flex items-center gap-2 font-bold text-sm text-emerald-300">
+                <span>🎉</span> Claim Confirmed & Saved
+              </div>
+              <p className="text-xs text-emerald-200/90 leading-relaxed">
+                {submittedMessage || "Your structured claim intake is complete. Ticket ID: " + ticketId}
+              </p>
+            </div>
+          )}
+
+        </aside>
+
+      </main>
+    </div>
   );
 }

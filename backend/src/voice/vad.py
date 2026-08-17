@@ -3,15 +3,17 @@ Voice Activity Detection using WebRTC VAD (Google's open-source, BSD-licensed
 VAD via the `webrtcvad` Python binding). Standardized on 16kHz mono audio.
 """
 import collections
-from typing import Generator, List
+from typing import Generator, List, Optional
 
 import webrtcvad
+
+from src.config import settings
 
 SAMPLE_RATE = 16000
 FRAME_DURATION_MS = 30          # 10, 20, or 30 only
 FRAME_BYTES = int(SAMPLE_RATE * (FRAME_DURATION_MS / 1000.0) * 2)  # 16-bit = 2 bytes/sample
 
-# Give user 1400ms of natural silence before finalizing utterance (prevents interrupting pauses)
+# Natural silence window (~1400ms) before finalizing utterance (prevents interrupting natural pauses)
 SILENCE_FRAMES_TO_END = int(1400 / FRAME_DURATION_MS)  # ~46 frames
 # Ring buffer size for speech onset detection (300ms)
 START_PADDING_FRAMES = 10
@@ -42,12 +44,13 @@ def frame_generator(audio_bytes: bytes) -> Generator[Frame, None, None]:
 class UtteranceSegmenter:
     """
     Stateful segmenter: buffers incoming chunks, tracks voiced activity,
-    and yields complete utterances only after user has finished speaking
+    and yields complete utterances only after claimant has finished speaking
     (1400ms trailing silence with minimum 450ms speech duration).
     """
 
-    def __init__(self, aggressiveness: int = 1):
-        self._vad = webrtcvad.Vad(aggressiveness)
+    def __init__(self, aggressiveness: Optional[int] = None):
+        agg = aggressiveness if aggressiveness is not None else settings.VAD_AGGRESSIVENESS
+        self._vad = webrtcvad.Vad(agg)
         self._start_ring: collections.deque = collections.deque(maxlen=START_PADDING_FRAMES)
         self._end_ring: collections.deque = collections.deque(maxlen=SILENCE_FRAMES_TO_END)
         self._triggered = False
@@ -95,7 +98,7 @@ class UtteranceSegmenter:
 
         return completed_utterances
 
-    def flush(self) -> bytes | None:
+    def flush(self) -> Optional[bytes]:
         """Call on connection close to grab any in-progress utterance."""
         if self._triggered and len(self._voiced_frames) >= MIN_SPEECH_FRAMES:
             utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)

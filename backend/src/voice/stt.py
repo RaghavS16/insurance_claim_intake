@@ -1,5 +1,5 @@
 """
-Speech-to-text using faster-whisper (CTranslate2 reimplementation of Whisper —
+Speech-to-text service using faster-whisper (CTranslate2 reimplementation of Whisper —
 open-source, MIT-licensed, with automatic CUDA GPU acceleration when available,
 and graceful fallback to CPU inference).
 """
@@ -13,9 +13,11 @@ from typing import Optional
 
 from faster_whisper import WhisperModel
 
-logger = logging.getLogger(__name__)
+from src.config import settings
+from src.utils.logger import app_logger
 
-_MODEL_SIZE = "small"
+logger = app_logger
+
 _model: Optional[WhisperModel] = None
 
 
@@ -43,24 +45,26 @@ def _setup_cuda_dll_paths():
 def _init_whisper_model() -> WhisperModel:
     """Initialize WhisperModel with CUDA acceleration if available, fallback to CPU."""
     _setup_cuda_dll_paths()
+    model_size = settings.STT_MODEL_SIZE
 
     # Try CUDA on GPU first
     try:
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
             logger.info("Testing NVIDIA CUDA GPU for faster-whisper...")
-            model = WhisperModel(_MODEL_SIZE, device="cuda", compute_type="float16")
+            model = WhisperModel(model_size, device="cuda", compute_type="float16")
             logger.info("faster-whisper successfully initialized on NVIDIA GPU (CUDA float16)!")
             return model
     except Exception as e:
         logger.warning("CUDA initialization failed (%s). Falling back to optimized CPU inference.", e)
 
     # Fallback to CPU int8
-    logger.info("Initializing faster-whisper on CPU (compute_type=int8)...")
-    return WhisperModel(_MODEL_SIZE, device="cpu", compute_type="int8")
+    logger.info("Initializing faster-whisper on CPU (model_size=%s, compute_type=int8)...", model_size)
+    return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
 def get_model() -> WhisperModel:
+    """Singleton getter for WhisperModel instance."""
     global _model
     if _model is None:
         _model = _init_whisper_model()
@@ -68,8 +72,7 @@ def get_model() -> WhisperModel:
 
 
 def _pcm16_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
-    """faster-whisper's transcribe() accepts a file path or file-like object;
-    wrapping raw PCM in a WAV header lets us hand it an in-memory buffer."""
+    """Wraps raw PCM16 mono audio in a standard 44-byte WAV header in-memory."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -114,7 +117,7 @@ def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
         if "cublas" in str(re).lower() or "cudnn" in str(re).lower() or "cuda" in str(re).lower():
             logger.warning("CUDA runtime error encountered during transcription: %s. Falling back to CPU model.", re)
             try:
-                _model = WhisperModel(_MODEL_SIZE, device="cpu", compute_type="int8")
+                _model = WhisperModel(settings.STT_MODEL_SIZE, device="cpu", compute_type="int8")
                 segments, info = _model.transcribe(
                     io.BytesIO(wav_bytes),
                     language="en",

@@ -1,6 +1,8 @@
 # ==============================================================================
-# Review 1: Core Claim Intake & Voice Pipeline Dependencies
+# Phase 1: Core Voice-First Insurance Claim Intake Dependencies
 # ==============================================================================
+
+# Web Framework & Serialization
 fastapi>=0.104.1
 uvicorn>=0.24.0
 python-multipart>=0.0.9
@@ -27,12 +29,3 @@ numpy>=1.26.0
 # Testing & Client Utilities
 pytest>=7.4.3
 httpx>=0.25.0
-boto3>=1.33.0
-
-# ==============================================================================
-# Review 2 / Review 3: Optional Evaluation & OCR Dependencies
-# ==============================================================================
-pytesseract>=0.3.10
-pdfplumber>=0.10.2
-pgvector>=0.2.5
-langchain-postgres>=0.0.9

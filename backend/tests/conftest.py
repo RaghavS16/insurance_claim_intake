@@ -1,8 +1,8 @@
 """
-Pytest configuration and test database fixtures.
+Pytest configuration and test database fixtures for Phase 1.
 
-Sets up a temporary SQLite database per test session, seeds canonical policies
-and adjusters, and configures fast mock fallbacks for LLM calls during unit tests.
+Sets up an isolated temporary SQLite database per test session, seeds canonical policies
+and adjusters for all 6 supported insurance types, and configures mock fallbacks.
 """
 import os
 import uuid
@@ -19,8 +19,10 @@ from sqlalchemy.orm import sessionmaker
 _tmp_db_path = Path(tempfile.gettempdir()) / f"test_claims_{uuid.uuid4().hex[:8]}.db"
 SQLITE_URL = f"sqlite:///{_tmp_db_path}"
 os.environ["DATABASE_URL"] = SQLITE_URL
+os.environ["ENVIRONMENT"] = "test"
 
 # 2. Import application models and session
+from src.config import settings  # noqa: E402
 from src.api.main import app  # noqa: E402
 from src.database.models import Base, Policy, Adjuster  # noqa: E402
 from src.database.session import get_db, engine as app_engine  # noqa: E402
@@ -31,52 +33,42 @@ TestingSessionLocal = sessionmaker(bind=app_engine, autoflush=False, autocommit=
 
 
 def _seed_db(db):
-    """Insert canonical test policies and adjusters."""
-    if db.query(Policy).filter(Policy.policy_number == "XYZ123").first() is None:
-        db.add(Policy(
-            id=str(uuid.uuid4()),
-            policy_number="XYZ123",
-            customer_id=str(uuid.uuid4()),
-            policy_type="auto",
-            coverage_amount=500000,
-            deductible=10000,
-            effective_date=date(2024, 1, 1),
-            expiry_date=date(2030, 12, 31),
-            is_active=True,
-        ))
+    """Insert canonical test policies and adjusters for the 6 supported insurance types."""
+    test_policies = [
+        ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True),
+        ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True),
+        ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True),
+        ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True),
+        ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True),
+        ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True),
+        ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True),
+        ("EXP-0001", "motor", 300000, 5000, date(2020, 1, 1), date(2022, 12, 31), False),
+    ]
 
-    if db.query(Policy).filter(Policy.policy_number == "HOME456").first() is None:
-        db.add(Policy(
-            id=str(uuid.uuid4()),
-            policy_number="HOME456",
-            customer_id=str(uuid.uuid4()),
-            policy_type="home",
-            coverage_amount=1000000,
-            deductible=10000,
-            effective_date=date(2025, 3, 1),
-            expiry_date=date(2026, 2, 28),
-            is_active=True,
-        ))
+    for pol_num, ptype, cov, ded, eff, exp, active in test_policies:
+        if db.query(Policy).filter(Policy.policy_number == pol_num).first() is None:
+            db.add(Policy(
+                id=str(uuid.uuid4()),
+                policy_number=pol_num,
+                customer_id=str(uuid.uuid4()),
+                policy_type=ptype,
+                coverage_amount=cov,
+                deductible=ded,
+                effective_date=eff,
+                expiry_date=exp,
+                is_active=active,
+            ))
 
-    if db.query(Policy).filter(Policy.policy_number == "AUTO789").first() is None:
-        db.add(Policy(
-            id=str(uuid.uuid4()),
-            policy_number="AUTO789",
-            customer_id=str(uuid.uuid4()),
-            policy_type="auto",
-            coverage_amount=300000,
-            deductible=5000,
-            effective_date=date(2020, 1, 1),
-            expiry_date=date(2022, 12, 31),
-            is_active=False,
-        ))
+    test_adjusters = [
+        ("motor",         "Priya Sharma",   "priya@insure.co"),
+        ("home",          "Rohan Mehta",    "rohan@insure.co"),
+        ("health",        "Dr. Anita Roy",  "anita@insure.co"),
+        ("senior_health", "Dr. V. Rao",     "rao@insure.co"),
+        ("travel",        "Vikram Sen",     "vikram@insure.co"),
+        ("cyber",         "Neha Kapoor",    "neha@insure.co"),
+    ]
 
-    for spec, name, email in [
-        ("auto",     "Priya Sharma",   "priya@insure.co"),
-        ("home",     "Rohan Mehta",    "rohan@insure.co"),
-        ("business", "Anjali Gupta",   "anjali@insure.co"),
-        ("complex",  "Complex Review", "complex@insure.co"),
-    ]:
+    for spec, name, email in test_adjusters:
         if db.query(Adjuster).filter(Adjuster.email == email).first() is None:
             db.add(Adjuster(
                 id=str(uuid.uuid4()),
@@ -117,8 +109,7 @@ def setup_test_db():
 @pytest.fixture(autouse=True)
 def mock_offline_llm(monkeypatch):
     """
-    By default in unit tests, mock ChatOllama.invoke to trigger deterministic fallback extraction.
-    Prevents 10s timeout delays when Ollama is offline.
+    Mock ChatOllama.invoke to test deterministic rule-based fallback extraction during unit tests.
     """
     def mock_invoke(self, prompt, *args, **kwargs):
         raise ConnectionError("Ollama offline in test runner")

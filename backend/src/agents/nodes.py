@@ -1,16 +1,5 @@
 """
-Review 1: Natural Conversational Claim Intake Graph Nodes.
-
-Implements a human-like, empathetic voice insurance claim conversation:
-1. Free-form narrative first: opens with an invitation to describe the incident naturally.
-2. Complete multi-field semantic extraction from natural speech.
-3. Six supported insurance types ONLY: Health, Senior Health, Home, Travel, Motor, Cyber.
-4. Input quality gate rejecting filler words ("you", "uh"), noise, and pure greetings from becoming claim data.
-5. Contextual conversational acknowledgements without robotic questionnaires.
-6. Inquires ONLY for missing mandatory fields.
-7. Flexible natural corrections across any field at any time.
-8. Graceful "don't know" / deferral tracking.
-9. Conversational confirmation summary and intake completion.
+Phase 1: Voice-First Conversational Claim Intake Graph Nodes.
 """
 import json
 import logging
@@ -21,13 +10,18 @@ from typing import Any, Dict, List, Optional
 
 from langchain_ollama import ChatOllama
 
+from src.config import settings
 from src.agents.state import ClaimState
+from src.utils.logger import app_logger
 
-logger = logging.getLogger(__name__)
+logger = app_logger
 
-# Configurable Ollama connection with quick fallback
-_OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-llm = ChatOllama(base_url=_OLLAMA_URL, model="llama3.1:8b", temperature=0, timeout=10)
+llm = ChatOllama(
+    base_url=settings.OLLAMA_BASE_URL,
+    model=settings.OLLAMA_MODEL,
+    temperature=0,
+    timeout=10,
+)
 
 REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
 
@@ -62,17 +56,6 @@ VALID_CLAIM_TYPES = {"health", "senior_health", "home", "travel", "motor", "cybe
 
 UNKNOWN_SENTINEL = "UNKNOWN"
 
-AFFIRMATION_MARKERS = (
-    "yes", "yeah", "yep", "yup", "looks good", "correct", "confirm", "that's correct",
-    "that is correct", "everything is correct", "all good", "sure", "ok", "okay",
-    "proceed", "submit", "that's right", "thats right", "sounds good", "perfect", "it is correct",
-)
-
-REJECTION_MARKERS = (
-    "no", "nope", "not right", "that's wrong", "thats wrong", "incorrect", "not correct",
-    "mistake", "wait", "hold on",
-)
-
 REPEAT_MARKERS = (
     "repeat that", "say that again", "come again", "what was that", "pardon",
     "repeat", "what?", "sorry?", "i didn't hear", "didn't catch that", "say again",
@@ -97,7 +80,17 @@ CORRECTION_MARKERS = (
     "my policy is actually", "no, the", "no, make", "no, it",
 )
 
-# Common filler, greeting, or noise words that must NEVER become claim data
+AFFIRMATION_PHRASES = (
+    "looks good", "that's correct", "that is correct", "everything is correct",
+    "all good", "sounds good", "everything looks good", "thats right", "that's right",
+    "it is correct",
+)
+
+AFFIRMATION_WORDS = {"yes", "yeah", "yep", "yup", "correct", "confirm", "sure", "ok", "okay", "proceed", "submit", "perfect"}
+
+REJECTION_PHRASES = ("that's wrong", "thats wrong", "not right", "not correct", "hold on")
+REJECTION_WORDS = {"no", "nope", "incorrect", "wrong", "mistake"}
+
 FILLER_OR_GREETING_WORDS = {
     "YOU", "HELLO", "HI", "HEY", "GOOD", "MORNING", "AFTERNOON", "EVENING",
     "UH", "UM", "AH", "ER", "HMM", "YEAH", "YES", "NO", "OKAY", "OK",
@@ -173,12 +166,10 @@ def _normalize_date(raw_date: str) -> Optional[str]:
     if "yesterday" in lowered:
         return (date.today() - timedelta(days=1)).isoformat()
 
-    # Pattern: YYYY-MM-DD
     m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw_date)
     if m_iso:
         return m_iso.group(1)
 
-    # Pattern: DD-MM-YYYY or DD/MM/YYYY
     m_dmy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", raw_date)
     if m_dmy:
         day, month, year = int(m_dmy.group(1)), int(m_dmy.group(2)), int(m_dmy.group(3))
@@ -193,12 +184,7 @@ def _normalize_date(raw_date: str) -> Optional[str]:
 def _infer_insurance_type(text: str) -> Optional[str]:
     """
     Infer one of the six supported insurance types strictly:
-    - health
-    - senior_health
-    - home
-    - travel
-    - motor
-    - cyber
+    - health, senior_health, home, travel, motor, cyber
     """
     lowered = text.lower()
 
@@ -230,7 +216,6 @@ def _infer_insurance_type(text: str) -> Optional[str]:
     if any(w in lowered for w in ("home", "house", "apartment", "roof", "leak", "flood", "residence", "plumbing", "fire in house", "property damage", "burglary", "pipe burst", "kitchen fire")):
         return "home"
 
-    # Direct keyword matches
     for t in ("senior_health", "health", "home", "travel", "motor", "cyber"):
         if t in lowered or t.replace("_", " ") in lowered:
             return t
@@ -257,13 +242,11 @@ def _identify_field_from_utterance(text: str, fallback_field: Optional[str] = No
 def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str] = None) -> Dict[str, Any]:
     """
     Deterministic rule-based extraction for fast, zero-dependency processing.
-    Extracts all possible fields present in the text simultaneously.
-    Guarantees that generic words ("YOU", "HELLO", etc.) are NEVER extracted as policy IDs or values.
     """
     result: Dict[str, Any] = {}
     clean = claim_text.strip()
 
-    # 1. Policy ID Extraction (Strict: requires explicit prefix or alphanumeric code with both letters and digits)
+    # 1. Policy ID
     m_explicit = re.search(
         r"\b(?:policy\s*number\s*(?:is|:)?|policy\s*id\s*(?:is|:)?|policy\s*#\s*(?:is|:)?|policy\s*(?:is|:)?)\s*[:#-]?\s*([A-Za-z0-9\-_]{3,20})\b",
         clean,
@@ -272,12 +255,11 @@ def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str]
     if m_explicit and m_explicit.group(1).upper() not in FILLER_OR_GREETING_WORDS:
         result["policy_id"] = m_explicit.group(1).strip("-#_ ").upper()
     else:
-        # Match alphanumeric codes containing BOTH letters and digits (e.g., ABC12345, POL-9921)
         m_code = re.search(r"\b((?=[A-Za-z0-9\-_]*[A-Za-z])(?=[A-Za-z0-9\-_]*\d)[A-Za-z0-9\-_]{4,15})\b", clean)
         if m_code and m_code.group(1).upper() not in FILLER_OR_GREETING_WORDS:
             result["policy_id"] = m_code.group(1).upper()
 
-    # 2. Claimed Amount Extraction
+    # 2. Claimed Amount
     if target_field == "claimed_amount":
         amt = _coerce_amount(clean)
         if amt is not None and amt > 0:
@@ -299,17 +281,17 @@ def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str]
                 if amt is not None and amt > 0:
                     result["claimed_amount"] = amt
 
-    # 3. Claim Type Extraction (Only 6 supported types: health, senior_health, home, travel, motor, cyber)
+    # 3. Claim Type
     inferred_type = _infer_insurance_type(clean)
     if inferred_type:
         result["claim_type"] = inferred_type
 
-    # 4. Incident Date Extraction
+    # 4. Incident Date
     norm_date = _normalize_date(clean)
     if norm_date:
         result["incident_date"] = norm_date
 
-    # 5. Damage / Incident Description Extraction
+    # 5. Damage Description
     if target_field == "damage_description" and len(clean) >= 3:
         if clean.upper() not in FILLER_OR_GREETING_WORDS:
             result["damage_description"] = clean
@@ -348,392 +330,315 @@ User utterance: "{claim_text}"
 def _detect_utterance_intent(text: str) -> str:
     """Classify user utterance into conversational control intents."""
     lowered = text.lower().strip()
-    words = set(re.findall(r"\b\w+\b", lowered))
+    if not lowered:
+        return "empty"
 
     if any(m in lowered for m in REPEAT_MARKERS):
         return "repeat"
-    if any(m in lowered for m in DONT_KNOW_MARKERS):
-        return "dont_know"
-    if any(m in lowered for m in DEFER_MARKERS):
-        return "defer"
+
     if any(m in lowered for m in CORRECTION_MARKERS):
         return "correction"
-    if any(m == lowered or m in words for m in AFFIRMATION_MARKERS):
-        return "affirmation"
-    if any(m == lowered or m in words for m in REJECTION_MARKERS):
+
+    if any(m in lowered for m in DONT_KNOW_MARKERS) or any(m in lowered for m in DEFER_MARKERS):
+        return "defer"
+
+    words = set(re.findall(r"\b\w+\b", lowered))
+
+    # Check rejection BEFORE affirmation so "incorrect" is rejected
+    if any(p in lowered for p in REJECTION_PHRASES) or bool(words & REJECTION_WORDS):
         return "rejection"
+
+    if any(p in lowered for p in AFFIRMATION_PHRASES) or bool(words & AFFIRMATION_WORDS):
+        return "affirmation"
+
     return "normal"
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
     """
-    Process conversational turn intents, filter low-quality input, and route.
+    Evaluates conversational intent and updates conversation state machine.
     """
-    utterance = state.get("claim_text", "").strip()
-    state["last_user_utterance"] = utterance
-    intent = _detect_utterance_intent(utterance)
-    target_field = state.get("next_question_field")
-    current_status = state.get("conversation_status", "not_started")
+    raw_text = state.get("claim_text", "").strip()
+    state["last_user_utterance"] = raw_text
+    state["turn_number"] = state.get("turn_number", 0) + 1
+    state.setdefault("conversation_history", [])
+    state.setdefault("extracted_data", {})
+    state.setdefault("field_status", {})
+    state.setdefault("unknown_fields", [])
+    state["_skip_extraction"] = False
+    state["deferral_message"] = None
 
-    # A. Handling Confirmation State
-    if current_status == "confirming" or state.get("awaiting_confirmation"):
+    if not raw_text:
+        state["_skip_extraction"] = True
+        return state
+
+    state["conversation_history"].append({
+        "turn": state["turn_number"],
+        "speaker": "user",
+        "text": raw_text,
+    })
+
+    intent = _detect_utterance_intent(raw_text)
+    target_field = state.get("next_question_field")
+    awaiting_conf = state.get("awaiting_confirmation", False)
+
+    # 1. User in confirmation state
+    if awaiting_conf:
         if intent == "affirmation":
-            ticket_id = state.get("ticket_id", "your claim")
-            state["conversation_status"] = "intake_complete"
             state["confirmed"] = True
             state["awaiting_confirmation"] = False
-            state["_rejection_active"] = False
-            state["next_question"] = (
-                f"Perfect! Your claim intake is complete under ticket {ticket_id}. "
-                "Our claims team has received all your details."
-            )
-            state["next_question_field"] = ""
+            state["conversation_status"] = "intake_complete"
             state["_skip_extraction"] = True
-            _audit(state, f"User confirmed claim summary. Intake sealed for ticket {ticket_id}.")
+            _audit(state, "Claimant confirmed all extracted intake details.")
             return state
 
-        if intent == "rejection":
-            state["conversation_status"] = "collecting"
+        if intent in ("rejection", "correction"):
             state["awaiting_confirmation"] = False
+            state["confirmed"] = False
+            state["conversation_status"] = "collecting"
             state["_rejection_active"] = True
-            state["next_question"] = "No problem. What details should we correct?"
-            state["_skip_extraction"] = True
-            _audit(state, "User rejected confirmation; asking for corrections.")
+            _audit(state, f"Claimant initiated correction during confirmation: '{raw_text}'")
             return state
 
-        if intent in ("correction", "normal") or any(f in utterance.lower() for f in ("no", "change", "amount", "date", "policy", "type", "damage", "health", "motor", "travel", "home", "cyber")):
-            target = _identify_field_from_utterance(utterance, fallback_field=None)
-            if target:
-                extracted = dict(state.get("extracted_data") or {})
-                extracted[target] = None
-                state["extracted_data"] = extracted
-                _audit(state, f"User requested correction for '{target}' during confirmation.")
-            state["_skip_extraction"] = False
-            state["_rejection_active"] = False
-            state["conversation_status"] = "collecting"
-            state["awaiting_confirmation"] = False
-            return state
-
-    # B. Repeat Request
+    # 2. Repeat intent
     if intent == "repeat":
-        prev_q = state.get("next_question", INITIAL_PROMPT)
-        state["next_question"] = f"Of course. {prev_q}"
         state["_skip_extraction"] = True
-        _audit(state, "Politely re-emitting previous question on repeat request.")
+        _audit(state, "Claimant requested repeat of previous prompt.")
         return state
 
-    # C. Pure Greeting / Filler / Meaningless utterance handling
-    tokens = [t.strip(".,!?:;\"'").upper() for t in utterance.split() if t.strip(".,!?:;\"'")]
-    if tokens and all(t in FILLER_OR_GREETING_WORDS for t in tokens) and not any(re.search(r"\d", t) for t in tokens):
-        # User said "hello", "hi", "ok", "you", etc. without any claim content
-        state["_skip_extraction"] = True
-        if any(t in {"HELLO", "HI", "HEY"} for t in tokens):
-            state["next_question"] = "Hello! Please tell me what happened. Describe the incident in your own words, and I'll collect the details I need."
-        else:
-            state["next_question"] = "Sure. Please tell me what happened in your own words."
-        _audit(state, f"Conversational greeting/filler filtered: '{utterance}'")
-        return state
-
-    # D. "Don't Know" / Deferral
-    if intent in ("dont_know", "defer"):
-        field = _identify_field_from_utterance(utterance, fallback_field=target_field)
-        if field:
-            field_status = dict(state.get("field_status") or {})
-            field_status[field] = "deferred"
-            state["field_status"] = field_status
-
-            unknowns = list(state.get("unknown_fields") or [])
-            if field not in unknowns:
-                unknowns.append(field)
-            state["unknown_fields"] = unknowns
-
-            human_name = FIELD_HUMAN_NAMES.get(field, field.replace("_", " "))
-            state["deferral_message"] = f"That's okay, we can leave the {human_name} for now."
-            _audit(state, f"User deferred field '{field}'. Marked as deferred.")
-            state["_skip_extraction"] = False
+    # 3. Defer intent
+    if intent == "defer":
+        target = _identify_field_from_utterance(raw_text, fallback_field=target_field)
+        if target:
+            state["field_status"][target] = "deferred"
+            state["extracted_data"][target] = UNKNOWN_SENTINEL
+            if target not in state["unknown_fields"]:
+                state["unknown_fields"].append(target)
+            state["deferral_message"] = f"No problem, we can provide the {FIELD_HUMAN_NAMES.get(target, target)} later."
+            state["_skip_extraction"] = True
+            _audit(state, f"Claimant deferred field '{target}'.")
             return state
 
-    # E. Correction Intent
-    if intent == "correction":
-        target = _identify_field_from_utterance(utterance, fallback_field=target_field)
-        if target:
-            prior = dict(state.get("extracted_data") or {})
-            prior[target] = None
-            state["extracted_data"] = prior
-            field_status = dict(state.get("field_status") or {})
-            field_status[target] = "missing"
-            state["field_status"] = field_status
-            state["next_question_field"] = target
-            _audit(state, f"Identified correction for field '{target}'; unlocked for re-extraction.")
-
-    state["_skip_extraction"] = False
     return state
 
 
 # ---------------------------------------------------------------------------
-# Node 2: Claim Extractor (Multi-field Semantic Extraction)
+# Node 2: Multi-Field Semantic Extractor
 # ---------------------------------------------------------------------------
 def claim_extractor(state: ClaimState) -> ClaimState:
     """
-    Extract structured claim fields from raw user text using deterministic rules with LLM fallback.
-    Extracts all possible fields present in free-form narration simultaneously.
+    Extracts structured fields from user utterance using LLM with deterministic fallback.
+    Applies quality gate to filter out filler noise.
     """
-    if state.get("confirmed") or state.get("conversation_status") == "intake_complete":
-        _audit(state, "claim_extractor skipped: claim intake already complete")
-        return state
-
-    raw_text = state.get("claim_text", "")
+    claim_text = state.get("claim_text", "")
     target_field = state.get("next_question_field")
-    sanitized_text = _sanitize_claim_text(raw_text)
+    data: Dict[str, Any] = dict(state.get("extracted_data") or {})
+    field_status: Dict[str, str] = dict(state.get("field_status") or {})
+    recently_extracted: List[str] = []
 
-    # Input quality gate: skip extraction on meaningless noise/single filler words
-    if not _is_meaningful_claim_utterance(sanitized_text):
-        _audit(state, "claim_extractor skipped: utterance does not meet minimum claim quality threshold")
+    if not _is_meaningful_claim_utterance(claim_text):
+        _audit(state, "Utterance did not pass input quality gate (filler/noise/greeting).")
         state["recently_extracted_fields"] = []
         return state
 
-    # 1. Deterministic Extraction (instant, zero-latency)
-    extracted = _rule_based_fallback_extraction(raw_text, target_field)
+    heuristic = _rule_based_fallback_extraction(claim_text, target_field=target_field)
 
-    # 2. LLM fallback if nothing extracted deterministically and text has substantive words
-    if not any(extracted.values()) and len(sanitized_text.split()) >= 2:
+    llm_extracted: Dict[str, Any] = {}
+    try:
+        sanitized_text = _sanitize_claim_text(claim_text)
         prompt = EXTRACTION_PROMPT.format(
+            target_field=target_field or "None",
             claim_text=sanitized_text,
-            target_field=target_field or "general narration",
         )
-        try:
-            response = llm.invoke(prompt)
-            content = response.content
-            raw = content if isinstance(content, str) else str(content)
-            raw = raw.strip()
-            raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
-            llm_extracted = json.loads(raw)
-            for k, v in llm_extracted.items():
-                if v is not None and extracted.get(k) is None:
-                    # Sanitize LLM results against filler words
-                    if k == "policy_id" and str(v).upper() in FILLER_OR_GREETING_WORDS:
-                        continue
-                    if k == "claim_type" and str(v).lower() not in VALID_CLAIM_TYPES:
-                        continue
-                    extracted[k] = v
-        except Exception as exc:
-            logger.warning("claim_extractor LLM invocation error: %s", exc)
+        resp = llm.invoke(prompt)
+        raw_content = getattr(resp, "content", resp)
+        content = " ".join(str(c) for c in raw_content) if isinstance(raw_content, list) else str(raw_content)
+        m_json = re.search(r"\{.*\}", content, re.DOTALL)
+        if m_json:
+            parsed = json.loads(m_json.group(0))
+            if isinstance(parsed, dict):
+                llm_extracted = parsed
+    except Exception as exc:
+        logger.debug("LLM extraction unavailable (%s), using rule-based extraction.", exc)
 
-    if "claimed_amount" in extracted and extracted["claimed_amount"] is not None:
-        extracted["claimed_amount"] = _coerce_amount(extracted["claimed_amount"])
+    merged: Dict[str, Any] = {}
 
-    # 3. Merge with prior extracted data and lock valid fields
-    prior: Dict[str, Any] = dict(state.get("extracted_data") or {})
-    locked_fields = {k for k, v in prior.items() if v is not None and v != UNKNOWN_SENTINEL}
+    # Policy ID
+    pol_id = heuristic.get("policy_id") or llm_extracted.get("policy_id")
+    if pol_id and isinstance(pol_id, str):
+        clean_pol = pol_id.strip().upper()
+        if clean_pol not in FILLER_OR_GREETING_WORDS and len(clean_pol) >= 3:
+            merged["policy_id"] = clean_pol
 
-    recently_captured: List[str] = []
-    merged = {**prior}
+    # Incident Date
+    inc_date = heuristic.get("incident_date") or _normalize_date(str(llm_extracted.get("incident_date", "")))
+    if inc_date:
+        merged["incident_date"] = inc_date
 
-    for k, v in extracted.items():
+    # Claim Type
+    ctype = heuristic.get("claim_type") or llm_extracted.get("claim_type")
+    if ctype and str(ctype).lower() in VALID_CLAIM_TYPES:
+        merged["claim_type"] = str(ctype).lower()
+
+    # Damage Description
+    desc = heuristic.get("damage_description") or llm_extracted.get("damage_description")
+    if desc and isinstance(desc, str) and len(desc.strip()) >= 3:
+        if desc.strip().upper() not in FILLER_OR_GREETING_WORDS:
+            merged["damage_description"] = desc.strip()
+
+    # Claimed Amount
+    amt = heuristic.get("claimed_amount") or _coerce_amount(llm_extracted.get("claimed_amount"))
+    if amt is not None and amt > 0:
+        merged["claimed_amount"] = amt
+
+    for k, v in merged.items():
         if v is not None and v != UNKNOWN_SENTINEL:
-            if k not in locked_fields or prior.get(k) is None:
-                merged[k] = v
-                recently_captured.append(k)
+            old_val = data.get(k)
+            data[k] = v
+            field_status[k] = "provided"
+            recently_extracted.append(k)
+            if old_val and old_val != v:
+                _audit(state, f"Corrected field '{k}': '{old_val}' -> '{v}'")
+            else:
+                _audit(state, f"Extracted field '{k}': '{v}'")
 
-    state["recently_extracted_fields"] = recently_captured
-    state["extracted_data"] = merged
-
-    # Update field status mapping
-    field_status = dict(state.get("field_status") or {})
-    for f in REQUIRED_FIELDS:
-        val = merged.get(f)
-        if val is not None and val != UNKNOWN_SENTINEL:
-            field_status[f] = "provided"
-        elif field_status.get(f) != "deferred":
-            field_status[f] = "missing"
+    state["extracted_data"] = data
     state["field_status"] = field_status
-
-    provided_count = sum(1 for f in REQUIRED_FIELDS if field_status.get(f) == "provided")
-    state["extraction_confidence"] = provided_count / float(len(REQUIRED_FIELDS))
-
-    _audit(
-        state,
-        f"Extracted fields: {recently_captured} | Total provided: {provided_count}/5 "
-        f"(confidence={state['extraction_confidence']:.0%})"
-    )
+    state["recently_extracted_fields"] = recently_extracted
     return state
 
 
 # ---------------------------------------------------------------------------
-# Node 3: Mandatory Field Checker & Confirmation Coordinator
+# Node 3: Mandatory Field Checker
 # ---------------------------------------------------------------------------
 def mandatory_field_checker(state: ClaimState) -> ClaimState:
     """
-    Evaluate missing mandatory fields and coordinate transition between COLLECTING and CONFIRMING.
+    Evaluates required fields and computes extraction confidence.
     """
-    field_status: Dict[str, str] = state.get("field_status") or {}
-    missing = [f for f in REQUIRED_FIELDS if field_status.get(f) != "provided"]
+    data = state.get("extracted_data") or {}
+    field_status = state.get("field_status") or {}
+    unknowns = set(state.get("unknown_fields") or [])
+
+    missing: List[str] = []
+    for f in REQUIRED_FIELDS:
+        val = data.get(f)
+        if val is None or val == "" or val == UNKNOWN_SENTINEL:
+            if f not in unknowns:
+                missing.append(f)
+                field_status[f] = "missing"
+        else:
+            field_status[f] = "provided"
+
+    provided_count = len([f for f in REQUIRED_FIELDS if f not in missing])
+    state["extraction_confidence"] = round(provided_count / len(REQUIRED_FIELDS), 2)
     state["missing_fields"] = missing
+    state["field_status"] = field_status
 
-    ticket_id = state.get("ticket_id", "N/A")
-
-    if state.get("_rejection_active"):
+    if state.get("confirmed"):
         state["awaiting_confirmation"] = False
-        state["conversation_status"] = "collecting"
-        state["message"] = "Awaiting user corrections."
-        return state
-
-    if not missing:
+        state["conversation_status"] = "intake_complete"
+    elif not missing:
         state["awaiting_confirmation"] = True
-        if state.get("conversation_status") != "intake_complete":
-            state["conversation_status"] = "confirming"
-        state["message"] = f"All required details captured for ticket {ticket_id}. Ready for confirmation."
-        _audit(state, "All 5 mandatory fields captured. Entering CONFIRMING state.")
+        state["conversation_status"] = "confirming"
     else:
         state["awaiting_confirmation"] = False
-        if state.get("conversation_status") != "intake_complete":
-            state["conversation_status"] = "collecting"
-        state["message"] = f"Claim in progress ({len(missing)} fields remaining)."
-        _audit(state, f"Missing fields remaining: {missing}")
+        state["conversation_status"] = "collecting"
 
     return state
 
 
 # ---------------------------------------------------------------------------
-# Node 4: Natural Conversational Response & Next Question Generator
+# Node 4: Dynamic Next Question & Response Generator
 # ---------------------------------------------------------------------------
-def _build_natural_acknowledgement(state: ClaimState) -> str:
-    """Build a natural, friendly acknowledgement for recently captured or corrected fields."""
-    deferral_ack = state.get("deferral_message")
-    if deferral_ack:
-        return str(deferral_ack)
-
-    recent = state.get("recently_extracted_fields") or []
-    extracted = state.get("extracted_data") or {}
-
-    if not recent:
-        return ""
-
-    if len(recent) == 1:
-        field = recent[0]
-        val = extracted.get(field)
-        if field == "policy_id":
-            return f"Thanks, I've got policy {val}."
-        if field == "incident_date":
-            return f"Got it, incident date {val}."
-        if field == "claim_type":
-            display_type = CLAIM_TYPE_DISPLAY.get(str(val).lower(), str(val).title())
-            return f"Understood, this is a {display_type} claim."
-        if field == "claimed_amount":
-            return f"Thanks, recorded the estimate of ₹{val:,.0f}."
-        if field == "damage_description":
-            return "Thanks, I understand what happened and I've noted the incident details."
-
-    parts = []
-    if "damage_description" in recent or "claim_type" in recent:
-        parts.append("the incident details")
-    if "incident_date" in recent:
-        parts.append(f"date {extracted.get('incident_date')}")
-    if "policy_id" in recent:
-        parts.append(f"policy {extracted.get('policy_id')}")
-    if "claimed_amount" in recent:
-        parts.append(f"the estimate of ₹{extracted.get('claimed_amount'):,.0f}")
-
-    if parts:
-        ack_body = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
-        return f"Thanks, I've recorded {ack_body}."
-
-    return "Thank you."
-
-
-def _build_confirmation_summary(state: ClaimState) -> str:
-    """Construct a clean, human-like confirmation summary for the claimant."""
-    extracted = state.get("extracted_data") or {}
-    policy_id = extracted.get("policy_id", "N/A")
-    incident_date = extracted.get("incident_date", "N/A")
-    raw_type = str(extracted.get("claim_type", "motor")).lower().replace(" ", "_")
-    claim_type = CLAIM_TYPE_DISPLAY.get(raw_type, raw_type.replace("_", " ").title())
-    description = extracted.get("damage_description", "incident reported")
-    amount = extracted.get("claimed_amount", 0.0)
-
-    ack = _build_natural_acknowledgement(state)
-    prefix = f"{ack} " if ack else ""
-
-    return (
-        f"{prefix}Let me make sure I have everything right. You are reporting a {claim_type} incident on {incident_date}, "
-        f"your policy number is {policy_id}, the incident description is {description}, "
-        f"and you estimate the loss at ₹{amount:,.0f}. Does everything look correct?"
-    )
-
-
 def next_question_generator(state: ClaimState) -> ClaimState:
     """
-    Generate the user-facing natural conversational response.
+    Generates natural, empathetic voice prompts:
+    - Contextual acknowledgements of newly received fields
+    - Direct, friendly questions for missing fields
+    - Structured confirmation prompt before final submission
+    - Final intake completion message
     """
-    if state.get("_skip_extraction") and state.get("next_question"):
-        _audit(state, "Emitting active question on control turn.")
+    # 1. Intake complete
+    if state.get("confirmed"):
+        summary = _build_confirmation_summary(state.get("extracted_data", {}))
+        msg = f"Thank you! Your claim details have been confirmed and recorded.\n{summary}"
+        state["next_question"] = msg
+        state["next_question_field"] = ""
+        state["message"] = msg
         return state
 
-    status = state.get("conversation_status")
-
-    # 1. State: Intake Complete
-    if status == "intake_complete":
-        ticket_id = state.get("ticket_id", "your claim")
-        state["next_question"] = (
-            f"Perfect! Your claim intake is complete under ticket {ticket_id}. "
-            "Our claims team has received all your details."
+    # 2. Awaiting confirmation
+    if state.get("awaiting_confirmation"):
+        summary = _build_confirmation_summary(state.get("extracted_data", {}))
+        msg = (
+            f"I have collected all the basic details for your claim:\n{summary}\n"
+            "Does everything look correct? Please say yes to confirm and submit, or let me know if you would like to change anything."
         )
-        state["next_question_field"] = ""
-        _audit(state, f"Intake completed response set for ticket {ticket_id}.")
+        state["next_question"] = msg
+        state["next_question_field"] = "confirmation"
+        state["message"] = msg
         return state
 
-    # 2. State: Confirming (All fields provided)
-    if status == "confirming" or state.get("awaiting_confirmation"):
-        state["next_question"] = _build_confirmation_summary(state)
-        state["next_question_field"] = ""
-        _audit(state, "Generated confirmation summary prompt.")
-        return state
-
-    # 3. State: Collecting (Missing fields remain)
-    missing = state.get("missing_fields") or []
+    # 3. Missing fields follow-up
+    missing = state.get("missing_fields", [])
     if not missing:
-        state["conversation_status"] = "confirming"
-        state["awaiting_confirmation"] = True
-        state["next_question"] = _build_confirmation_summary(state)
-        state["next_question_field"] = ""
-        return state
-
-    # If no fields have been extracted yet and user hasn't provided details, open with free-form prompt
-    if len(missing) == len(REQUIRED_FIELDS) and not state.get("recently_extracted_fields"):
         state["next_question"] = INITIAL_PROMPT
         state["next_question_field"] = ""
-        state["conversation_status"] = "collecting"
+        state["message"] = INITIAL_PROMPT
+        return state
+
+    if len(missing) == len(REQUIRED_FIELDS) and not state.get("extracted_data"):
+        state["next_question"] = INITIAL_PROMPT
+        state["next_question_field"] = "claim_type"
+        state["message"] = INITIAL_PROMPT
         return state
 
     next_field = missing[0]
     state["next_question_field"] = next_field
 
-    ack = _build_natural_acknowledgement(state)
-    question = FIELD_NATURAL_QUESTIONS.get(next_field, f"Could you provide your {next_field.replace('_', ' ')}?")
+    ack_prefix = ""
+    deferral_msg = state.get("deferral_message")
+    if deferral_msg:
+        ack_prefix = f"{deferral_msg} "
+    else:
+        recent = state.get("recently_extracted_fields", [])
+        if recent:
+            first_ack = recent[0]
+            ack_val = state.get("extracted_data", {}).get(first_ack)
+            if first_ack == "claim_type" and ack_val:
+                disp = CLAIM_TYPE_DISPLAY.get(str(ack_val), str(ack_val).title())
+                ack_prefix = f"Got it, a {disp} insurance claim. "
+            elif first_ack == "incident_date" and ack_val:
+                ack_prefix = f"Thank you. "
+            elif first_ack == "policy_id" and ack_val:
+                ack_prefix = f"Got your policy number {ack_val}. "
+            elif first_ack == "claimed_amount" and ack_val:
+                ack_prefix = f"Understood, estimated at {ack_val}. "
+            else:
+                ack_prefix = "Thank you. "
 
-    full_response = f"{ack} {question}".strip() if ack else question
+    question = FIELD_NATURAL_QUESTIONS.get(next_field, f"Could you please provide the {FIELD_HUMAN_NAMES.get(next_field, next_field)}?")
+    full_prompt = f"{ack_prefix}{question}".strip()
 
-    state["next_question"] = full_response
-    state["conversation_status"] = "collecting"
-    _audit(state, f"Generated next question for '{next_field}': '{full_response}'")
+    state["next_question"] = full_prompt
+    state["message"] = full_prompt
     return state
 
 
-# ---------------------------------------------------------------------------
-# Node 5: Intake Completion Marker
-# ---------------------------------------------------------------------------
-def intake_completion_marker(state: ClaimState) -> ClaimState:
-    """
-    Mark intake complete when user confirms.
-    """
-    ticket_id = state.get("ticket_id", "your claim")
-    state["conversation_status"] = "intake_complete"
-    state["confirmed"] = True
-    state["awaiting_confirmation"] = False
-    state["next_question"] = (
-        f"Perfect! Your claim intake is complete under ticket {ticket_id}. "
-        "Our claims team has received all your details."
+def _build_confirmation_summary(data: Dict[str, Any]) -> str:
+    """Generate a clean human-readable summary of collected claim fields."""
+    ctype_raw = data.get("claim_type", "")
+    ctype_disp = CLAIM_TYPE_DISPLAY.get(ctype_raw, str(ctype_raw).title() if ctype_raw else "Not specified")
+    pol_id = data.get("policy_id", "Not provided")
+    date_val = data.get("incident_date", "Not provided")
+    desc = data.get("damage_description", "Not provided")
+    amt_val = data.get("claimed_amount")
+    amt_disp = f"₹{amt_val:,.2f}" if isinstance(amt_val, (int, float)) else str(amt_val or "Not provided")
+
+    return (
+        f"• Insurance Type: {ctype_disp}\n"
+        f"• Policy ID: {pol_id}\n"
+        f"• Incident Date: {date_val}\n"
+        f"• Incident Details: {desc}\n"
+        f"• Estimated Amount: {amt_disp}"
     )
-    state["next_question_field"] = ""
-    _audit(state, f"Claim intake sealed for ticket {ticket_id}.")
-    return state

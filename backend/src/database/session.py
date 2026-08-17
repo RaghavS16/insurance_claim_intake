@@ -1,21 +1,18 @@
-import os
-from pathlib import Path
+"""
+SQLAlchemy database session management and engine initialization.
+Supports PostgreSQL for production/docker, and SQLite for zero-config local runs and testing.
+"""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 
-# Load .env from backend directory regardless of working directory.
-# load_dotenv does NOT override variables already set in the environment,
-# so conftest.py can safely set DATABASE_URL before this module is imported.
-backend_env = Path(__file__).resolve().parent.parent.parent / ".env"
-load_dotenv(dotenv_path=backend_env)
-load_dotenv()
+from src.config import settings
+from src.utils.logger import app_logger
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not set in backend/.env")
+logger = app_logger
 
-# SQLite (used in tests) requires check_same_thread=False
+DATABASE_URL = settings.DATABASE_URL
+
+# SQLite requires check_same_thread=False
 _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
 engine = create_engine(DATABASE_URL, connect_args=_connect_args)
@@ -23,6 +20,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def get_db():
+    """Yield a database session and safely close upon request completion."""
     db = SessionLocal()
     try:
         yield db

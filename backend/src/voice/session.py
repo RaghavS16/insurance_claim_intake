@@ -1,7 +1,7 @@
 """
 Per-connection voice session state. Holds the UtteranceSegmenter for the life
-of a WebSocket connection — deliberately NOT persisted to DB (it's just audio
-buffering state), unlike ClaimState which lives in claims.pipeline_state.
+of a WebSocket connection — deliberately NOT persisted to DB (audio buffering state),
+unlike ClaimState which lives in claims.pipeline_state.
 """
 from dataclasses import dataclass, field
 

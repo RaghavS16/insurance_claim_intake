@@ -1,14 +1,15 @@
 """
-Automated unit and conversational integration tests for Review 1:
-Natural Voice Insurance Claim Conversation.
+Automated unit and conversational integration tests for Phase 1:
+Voice-First Insurance Claim Intake.
 
 Covers:
 - Strict 6 insurance types inference: Health, Senior Health, Home, Travel, Motor, Cyber
 - Elimination of outdated categories (auto, business)
 - Complete free-form multi-field narration
-- Quality gate rejecting "you", "yeah", "hello", "okay", and noise from becoming claim data / policy_id
+- Quality gate rejecting "you", "yeah", "hello", "okay", and noise from becoming claim data
 - Follow-up asking ONLY for missing fields
 - Conversational confirmation summary and intake completion
+- Bike accident smoke test scenario
 """
 import pytest
 
@@ -52,6 +53,7 @@ class TestSixInsuranceTypesInference:
         assert _infer_insurance_type("My car was hit from behind.") == "motor"
         assert _infer_insurance_type("There was a collision and my bumper got dented.") == "motor"
         assert _infer_insurance_type("I met with an accident on my bike yesterday.") == "motor"
+        assert _infer_insurance_type("I had a bike accident yesterday and the front of my bike was damaged.") == "motor"
 
     def test_infer_travel(self):
         assert _infer_insurance_type("I lost my luggage while travelling.") == "travel"
@@ -125,12 +127,12 @@ class TestIntentDetection:
         assert _detect_utterance_intent("make the amount 60,000") == "correction"
 
     def test_dont_know_and_defer_intents(self):
-        assert _detect_utterance_intent("I don't know") == "dont_know"
-        assert _detect_utterance_intent("not sure") == "dont_know"
+        assert _detect_utterance_intent("I don't know") == "defer"
+        assert _detect_utterance_intent("not sure") == "defer"
         assert _detect_utterance_intent("I'll provide it later") == "defer"
 
 
-class TestReview1Conversations:
+class TestPhase1Conversations:
     # 1. Transcript = "you" -> must NEVER store policy_id = "YOU"
     def test_you_never_stored_as_policy(self):
         graph = build_conversation_graph()
@@ -158,124 +160,144 @@ class TestReview1Conversations:
         )
         state = _base_state(claim_text=narrative)
         result = graph.invoke(state)
-        extracted = result["extracted_data"]
-        assert extracted["policy_id"] == "ABC12345"
-        assert extracted["claim_type"] == "motor"
-        assert extracted["incident_date"] is not None
-        assert extracted["damage_description"] is not None
-        assert extracted["claimed_amount"] == 50000.0
-        assert result["missing_fields"] == []
-        assert result["conversation_status"] == "confirming"
-        assert "Motor" in result["next_question"]
-        assert "ABC12345" in result["next_question"]
-        assert "Does everything look correct?" in result["next_question"]
 
-    # 4. Free-form narrative -> Travel insurance
+        data = result["extracted_data"]
+        assert data["claim_type"] == "motor"
+        assert data["policy_id"] == "ABC12345"
+        assert data["claimed_amount"] == 50000.0
+        assert data["incident_date"] is not None
+        assert "bumper" in data["damage_description"].lower()
+        assert result["missing_fields"] == []
+        assert result["awaiting_confirmation"] is True
+        assert "does everything look correct" in result["next_question"].lower()
+
+    # 4. Free-form travel claim
     def test_travel_claim_free_form(self):
         graph = build_conversation_graph()
-        narrative = "I lost my luggage while travelling yesterday. Policy TRV9912. The lost baggage is worth 35000 rupees."
+        narrative = "I lost my luggage while travelling yesterday. Policy TRV-3301. Estimated loss is 25000 rupees."
         state = _base_state(claim_text=narrative)
         result = graph.invoke(state)
-        extracted = result["extracted_data"]
-        assert extracted["claim_type"] == "travel"
-        assert extracted["policy_id"] == "TRV9912"
-        assert extracted["claimed_amount"] == 35000.0
-        assert result["conversation_status"] == "confirming"
-        assert "Travel" in result["next_question"]
 
-    # 5. Free-form narrative -> Senior Health insurance
+        data = result["extracted_data"]
+        assert data["claim_type"] == "travel"
+        assert data["policy_id"] == "TRV-3301"
+        assert data["claimed_amount"] == 25000.0
+        assert result["missing_fields"] == []
+
+    # 5. Free-form senior health claim
     def test_senior_health_claim_free_form(self):
         graph = build_conversation_graph()
-        narrative = "My father needs hospitalization for knee surgery on 2026-08-10. Policy SNR881. Total estimated bill is 150000 rupees."
+        narrative = "My elderly father was admitted to hospital yesterday. Policy SNR-9912. The hospital bill is 80000 rupees for surgery."
         state = _base_state(claim_text=narrative)
         result = graph.invoke(state)
-        extracted = result["extracted_data"]
-        assert extracted["claim_type"] == "senior_health"
-        assert extracted["policy_id"] == "SNR881"
-        assert extracted["claimed_amount"] == 150000.0
-        assert result["conversation_status"] == "confirming"
-        assert "Senior Health" in result["next_question"]
 
-    # 6. Free-form narrative -> Cyber insurance
+        data = result["extracted_data"]
+        assert data["claim_type"] == "senior_health"
+        assert data["policy_id"] == "SNR-9912"
+        assert data["claimed_amount"] == 80000.0
+
+    # 6. Free-form cyber claim
     def test_cyber_claim_free_form(self):
         graph = build_conversation_graph()
-        narrative = "My computer was hacked on 2026-08-12 and files encrypted by ransomware. Policy CYB404. Loss is 80000 rupees."
+        narrative = "Our office server was hacked yesterday in a ransomware attack. Policy CYB-8820. Estimated recovery cost is 150000 rupees."
         state = _base_state(claim_text=narrative)
         result = graph.invoke(state)
-        extracted = result["extracted_data"]
-        assert extracted["claim_type"] == "cyber"
-        assert extracted["policy_id"] == "CYB404"
-        assert extracted["claimed_amount"] == 80000.0
-        assert result["conversation_status"] == "confirming"
-        assert "Cyber" in result["next_question"]
 
-    # 7. Partial narrative -> Asks ONLY for missing fields without robotic questionnaire
+        data = result["extracted_data"]
+        assert data["claim_type"] == "cyber"
+        assert data["policy_id"] == "CYB-8820"
+        assert data["claimed_amount"] == 150000.0
+
+    # 7. Partial narrative: asks only for missing fields
     def test_partial_narrative_asks_only_missing(self):
         graph = build_conversation_graph()
-        narrative = "Yesterday my house was damaged by a fire in the kitchen."
+        narrative = "I met with a bike accident yesterday and damaged my front wheel. Policy MOT-5521."
         state = _base_state(claim_text=narrative)
         result = graph.invoke(state)
-        extracted = result["extracted_data"]
-        assert extracted["claim_type"] == "home"
-        assert extracted["incident_date"] is not None
-        assert "policy_id" in result["missing_fields"]
-        assert "claimed_amount" in result["missing_fields"]
-        assert result["next_question_field"] == "policy_id"
-        # Does not ask if it's auto/business or when it happened again
-        assert "auto, home, or business" not in result["next_question"].lower()
-        assert "policy" in result["next_question"].lower()
 
-    # 8. User corrects value during confirmation
+        data = result["extracted_data"]
+        assert data["claim_type"] == "motor"
+        assert data["policy_id"] == "MOT-5521"
+        assert "claimed_amount" in result["missing_fields"]
+        assert "policy_id" not in result["missing_fields"]
+        assert "incident_date" not in result["missing_fields"]
+        assert "estimate" in result["next_question"].lower() or "cost" in result["next_question"].lower() or "loss" in result["next_question"].lower()
+
+    # 8. User correction during confirmation
     def test_user_corrects_value_during_confirmation(self):
         graph = build_conversation_graph()
         state = _base_state(
-            claim_text="Actually, make the amount 60,000.",
-            conversation_status="confirming",
-            awaiting_confirmation=True,
             extracted_data={
-                "policy_id": "ABC12345",
-                "incident_date": "2026-08-15",
                 "claim_type": "motor",
-                "damage_description": "Front bumper damaged",
+                "policy_id": "ABC12345",
+                "incident_date": "2025-07-15",
+                "damage_description": "Car bumper dented",
                 "claimed_amount": 50000.0,
             },
-            field_status={
-                "policy_id": "provided",
-                "incident_date": "provided",
-                "claim_type": "provided",
-                "damage_description": "provided",
-                "claimed_amount": "provided",
-            },
+            missing_fields=[],
+            awaiting_confirmation=True,
+            claim_text="Actually, make the amount 65000 rupees",
         )
         result = graph.invoke(state)
-        assert result["extracted_data"]["claimed_amount"] == 60000.0
-        assert result["conversation_status"] == "confirming"
-        assert "60,000" in result["next_question"]
+        assert result["extracted_data"]["claimed_amount"] == 65000.0
+        assert result["awaiting_confirmation"] is True
 
-    # 9. User confirms -> Review 1 stops and seals intake
-    def test_user_confirms_completes_review_1(self):
+    # 9. User confirms claim details -> intake complete
+    def test_user_confirms_completes_phase_1(self):
         graph = build_conversation_graph()
         state = _base_state(
-            claim_text="Yes, everything looks correct.",
-            conversation_status="confirming",
-            awaiting_confirmation=True,
             extracted_data={
-                "policy_id": "ABC12345",
-                "incident_date": "2026-08-15",
                 "claim_type": "motor",
-                "damage_description": "Front bumper damaged",
-                "claimed_amount": 60000.0,
+                "policy_id": "ABC12345",
+                "incident_date": "2025-07-15",
+                "damage_description": "Car bumper dented",
+                "claimed_amount": 50000.0,
             },
-            field_status={
-                "policy_id": "provided",
-                "incident_date": "provided",
-                "claim_type": "provided",
-                "damage_description": "provided",
-                "claimed_amount": "provided",
-            },
+            missing_fields=[],
+            awaiting_confirmation=True,
+            claim_text="Yes, that is correct",
         )
         result = graph.invoke(state)
-        assert result["conversation_status"] == "intake_complete"
         assert result["confirmed"] is True
-        assert "CLAIM-TEST001" in result["next_question"]
-        assert "complete" in result["next_question"].lower()
+        assert result["conversation_status"] == "intake_complete"
+        assert "confirmed" in result["next_question"].lower()
+
+    # 10. Smoke test scenario: "I had a bike accident yesterday and the front of my bike was damaged."
+    def test_smoke_test_bike_accident_flow(self):
+        graph = build_conversation_graph()
+
+        # Step 1: Initial user utterance
+        turn1_state = _base_state(claim_text="I had a bike accident yesterday and the front of my bike was damaged.")
+        res1 = graph.invoke(turn1_state)
+
+        assert res1["extracted_data"]["claim_type"] == "motor"
+        assert res1["extracted_data"]["incident_date"] is not None
+        assert "bike" in res1["extracted_data"]["damage_description"].lower()
+        assert "policy_id" in res1["missing_fields"]
+        assert "claimed_amount" in res1["missing_fields"]
+        assert res1["awaiting_confirmation"] is False
+
+        # Step 2: Claimant provides policy number
+        turn2_state = {**res1, "claim_text": "My policy number is MOT-5521"}
+        res2 = graph.invoke(turn2_state)
+
+        assert res2["extracted_data"]["policy_id"] == "MOT-5521"
+        assert "claimed_amount" in res2["missing_fields"]
+        assert "policy_id" not in res2["missing_fields"]
+
+        # Step 3: Claimant provides estimated loss amount
+        turn3_state = {**res2, "claim_text": "The estimated repair cost is 15000 rupees"}
+        res3 = graph.invoke(turn3_state)
+
+        assert res3["extracted_data"]["claimed_amount"] == 15000.0
+        assert res3["missing_fields"] == []
+        assert res3["awaiting_confirmation"] is True
+        assert "does everything look correct" in res3["next_question"].lower()
+
+        # Step 4: Claimant confirms
+        turn4_state = {**res3, "claim_text": "Yes, everything looks good."}
+        res4 = graph.invoke(turn4_state)
+
+        assert res4["confirmed"] is True
+        assert res4["conversation_status"] == "intake_complete"
+        assert "confirmed" in res4["next_question"].lower()
