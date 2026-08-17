@@ -27,6 +27,12 @@ class VoiceSession:
     _claimant_seq: int = field(default=0, repr=False)
     _agent_seq: int = field(default=0, repr=False)
 
+    # Response generation ID for cancellation and preemption version checks
+    generation_id: int = field(default=0, repr=False)
+
+    # Global sequence counter to order all events (claimant & agent) chronologically
+    global_sequence: int = field(default=0, repr=False)
+
     # Echo-suppression: set to a future monotonic timestamp (time.monotonic() + duration)
     # while agent TTS is believed to be playing. The ASR worker skips mic audio until
     # this timestamp is exceeded.
@@ -35,6 +41,16 @@ class VoiceSession:
     def next_turn(self) -> int:
         self.turn_number += 1
         return self.turn_number
+
+    def increment_generation(self) -> int:
+        """Increment response generation version (used during barge-in/cancellation)."""
+        self.generation_id += 1
+        return self.generation_id
+
+    def next_global_sequence(self) -> int:
+        """Return the next unique global event sequence number."""
+        self.global_sequence += 1
+        return self.global_sequence
 
     def next_claimant_segment_id(self) -> tuple[str, int]:
         """Return (segment_id, sequence_number) for a new claimant transcript segment."""

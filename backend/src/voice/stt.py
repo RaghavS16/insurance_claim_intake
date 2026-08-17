@@ -255,6 +255,49 @@ class StreamingASRBuffer:
         self._chunk_bytes = int(sample_rate * 2 * (self._chunk_ms / 1000.0))
         self._buffer = b""
         self._last_partial_bytes = 0  # how many bytes were in the buffer at last partial call
+        self._accumulated_text = ""   # confirmed prefix transcript reconciled so far
+        self._last_confidence = 0.0
+
+    @staticmethod
+    def reconcile_transcripts(prefix: str, suffix: str) -> str:
+        """
+        Finds the best overlap between the end of prefix and the start of suffix and joins them.
+        Handles strict word-level matches and falls back to anchor word matching or containment.
+        """
+        p_words = prefix.strip().split()
+        s_words = suffix.strip().split()
+        if not p_words:
+            return suffix
+        if not s_words:
+            return prefix
+
+        # 1. Try strict word match overlap
+        max_overlap = min(len(p_words), len(s_words))
+        for n in range(max_overlap, 0, -1):
+            p_slice = [w.lower().strip(".,?!") for w in p_words[-n:]]
+            s_slice = [w.lower().strip(".,?!") for w in s_words[:n]]
+            if p_slice == s_slice:
+                return " ".join(p_words[:-n] + s_words)
+
+        # 2. Look for the first word of suffix in the last few words of prefix (fuzzy anchor)
+        for i in range(max(0, len(p_words) - 5), len(p_words)):
+            p_word_lower = p_words[i].lower().strip(".,?!")
+            s_word_lower = s_words[0].lower().strip(".,?!")
+            if p_word_lower == s_word_lower:
+                overlap_len = len(p_words) - i
+                if overlap_len <= len(s_words):
+                    return " ".join(p_words[:i] + s_words)
+
+        # 3. Containment fallback
+        p_lower = prefix.lower()
+        s_lower = suffix.lower()
+        if s_lower in p_lower:
+            return prefix
+        if p_lower in s_lower:
+            return suffix
+
+        # 4. No overlap found, concatenate
+        return prefix + " " + suffix
 
     def push(self, pcm_bytes: bytes) -> None:
         """Append raw PCM16 audio to the buffer."""
@@ -262,43 +305,61 @@ class StreamingASRBuffer:
 
     def partial(self) -> Tuple[str, float]:
         """
-        Attempt a partial transcription if enough new audio has accumulated.
-        Returns ("", 0.0) if the rate-limiting window has not expired yet.
-        Always non-destructive — buffer is not consumed.
+        Attempt a rolling-window partial transcription if enough new audio has accumulated.
+        Only transcribes the last 3 seconds of the audio buffer to keep latency low,
+        and reconciles the result with the previously accumulated text.
         """
         new_bytes = len(self._buffer) - self._last_partial_bytes
         if new_bytes < self._chunk_bytes:
-            return "", 0.0
+            return self._accumulated_text, self._last_confidence
+
         self._last_partial_bytes = len(self._buffer)
-        return self._provider.transcribe(self._buffer, self._sample_rate)
+        return self.force_partial()
 
     def force_partial(self) -> Tuple[str, float]:
         """
-        Run a partial transcription unconditionally on whatever is in the buffer.
-        Does NOT reset or advance the rate-limit counter.
-        Returns ("", 0.0) if buffer is too short.
+        Run a rolling-window partial transcription unconditionally on the tail of the buffer.
         """
         if not self._buffer:
             return "", 0.0
-        return self._provider.transcribe(self._buffer, self._sample_rate)
+
+        # Define rolling window size: last 3000ms of audio
+        window_ms = 3000
+        window_bytes = int(self._sample_rate * 2 * (window_ms / 1000.0))
+
+        if len(self._buffer) <= window_bytes:
+            # Buffer is short, transcribe the entire thing
+            text, conf = self._provider.transcribe(self._buffer, self._sample_rate)
+            self._accumulated_text = text
+            self._last_confidence = conf
+        else:
+            # Transcribe only the last 3 seconds of audio (sliding window)
+            window_audio = self._buffer[-window_bytes:]
+            suffix_text, conf = self._provider.transcribe(window_audio, self._sample_rate)
+            
+            # Reconcile new window text with previously accumulated text
+            self._accumulated_text = self.reconcile_transcripts(self._accumulated_text, suffix_text)
+            self._last_confidence = conf
+
+        return self._accumulated_text, self._last_confidence
 
     def finalize(self) -> Tuple[str, float]:
         """
         Run final transcription on the complete buffer, then reset.
-        Always runs Whisper regardless of buffer size.
-        Returns ("", 0.0) if the buffer is empty or too short.
+        Always runs Whisper on the full audio to ensure maximum accuracy.
         """
         pcm = self._buffer
-        self._buffer = b""
-        self._last_partial_bytes = 0
+        self.reset()
         if not pcm:
             return "", 0.0
         return self._provider.transcribe(pcm, self._sample_rate)
 
     def reset(self) -> None:
-        """Discard buffered audio without transcribing."""
+        """Discard buffered audio and reset the accumulated transcript."""
         self._buffer = b""
         self._last_partial_bytes = 0
+        self._accumulated_text = ""
+        self._last_confidence = 0.0
 
     @property
     def buffered_ms(self) -> float:

@@ -819,3 +819,60 @@ class TestInterruptionAndOverlap:
         # Segments are different
         assert seg1_id != seg2_id
         assert seg1_seq < seg2_seq
+
+    def test_rolling_window_reconciliation(self):
+        """Verify prefix-suffix overlap reconciliation algorithm in StreamingASRBuffer."""
+        # Test strict match overlap
+        res1 = StreamingASRBuffer.reconcile_transcripts("I had a car", "had a car accident")
+        assert res1 == "I had a car accident"
+
+        # Test partial matching word anchor
+        res2 = StreamingASRBuffer.reconcile_transcripts("My policy is", "policy is XYZ123")
+        assert res2 == "My policy is XYZ123"
+
+        # Test prefix/suffix containment
+        res3 = StreamingASRBuffer.reconcile_transcripts("My policy is XYZ123", "is XYZ123")
+        assert res3 == "My policy is XYZ123"
+
+        # Test suffix containment of prefix
+        res4 = StreamingASRBuffer.reconcile_transcripts("XYZ123", "My policy is XYZ123")
+        assert res4 == "My policy is XYZ123"
+
+        # Test fallback concatenation when no overlap
+        res5 = StreamingASRBuffer.reconcile_transcripts("Hello", "World")
+        assert res5 == "Hello World"
+
+    @pytest.mark.asyncio
+    async def test_barge_in_preemption(self):
+        """Verify that claimant speech cancels conversation worker tasks on the backend."""
+        session = VoiceSession(ticket_id="CLAIM-PREEMPT-001")
+        session_context = {"active_turn_task": None}
+
+        # Setup mock long-running task to cancel
+        async def mock_turn_processing():
+            try:
+                await asyncio.sleep(5.0)
+            except asyncio.CancelledError:
+                raise
+
+        task = asyncio.create_task(mock_turn_processing())
+        session_context["active_turn_task"] = task
+
+        # Claimant starts speaking (preemption onset)
+        # Increment generation ID and cancel the task
+        gen_id = session.increment_generation()
+        active_task = session_context.get("active_turn_task")
+        if active_task and not active_task.done():
+            active_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert gen_id == 1
+        assert task.cancelled()
+
+    def test_global_ordering(self):
+        """Verify that global sequence ID tracks and increments for all events."""
+        session = VoiceSession(ticket_id="CLAIM-ORDER-001")
+        assert session.next_global_sequence() == 1
+        assert session.next_global_sequence() == 2

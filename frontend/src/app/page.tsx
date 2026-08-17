@@ -15,11 +15,6 @@ interface ExtractedData {
   claimed_amount?: number | null;
 }
 
-/**
- * A transcript segment as modeled on the client.
- * Partials are updated in-place (same segment_id, same position in history).
- * Finals freeze the segment.
- */
 interface TranscriptSegment {
   segment_id: string;
   sequence: number;
@@ -28,6 +23,8 @@ interface TranscriptSegment {
   is_final: boolean;
   start_ts?: number;
   confidence?: number;
+  global_seq?: number;
+  timestamp?: number;
 }
 
 /** Conversation history item (finalized segments + initial agent message) */
@@ -37,6 +34,8 @@ interface ConversationTurn {
   text: string;
   /** Tracks whether this entry originated from a streaming segment */
   segment_id?: string;
+  global_seq?: number;
+  timestamp?: number;
 }
 
 const SUPPORTED_INSURANCE_TYPES = [
@@ -76,6 +75,7 @@ export default function ClaimIntakePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const audioQueueRef = useRef<HTMLAudioElement[]>([]);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const isPlayingRef = useRef<boolean>(false);
 
   // Auto-scroll chat to latest message
@@ -107,6 +107,8 @@ export default function ClaimIntakePage() {
           turn: 1,
           speaker: "agent",
           text: data.initial_message || "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
+          global_seq: 0,
+          timestamp: Date.now() - 1000
         },
       ]);
     } catch (err) {
@@ -142,27 +144,39 @@ export default function ClaimIntakePage() {
       if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
       const next = audioQueueRef.current.shift();
       if (!next) return;
+
       isPlayingRef.current = true;
+      activeAudioRef.current = next;
 
-      // Signal to server that TTS is playing (for echo suppression)
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "tts_playing", duration_s: 5 }));
-      }
+      // Event listener: playback started physically
+      next.onplay = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "tts_started" }));
+        }
+      };
 
-      next.play().catch((e) => {
-        console.warn("Audio autoplay prevented:", e);
-        isPlayingRef.current = false;
-        playNext();
-      });
-      next.onended = () => {
+      // Event listener: playback finished or interrupted
+      const onStopPlayback = () => {
         URL.revokeObjectURL(url);
         isPlayingRef.current = false;
-        // Signal that TTS finished (echo suppression can end)
+        if (activeAudioRef.current === next) {
+          activeAudioRef.current = null;
+        }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
         }
         playNext();
       };
+
+      next.onended = onStopPlayback;
+      next.onpause = onStopPlayback;
+
+      next.play().catch((e) => {
+        console.warn("Audio autoplay prevented:", e);
+        isPlayingRef.current = false;
+        activeAudioRef.current = null;
+        playNext();
+      });
     };
 
     playNext();
@@ -180,7 +194,17 @@ export default function ClaimIntakePage() {
         return;
       }
 
-      if (msg.type === "transcript") {
+      if (msg.type === "barge_in") {
+        console.log("Barge-in event received: stopping active agent playback and clearing audio queue");
+        if (activeAudioRef.current) {
+          activeAudioRef.current.pause();
+          activeAudioRef.current = null;
+        }
+        audioQueueRef.current = [];
+        isPlayingRef.current = false;
+        setPartialSegments(new Map());
+
+      } else if (msg.type === "transcript") {
         const speaker = msg.speaker as string;
         const segmentId = msg.segment_id as string;
         const sequence = msg.sequence as number;
@@ -188,6 +212,8 @@ export default function ClaimIntakePage() {
         const isFinal = msg.is_final as boolean;
         const confidence = msg.confidence as number | undefined;
         const startTs = msg.start_ts as number | undefined;
+        const globalSeq = msg.global_seq as number | undefined;
+        const timestamp = msg.timestamp as number | undefined;
 
         if (speaker === "claimant") {
           if (!isFinal) {
@@ -202,6 +228,8 @@ export default function ClaimIntakePage() {
                 is_final: false,
                 start_ts: startTs,
                 confidence,
+                global_seq: globalSeq,
+                timestamp: timestamp,
               });
               return next;
             });
@@ -218,7 +246,13 @@ export default function ClaimIntakePage() {
                 const existing = prev.findIndex((t) => t.segment_id === segmentId);
                 if (existing !== -1) {
                   const updated = [...prev];
-                  updated[existing] = { ...updated[existing], text, segment_id: segmentId };
+                  updated[existing] = {
+                    ...updated[existing],
+                    text,
+                    segment_id: segmentId,
+                    global_seq: globalSeq,
+                    timestamp: timestamp
+                  };
                   return updated;
                 }
                 return [...prev, {
@@ -226,6 +260,8 @@ export default function ClaimIntakePage() {
                   speaker: "user",
                   text,
                   segment_id: segmentId,
+                  global_seq: globalSeq,
+                  timestamp: timestamp
                 }];
               });
             }
@@ -242,6 +278,8 @@ export default function ClaimIntakePage() {
               speaker: "agent",
               text,
               segment_id: segmentId,
+              global_seq: globalSeq,
+              timestamp: timestamp
             }];
           });
         }
@@ -258,13 +296,20 @@ export default function ClaimIntakePage() {
 
       } else if (msg.type === "agent_text_fallback") {
         const text = msg.text as string;
+        const globalSeq = msg.global_seq as number | undefined;
         // Display in history if not already there (via transcript event)
         setHistory((prev) => {
           const last = prev[prev.length - 1];
           if (last && last.speaker === "agent" && last.text === text) {
             return prev;
           }
-          return [...prev, { turn: prev.length + 1, speaker: "agent", text }];
+          return [...prev, {
+            turn: prev.length + 1,
+            speaker: "agent",
+            text,
+            global_seq: globalSeq,
+            timestamp: Date.now()
+          }];
         });
         // Play via Web Speech API
         if ("speechSynthesis" in window) {
@@ -421,7 +466,7 @@ export default function ClaimIntakePage() {
 
     const userText = textInput.trim();
     setTextInput("");
-    setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text: userText }]);
+    setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text: userText, timestamp: Date.now() }]);
     setLoading(true);
     setErrorBanner("");
 
@@ -453,6 +498,7 @@ export default function ClaimIntakePage() {
           turn: prev.length + 1,
           speaker: "agent",
           text: data.message || "Thank you for providing those details.",
+          timestamp: Date.now()
         },
       ]);
     } catch (err) {
@@ -597,35 +643,48 @@ export default function ClaimIntakePage() {
 
             <div className="flex-1 overflow-y-auto space-y-3 pr-1">
               {/* Finalized conversation history */}
-              {history.map((turn, idx) => {
-                const isAgent = turn.speaker === "agent";
-                return (
-                  <div
-                    key={`hist-${idx}-${turn.segment_id ?? idx}`}
-                    className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
-                  >
-                    {isAgent && (
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-sm shadow-md shrink-0">
-                        🤖
-                      </div>
-                    )}
+              {(() => {
+                const sortedHistory = [...history].sort((a, b) => {
+                  if (a.global_seq !== undefined && b.global_seq !== undefined) {
+                    return a.global_seq - b.global_seq;
+                  }
+                  const aTime = a.timestamp || 0;
+                  const bTime = b.timestamp || 0;
+                  if (aTime !== bTime) {
+                    return aTime - bTime;
+                  }
+                  return a.turn - b.turn;
+                });
+                return sortedHistory.map((turn, idx) => {
+                  const isAgent = turn.speaker === "agent";
+                  return (
                     <div
-                      className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
-                        isAgent
-                          ? "bg-slate-800/90 text-slate-100 border border-slate-700/80 rounded-tl-sm"
-                          : "bg-cyan-600 text-white rounded-tr-sm shadow-cyan-900/30"
-                      }`}
+                      key={`hist-${idx}-${turn.segment_id ?? idx}`}
+                      className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
                     >
-                      {turn.text}
-                    </div>
-                    {!isAgent && (
-                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0">
-                        👤
+                      {isAgent && (
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-sm shadow-md shrink-0">
+                          🤖
+                        </div>
+                      )}
+                      <div
+                        className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
+                          isAgent
+                            ? "bg-slate-800/90 text-slate-100 border border-slate-700/80 rounded-tl-sm"
+                            : "bg-cyan-600 text-white rounded-tr-sm shadow-cyan-900/30"
+                        }`}
+                      >
+                        {turn.text}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                      {!isAgent && (
+                        <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-sm shrink-0">
+                          👤
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
 
               {/* Active partial transcript segments (streaming, in-place update) */}
               {activePartials.map((seg) => (
