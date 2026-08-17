@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     PIPER_VOICE_MODEL: Optional[str] = Field("en_US-lessac-medium.onnx", description="Piper ONNX voice model path")
     STT_MODEL_SIZE: str = Field("small", description="faster-whisper model size")
     VAD_AGGRESSIVENESS: int = Field(1, ge=0, le=3, description="WebRTC VAD aggressiveness mode (0-3)")
+    # Silence duration (ms) after which speech endpoint is declared and ASR finalizes.
+    # Lower values reduce turn-detection latency. Default 800ms balances accuracy vs. responsiveness.
+    VAD_SILENCE_MS: int = Field(800, ge=200, le=3000, description="Silence duration (ms) before utterance endpoint")
+    # How many ms of audio to accumulate before running a partial Whisper transcription.
+    # Lower = more frequent partials but higher CPU. 1500ms gives one partial ~every 1.5s.
+    ASR_CHUNK_MS: int = Field(1500, ge=500, le=5000, description="Audio chunk size (ms) for partial ASR runs")
+    # Minimum interval (ms) between sending partial transcript events to the client.
+    # Prevents flooding the WebSocket with too many partial updates.
+    ASR_PARTIAL_INTERVAL_MS: int = Field(400, ge=100, le=2000, description="Min interval (ms) between partial transcript events")
 
     # CORS
     ALLOWED_ORIGINS: str = Field("http://localhost:3000", description="Comma-separated list of allowed CORS origins")

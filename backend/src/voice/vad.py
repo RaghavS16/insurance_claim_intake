@@ -1,23 +1,31 @@
 """
 Voice Activity Detection using WebRTC VAD (Google's open-source, BSD-licensed
 VAD via the `webrtcvad` Python binding). Standardized on 16kHz mono audio.
+
+Two classes are provided:
+
+UtteranceSegmenter — original segmenter kept for backward compatibility with tests.
+
+SpeechEndpointDetector — new preferred class used by the streaming voice pipeline.
+  Instead of blocking until a complete utterance is ready, it emits (audio_chunk, is_endpoint)
+  tuples continuously. The ASR worker consumes these to build progressive partial transcripts.
+
+  Silence threshold is configurable via settings.VAD_SILENCE_MS (default 800ms).
 """
 import collections
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, Tuple
 
 import webrtcvad
 
 from src.config import settings
 
 SAMPLE_RATE = 16000
-FRAME_DURATION_MS = 30          # 10, 20, or 30 only
+FRAME_DURATION_MS = 30          # 10, 20, or 30 ms only — WebRTC VAD constraint
 FRAME_BYTES = int(SAMPLE_RATE * (FRAME_DURATION_MS / 1000.0) * 2)  # 16-bit = 2 bytes/sample
 
-# Natural silence window (~1400ms) before finalizing utterance (prevents interrupting natural pauses)
+# Legacy constants kept for backward compat with existing tests
 SILENCE_FRAMES_TO_END = int(1400 / FRAME_DURATION_MS)  # ~46 frames
-# Ring buffer size for speech onset detection (300ms)
 START_PADDING_FRAMES = 10
-# Minimum speech duration to filter out clicks, coughs, and breath noise (450ms)
 MIN_SPEECH_FRAMES = int(450 / FRAME_DURATION_MS)
 
 
@@ -41,11 +49,137 @@ def frame_generator(audio_bytes: bytes) -> Generator[Frame, None, None]:
         offset += FRAME_BYTES
 
 
+class SpeechEndpointDetector:
+    """
+    Continuous speech endpoint detector for use in the streaming ASR pipeline.
+
+    Unlike UtteranceSegmenter, this class does NOT block until a complete utterance is
+    ready. Instead, it emits (audio_chunk, is_endpoint) pairs on every frame:
+
+      - is_endpoint=False: speech is ongoing, chunk contains the audio accumulated so far.
+        The ASR worker may run Whisper on this chunk to produce a partial transcript.
+      - is_endpoint=True: silence window expired, chunk contains the complete utterance.
+        The ASR worker should produce the final transcript and forward to the conversation
+        pipeline. The internal buffer is then reset for the next utterance.
+
+    Audio frames that are purely silent before any speech is detected are discarded.
+
+    Parameters
+    ----------
+    aggressiveness : int (0-3)
+        WebRTC VAD aggressiveness. Higher = more aggressive at filtering non-speech.
+    silence_ms : int
+        Duration of consecutive silence (ms) before endpoint is declared.
+    """
+
+    def __init__(
+        self,
+        aggressiveness: Optional[int] = None,
+        silence_ms: Optional[int] = None,
+    ):
+        agg = aggressiveness if aggressiveness is not None else settings.VAD_AGGRESSIVENESS
+        silence = silence_ms if silence_ms is not None else settings.VAD_SILENCE_MS
+        self._vad = webrtcvad.Vad(agg)
+        self._silence_frames = int(silence / FRAME_DURATION_MS)
+        # Onset ring buffer: must have 80% voiced before entering speech
+        self._start_ring: collections.deque = collections.deque(maxlen=10)
+        # Silence ring buffer tracks trailing silence
+        self._end_ring: collections.deque = collections.deque(maxlen=self._silence_frames)
+        self._in_speech = False
+        # Accumulated voiced frames for the current utterance
+        self._voiced_frames: List[Frame] = []
+        self._leftover = b""
+
+    def feed(self, chunk: bytes) -> List[Tuple[bytes, bool]]:
+        """
+        Feed raw PCM16 bytes. Returns a list of (audio_chunk, is_endpoint) tuples.
+
+        When is_endpoint is False the chunk is the audio accumulated so far (partial).
+        When is_endpoint is True the chunk is the complete finalized utterance.
+
+        Only events from speech-active periods are emitted — silent audio before speech
+        onset does not generate any events.
+        """
+        self._leftover += chunk
+        events: List[Tuple[bytes, bool]] = []
+
+        frames = list(frame_generator(self._leftover))
+        if frames:
+            self._leftover = self._leftover[len(frames) * FRAME_BYTES:]
+
+        for frame in frames:
+            is_speech = self._vad.is_speech(frame.bytes, SAMPLE_RATE)
+
+            if not self._in_speech:
+                self._start_ring.append((frame, is_speech))
+                voiced_count = sum(1 for _, s in self._start_ring if s)
+                assert self._start_ring.maxlen is not None
+                if voiced_count >= int(0.8 * self._start_ring.maxlen):
+                    self._in_speech = True
+                    # Include the onset ring buffer to avoid clipping
+                    self._voiced_frames.extend(f for f, _ in self._start_ring)
+                    self._start_ring.clear()
+                    self._end_ring.clear()
+            else:
+                self._voiced_frames.append(frame)
+                self._end_ring.append((frame, is_speech))
+                unvoiced_count = sum(1 for _, s in self._end_ring if not s)
+
+                # Endpoint: full silence ring is unvoiced (≥ 90%)
+                if (
+                    len(self._end_ring) == self._silence_frames
+                    and unvoiced_count >= int(0.9 * self._silence_frames)
+                ):
+                    min_frames = int(200 / FRAME_DURATION_MS)  # 200ms minimum
+                    if len(self._voiced_frames) >= min_frames:
+                        utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)
+                        events.append((utterance_bytes, True))  # final
+                    # Reset for next utterance
+                    self._in_speech = False
+                    self._voiced_frames = []
+                    self._end_ring.clear()
+                    self._start_ring.clear()
+
+        return events
+
+    def peek_partial(self) -> Optional[bytes]:
+        """
+        Return the audio accumulated so far without resetting state.
+        Used by the ASR worker to get a chunk for a partial transcription.
+        Returns None if no speech is currently being tracked.
+        """
+        if not self._in_speech or not self._voiced_frames:
+            return None
+        return b"".join(f.bytes for f in self._voiced_frames)
+
+    def flush(self) -> Optional[bytes]:
+        """
+        Flush any in-progress utterance (called on connection close).
+        Returns utterance bytes or None.
+        """
+        if self._in_speech and len(self._voiced_frames) >= int(200 / FRAME_DURATION_MS):
+            utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)
+            self._in_speech = False
+            self._voiced_frames = []
+            return utterance_bytes
+        return None
+
+    @property
+    def is_in_speech(self) -> bool:
+        return self._in_speech
+
+
+# ---------------------------------------------------------------------------
+# UtteranceSegmenter — kept for backward compatibility with existing tests.
+# New code should use SpeechEndpointDetector.
+# ---------------------------------------------------------------------------
 class UtteranceSegmenter:
     """
-    Stateful segmenter: buffers incoming chunks, tracks voiced activity,
+    Stateful segmenter (legacy): buffers incoming chunks, tracks voiced activity,
     and yields complete utterances only after claimant has finished speaking
-    (1400ms trailing silence with minimum 450ms speech duration).
+    (configurable trailing silence with minimum 450ms speech duration).
+
+    Kept for backward compatibility. New voice pipeline uses SpeechEndpointDetector.
     """
 
     def __init__(self, aggressiveness: Optional[int] = None):
@@ -55,16 +189,13 @@ class UtteranceSegmenter:
         self._end_ring: collections.deque = collections.deque(maxlen=SILENCE_FRAMES_TO_END)
         self._triggered = False
         self._voiced_frames: List[Frame] = []
-        self._leftover = b""  # bytes that didn't fill a complete frame yet
+        self._leftover = b""
 
     def feed(self, chunk: bytes) -> List[bytes]:
-        """
-        Feed raw PCM16 bytes. Returns completed full utterances ready for STT.
-        """
+        """Feed raw PCM16 bytes. Returns completed full utterances ready for STT."""
         self._leftover += chunk
         completed_utterances: List[bytes] = []
 
-        # Consume complete frames
         frames = list(frame_generator(self._leftover))
         if frames:
             consumed = len(frames) * FRAME_BYTES
@@ -76,7 +207,6 @@ class UtteranceSegmenter:
             if not self._triggered:
                 self._start_ring.append((frame, is_speech))
                 num_voiced = len([f for f, speech in self._start_ring if speech])
-                # Start of an utterance: 80% of start ring buffer is voiced
                 if num_voiced >= int(0.8 * START_PADDING_FRAMES):
                     self._triggered = True
                     self._voiced_frames.extend(f for f, _ in self._start_ring)
@@ -86,7 +216,6 @@ class UtteranceSegmenter:
                 self._voiced_frames.append(frame)
                 self._end_ring.append((frame, is_speech))
                 num_unvoiced = len([f for f, speech in self._end_ring if not speech])
-                # End of utterance: full silence window (~1400ms) is unvoiced
                 if len(self._end_ring) == SILENCE_FRAMES_TO_END and num_unvoiced >= int(0.9 * SILENCE_FRAMES_TO_END):
                     if len(self._voiced_frames) >= MIN_SPEECH_FRAMES:
                         utterance_bytes = b"".join(f.bytes for f in self._voiced_frames)

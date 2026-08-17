@@ -28,4 +28,5 @@ numpy>=1.26.0
 
 # Testing & Client Utilities
 pytest>=7.4.3
+pytest-asyncio>=1.4.0
 httpx>=0.25.0

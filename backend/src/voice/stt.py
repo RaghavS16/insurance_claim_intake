@@ -2,14 +2,33 @@
 Speech-to-text service using faster-whisper (CTranslate2 reimplementation of Whisper —
 open-source, MIT-licensed, with automatic CUDA GPU acceleration when available,
 and graceful fallback to CPU inference).
+
+Two public interfaces are provided:
+
+1. transcribe_pcm16(pcm_bytes) -> str
+   Synchronous, one-shot transcription of a complete audio chunk.
+   Used for the /flush path (connection close) and by tests.
+
+2. ASRProvider / WhisperASRProvider
+   Abstract provider interface + concrete faster-whisper implementation.
+   The StreamingASRBuffer uses this internally so the ASR backend is replaceable.
+
+3. StreamingASRBuffer
+   Accumulates audio frames and runs partial + final transcriptions.
+   Partial transcriptions are produced every ASR_CHUNK_MS milliseconds.
+   Final transcription is requested explicitly via finalize().
+
+The WebSocket voice pipeline uses StreamingASRBuffer through the ClaimantASRWorker.
 """
+import abc
 import io
 import logging
 import os
 import sys
+import time
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from faster_whisper import WhisperModel
 
@@ -21,7 +40,11 @@ logger = app_logger
 _model: Optional[WhisperModel] = None
 
 
-def _setup_cuda_dll_paths():
+# ---------------------------------------------------------------------------
+# CUDA / GPU initialization helpers
+# ---------------------------------------------------------------------------
+
+def _setup_cuda_dll_paths() -> None:
     """On Windows, add NVIDIA package bin directories to the DLL search path."""
     if sys.platform == "win32":
         try:
@@ -47,7 +70,6 @@ def _init_whisper_model() -> WhisperModel:
     _setup_cuda_dll_paths()
     model_size = settings.STT_MODEL_SIZE
 
-    # Try CUDA on GPU first
     try:
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
@@ -58,7 +80,6 @@ def _init_whisper_model() -> WhisperModel:
     except Exception as e:
         logger.warning("CUDA initialization failed (%s). Falling back to optimized CPU inference.", e)
 
-    # Fallback to CPU int8
     logger.info("Initializing faster-whisper on CPU (model_size=%s, compute_type=int8)...", model_size)
     return WhisperModel(model_size, device="cpu", compute_type="int8")
 
@@ -70,6 +91,10 @@ def get_model() -> WhisperModel:
         _model = _init_whisper_model()
     return _model
 
+
+# ---------------------------------------------------------------------------
+# Low-level audio helpers
+# ---------------------------------------------------------------------------
 
 def _pcm16_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
     """Wraps raw PCM16 mono audio in a standard 44-byte WAV header in-memory."""
@@ -83,62 +108,201 @@ def _pcm16_to_wav_bytes(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
     return buf.read()
 
 
-def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
+def _run_whisper(pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float]:
     """
-    Transcribe a single utterance (already VAD-segmented) of raw PCM16 mono
-    audio. Returns "" on empty/silent input rather than raising.
+    Run faster-whisper on pcm_bytes and return (text, confidence).
+    Falls back to CPU on CUDA errors. Returns ("", 0.0) on any failure.
     """
     global _model
-    # Ignore audio shorter than 400ms to avoid false noise triggers
-    if len(pcm_bytes) < sample_rate * 2 * 0.4:
-        return ""
+
+    if len(pcm_bytes) < sample_rate * 2 * 0.2:  # < 200ms → skip
+        return "", 0.0
 
     wav_bytes = _pcm16_to_wav_bytes(pcm_bytes, sample_rate)
 
-    try:
-        model = get_model()
+    def _transcribe(model: WhisperModel) -> Tuple[str, float]:
         segments, info = model.transcribe(
             io.BytesIO(wav_bytes),
-            language="en",       # English language pin
-            vad_filter=False,    # already VAD-segmented upstream
+            language="en",
+            vad_filter=False,   # VAD is handled upstream
             beam_size=3,
             temperature=0.0,
             no_speech_threshold=0.6,
         )
         seg_list = list(segments)
+        lang_prob = getattr(info, "language_probability", 1.0)
         valid_texts = [
             seg.text.strip() for seg in seg_list
             if getattr(seg, "no_speech_prob", 0.0) <= 0.6
         ]
-        text = " ".join(valid_texts).strip()
-        logger.info("STT transcribed %d bytes -> %r (lang_prob=%.2f)", len(pcm_bytes), text, getattr(info, "language_probability", 1.0))
-        return text
-    except RuntimeError as re:
-        if "cublas" in str(re).lower() or "cudnn" in str(re).lower() or "cuda" in str(re).lower():
-            logger.warning("CUDA runtime error encountered during transcription: %s. Falling back to CPU model.", re)
+        confidence = lang_prob if valid_texts else 0.0
+        return " ".join(valid_texts).strip(), confidence
+
+    try:
+        model = get_model()
+        text, confidence = _transcribe(model)
+        logger.debug("Whisper: %d bytes → %r (conf=%.2f)", len(pcm_bytes), text, confidence)
+        return text, confidence
+    except RuntimeError as re_err:
+        err_str = str(re_err).lower()
+        if any(k in err_str for k in ("cublas", "cudnn", "cuda")):
+            logger.warning("CUDA runtime error: %s. Falling back to CPU model.", re_err)
             try:
                 _model = WhisperModel(settings.STT_MODEL_SIZE, device="cpu", compute_type="int8")
-                segments, info = _model.transcribe(
-                    io.BytesIO(wav_bytes),
-                    language="en",
-                    vad_filter=False,
-                    beam_size=3,
-                    temperature=0.0,
-                    no_speech_threshold=0.6,
-                )
-                seg_list = list(segments)
-                valid_texts = [
-                    seg.text.strip() for seg in seg_list
-                    if getattr(seg, "no_speech_prob", 0.0) <= 0.6
-                ]
-                text = " ".join(valid_texts).strip()
-                logger.info("STT fallback transcribed %d bytes -> %r", len(pcm_bytes), text)
-                return text
+                text, confidence = _transcribe(_model)
+                return text, confidence
             except Exception as cpu_err:
                 logger.exception("CPU fallback transcription failed: %s", cpu_err)
-                return ""
+                return "", 0.0
         logger.exception("STT transcription failed with runtime error")
-        return ""
+        return "", 0.0
     except Exception:
         logger.exception("STT transcription failed")
+        return "", 0.0
+
+
+# ---------------------------------------------------------------------------
+# Public one-shot API (kept for backward compatibility and /flush path)
+# ---------------------------------------------------------------------------
+
+def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
+    """
+    Transcribe a single complete audio chunk (already VAD-segmented).
+    Returns "" on empty/silent/short input rather than raising.
+
+    This is the legacy one-shot interface. New code should use StreamingASRBuffer
+    or WhisperASRProvider directly.
+    """
+    if len(pcm_bytes) < sample_rate * 2 * 0.4:  # < 400ms
         return ""
+    text, _ = _run_whisper(pcm_bytes, sample_rate)
+    logger.info("STT transcribed %d bytes → %r", len(pcm_bytes), text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# ASRProvider abstraction — makes the ASR backend replaceable
+# ---------------------------------------------------------------------------
+
+class ASRProvider(abc.ABC):
+    """
+    Abstract interface for a streaming-capable ASR provider.
+
+    Implementations must be thread-safe for concurrent partial/final calls.
+    The WhisperASRProvider uses the global singleton WhisperModel.
+    """
+
+    @abc.abstractmethod
+    def transcribe(self, pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float]:
+        """
+        Transcribe pcm_bytes and return (text, confidence).
+        confidence is 0.0 – 1.0; 0.0 means no speech detected.
+        """
+        ...
+
+
+class WhisperASRProvider(ASRProvider):
+    """
+    ASRProvider backed by faster-whisper (singleton model).
+    This is the default production provider.
+    """
+
+    def transcribe(self, pcm_bytes: bytes, sample_rate: int = 16000) -> Tuple[str, float]:
+        return _run_whisper(pcm_bytes, sample_rate)
+
+
+# ---------------------------------------------------------------------------
+# StreamingASRBuffer — progressive partial → final transcription
+# ---------------------------------------------------------------------------
+
+class StreamingASRBuffer:
+    """
+    Accumulates raw PCM16 audio and provides progressive ASR results.
+
+    Usage pattern (driven by ClaimantASRWorker):
+
+        buf = StreamingASRBuffer()
+        buf.push(audio_chunk)            # feed raw audio
+        text, conf = buf.partial()       # get partial transcript (rate-limited internally)
+        text, conf = buf.finalize()      # get final transcript and reset buffer
+
+    The partial() method is rate-limited: it only runs Whisper if at least
+    ASR_CHUNK_MS ms of new audio has been added since the last partial call.
+
+    finalize() always runs Whisper regardless of how much audio is present.
+    After finalize(), the buffer is reset and ready for the next utterance.
+
+    Parameters
+    ----------
+    provider : ASRProvider
+        The ASR backend to use (default: WhisperASRProvider).
+    sample_rate : int
+        Audio sample rate in Hz (must match the mic capture rate — 16000).
+    chunk_ms : int
+        Minimum ms of new audio before a partial transcription is attempted.
+    """
+
+    def __init__(
+        self,
+        provider: Optional[ASRProvider] = None,
+        sample_rate: int = 16000,
+        chunk_ms: Optional[int] = None,
+    ):
+        self._provider = provider or WhisperASRProvider()
+        self._sample_rate = sample_rate
+        self._chunk_ms = chunk_ms if chunk_ms is not None else settings.ASR_CHUNK_MS
+        # bytes required for one chunk window
+        self._chunk_bytes = int(sample_rate * 2 * (self._chunk_ms / 1000.0))
+        self._buffer = b""
+        self._last_partial_bytes = 0  # how many bytes were in the buffer at last partial call
+
+    def push(self, pcm_bytes: bytes) -> None:
+        """Append raw PCM16 audio to the buffer."""
+        self._buffer += pcm_bytes
+
+    def partial(self) -> Tuple[str, float]:
+        """
+        Attempt a partial transcription if enough new audio has accumulated.
+        Returns ("", 0.0) if the rate-limiting window has not expired yet.
+        Always non-destructive — buffer is not consumed.
+        """
+        new_bytes = len(self._buffer) - self._last_partial_bytes
+        if new_bytes < self._chunk_bytes:
+            return "", 0.0
+        self._last_partial_bytes = len(self._buffer)
+        return self._provider.transcribe(self._buffer, self._sample_rate)
+
+    def force_partial(self) -> Tuple[str, float]:
+        """
+        Run a partial transcription unconditionally on whatever is in the buffer.
+        Does NOT reset or advance the rate-limit counter.
+        Returns ("", 0.0) if buffer is too short.
+        """
+        if not self._buffer:
+            return "", 0.0
+        return self._provider.transcribe(self._buffer, self._sample_rate)
+
+    def finalize(self) -> Tuple[str, float]:
+        """
+        Run final transcription on the complete buffer, then reset.
+        Always runs Whisper regardless of buffer size.
+        Returns ("", 0.0) if the buffer is empty or too short.
+        """
+        pcm = self._buffer
+        self._buffer = b""
+        self._last_partial_bytes = 0
+        if not pcm:
+            return "", 0.0
+        return self._provider.transcribe(pcm, self._sample_rate)
+
+    def reset(self) -> None:
+        """Discard buffered audio without transcribing."""
+        self._buffer = b""
+        self._last_partial_bytes = 0
+
+    @property
+    def buffered_ms(self) -> float:
+        """Duration of buffered audio in milliseconds."""
+        if not self._buffer:
+            return 0.0
+        return (len(self._buffer) / 2.0 / self._sample_rate) * 1000.0
