@@ -16,25 +16,17 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db
-from src.database.models import Claim, Document, ConversationTurn, User
-from src.agents.graph import build_conversation_graph, build_evaluation_graph
-from src.agents.evaluation import DOCUMENT_REQUIREMENTS
+from src.database.models import Claim, ConversationTurn, User
+from src.agents.graph import build_conversation_graph
 from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
-from src.utils.validators import sanitize_filename
 from src.utils.logger import app_logger
+from src.agents.policy_check import verify_policy_basic
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
 
-# File upload constraints
-MAX_UPLOAD_SIZE_BYTES = settings.MAX_UPLOAD_SIZE_BYTES
-MIN_UPLOAD_SIZE_BYTES = 100
-ALLOWED_MIME_TYPES = {
-    "image/jpeg", "image/png", "image/webp", "image/gif",
-    "application/pdf",
-}
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf"}
+
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +159,6 @@ def confirm_claim(
     payload: ClaimConfirmRequest = ClaimConfirmRequest(),
     db: Session = Depends(get_db),
 ):
-    """Confirm collected claim details and submit structured claim."""
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
@@ -175,97 +166,35 @@ def confirm_claim(
     enforce_claim_ownership(claim, current_user)
 
     state = dict(getattr(claim, "pipeline_state", None) or {})
-
-    # Check for missing mandatory fields
     missing = state.get("missing_fields", [])
     if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot confirm claim: missing mandatory fields {missing}. Complete intake first.",
-        )
+        raise HTTPException(status_code=400, detail=f"Cannot confirm claim: missing mandatory fields {missing}.")
 
-    # Idempotency check: if already evaluated, return existing result
-    if claim.status == "evaluated" and claim.final_decision is not None:
+    if claim.status == "verified":
         return {
             "ticket_id": claim.ticket_id,
             "status": claim.status,
-            "final_decision": claim.final_decision,
-            "closure_status": claim.closure_status,
-            "coverage_eligible": state.get("coverage_eligible"),
-            "deductible_amount": state.get("deductible_amount"),
-            "payout_amount": state.get("payout_amount"),
-            "assigned_adjuster": state.get("assigned_adjuster"),
-            "response_message": state.get("response_message"),
-            "spoken_response": state.get("spoken_response"),
-            "fraud_score": claim.fraud_score,
-            "fraud_flags": claim.fraud_flags or [],
+            "extracted_data": state.get("extracted_data", {}),
+            "policy_valid": state.get("policy_valid"),
+            "message": "Claim already verified.",
             "_cached": True,
         }
 
-    # Fetch uploaded document types
-    docs = db.query(Document).filter(Document.claim_id == claim.id).all()
-    uploaded_doc_types = [d.document_type for d in docs]
+    policy_id = state.get("extracted_data", {}).get("policy_id")
+    policy_valid = verify_policy_basic(policy_id, db)
 
-    # Set to submitted stage before running evaluation
-    claim.conversation_status = "submitted"  # type: ignore
+    claim.status = "verified"
+    claim.conversation_status = "claimant_confirmed"
+    state["policy_valid"] = policy_valid
+    claim.pipeline_state = state
     db.commit()
-
-    eval_input = {
-        **state,
-        "ticket_id": ticket_id,
-        "confirmed": True,
-        "conversation_status": "submitted",
-        "uploaded_documents": uploaded_doc_types,
-    }
-
-    try:
-        eval_graph = build_evaluation_graph(db=db)
-        eval_result = eval_graph.invoke(eval_input)
-    except Exception as exc:
-        logger.exception("Evaluation pipeline failed for claim %s", ticket_id)
-        raise HTTPException(
-            status_code=500,
-            detail="Claim evaluation failed. Please try again or contact support.",
-        )
-
-    # Persist evaluation outcomes
-    claim.status = "evaluated"  # type: ignore
-    claim.conversation_status = "completed"  # type: ignore
-    eval_result["conversation_status"] = "completed"
-    if eval_result.get("final_decision") is not None:
-        claim.final_decision = eval_result["final_decision"]
-        claim.final_decision = eval_result["final_decision"]  # type: ignore
-    if eval_result.get("closure_status") is not None:
-        claim.closure_status = eval_result["closure_status"]  # type: ignore
-    if eval_result.get("fraud_score") is not None:
-        claim.fraud_score = eval_result["fraud_score"]  # type: ignore
-    claim.fraud_flags = eval_result.get("fraud_flags", [])  # type: ignore
-    claim.pipeline_state = dict(eval_result)  # type: ignore
-
-    adj = eval_result.get("assigned_adjuster")
-    if adj and adj.get("id") not in (None, "UNASSIGNED", "ADJ-DEFAULT"):
-        claim.assigned_adjuster_id = adj.get("id")  # type: ignore
-
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to persist evaluation results for claim %s", ticket_id)
-        raise HTTPException(status_code=500, detail="Failed to save evaluation results.")
 
     return {
         "ticket_id": claim.ticket_id,
         "status": claim.status,
-        "final_decision": claim.final_decision,
-        "closure_status": claim.closure_status,
-        "coverage_eligible": eval_result.get("coverage_eligible"),
-        "deductible_amount": eval_result.get("deductible_amount"),
-        "payout_amount": eval_result.get("payout_amount"),
-        "assigned_adjuster": eval_result.get("assigned_adjuster"),
-        "response_message": eval_result.get("response_message"),
-        "spoken_response": eval_result.get("spoken_response"),
-        "fraud_score": claim.fraud_score,
-        "fraud_flags": eval_result.get("fraud_flags"),
+        "extracted_data": state.get("extracted_data", {}),
+        "policy_valid": policy_valid,
+        "message": "Your claim details have been verified." if policy_valid else "Details verified, but we couldn't confirm your policy. A specialist will follow up.",
     }
 
 
@@ -376,116 +305,6 @@ def list_claims(
     }
 
 
-# ---------------------------------------------------------------------------
-# Document Upload
-# ---------------------------------------------------------------------------
-@router.post("/{ticket_id}/documents")
-async def upload_document(
-    ticket_id: str,
-    request: Request,
-    document_type: str = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    """Upload supporting claim evidence document with actual file-to-disk persistence."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    # Read file content with size check
-    content = await file.read()
-    if len(content) < MIN_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty or too small.")
-    if len(content) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File exceeds {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit.",
-        )
-
-    # Validate document type
-    ctype = str((claim.pipeline_state or {}).get("extracted_data", {}).get("claim_type") or claim.claim_type or "motor")
-    valid_doc_types = DOCUMENT_REQUIREMENTS.get(ctype, ["damage_photo", "repair_estimate", "medical_bill", "boarding_pass", "incident_report"])
-    all_valid_types = set(valid_doc_types) | {"damage_photo", "repair_estimate", "fir", "medical_bill", "boarding_pass", "incident_report"}
-    if document_type not in all_valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid document_type '{document_type}' for claim type '{ctype}'. Allowed: {sorted(all_valid_types)}",
-        )
-
-    # Validate file extension and MIME type
-    original_filename = file.filename or "unnamed"
-    ext = os.path.splitext(original_filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file extension '{ext}'.")
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Unsupported MIME type '{file.content_type}'.")
-
-    # Sanitize filename and write to disk
-    safe_filename = sanitize_filename(original_filename)
-    doc_id = str(uuid.uuid4())
-    upload_dir = Path(settings.UPLOAD_DIR) / ticket_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    file_path = upload_dir / f"{doc_id}{ext}"
-
-    try:
-        file_path.write_bytes(content)
-    except Exception:
-        logger.exception("Failed to write uploaded file to disk")
-        raise HTTPException(status_code=500, detail="File upload failed. Please try again.")
-
-    doc_record = Document(
-        id=doc_id,
-        claim_id=claim.id,
-        document_type=document_type,
-        original_filename=safe_filename,
-        file_path=str(file_path),
-        mime_type=file.content_type,
-        file_size_bytes=len(content),
-    )
-    db.add(doc_record)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        file_path.unlink(missing_ok=True)
-        logger.exception("Failed to persist document record")
-        raise HTTPException(status_code=500, detail="Document record creation failed.")
-
-    return {
-        "document_id": doc_id,
-        "document_type": document_type,
-        "filename": safe_filename,
-        "file_size_bytes": len(content),
-        "status": "uploaded",
-    }
-
-
-@router.get("/{ticket_id}/documents")
-def list_claim_documents(
-    ticket_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """List uploaded documents for a claim."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    docs = db.query(Document).filter(Document.claim_id == claim.id).all()
-    return [
-        {
-            "document_id": str(d.id),
-            "document_type": d.document_type,
-            "filename": d.original_filename,
-            "file_size_bytes": d.file_size_bytes,
-            "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
-        }
-        for d in docs
-    ]
 
 
 # ---------------------------------------------------------------------------

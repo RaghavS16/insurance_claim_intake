@@ -101,14 +101,10 @@ class Claim(Base):
     claimed_amount = Column(Numeric)
     extraction_confidence = Column(Float)
     validation_status = Column(String)
-    fraud_score = Column(Float)
-    fraud_flags = _JSONB(default=list)
-    assigned_adjuster_id = _UUID(ForeignKey("adjusters.id"), nullable=True, default=None)
+    validation_status = Column(String)
 
-    # Claim lifecycle status: draft | submitted | evaluated
+    # Claim lifecycle status: draft | verified
     status = Column(String, default="draft")
-    final_decision = Column(String)
-    closure_status = Column(String)
 
     # Conversational intake lifecycle: not_started | collecting | confirming | intake_complete
     conversation_status = Column(String, default="not_started")
@@ -133,60 +129,3 @@ class ConversationTurn(Base):
     audio_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-
-class Document(Base):
-    """Uploaded claim document / evidence (Phase 2)."""
-    __tablename__ = "documents"
-
-    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = _UUID(ForeignKey("claims.id"), nullable=False, default=None)
-    document_type = Column(String, nullable=False)
-    original_filename = Column(String)
-    file_path = Column(String, nullable=False)
-    mime_type = Column(String)
-    file_size_bytes = Column(Integer)
-    ocr_text = Column(String, nullable=True)
-    extracted_metadata = _JSONB(default=dict)
-    classification_confidence = Column(Float, nullable=True)
-    uploaded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
-class PaymentRequest(Base):
-    """Settlement payment request stub."""
-    __tablename__ = "payment_requests"
-
-    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = _UUID(ForeignKey("claims.id"), nullable=False, default=None)
-    claimed_amount = Column(Numeric)
-    deductible_amount = Column(Numeric)
-    payout_amount = Column(Numeric)
-    status = Column(String, default="pending_finance")
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
-class AuditLog(Base):
-    """Audit log entry."""
-    __tablename__ = "audit_log"
-
-    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = _UUID(ForeignKey("claims.id"), nullable=True, default=None)
-    action = Column(String, nullable=False)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    details = _JSONB(default=dict)
-
-
-class KnowledgeDocument(Base):
-    """Versioned policy wording / IRDAI regulations documents."""
-    __tablename__ = "knowledge_documents"
-
-    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_type = Column(String, nullable=False)  # POLICY_WORDING | IRDAI_REGULATION
-    title = Column(String, nullable=False)
-    version = Column(String, nullable=False)
-    file_reference = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="active")
-    effective_date = Column(Date, nullable=False)
-    uploaded_by = _UUID(ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
-                         onupdate=lambda: datetime.now(timezone.utc))

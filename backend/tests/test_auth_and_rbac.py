@@ -87,42 +87,7 @@ def test_auth_and_rbac_flow(client: TestClient):
     res = client.get("/api/v1/adjuster/claims", headers=claimant_headers)
     assert res.status_code == 403
 
-    # 9. Claimant cannot access policy wording management
-    # 10. Claimant cannot access IRDAI document management
-    # Document listing:
-    res = client.get("/api/v1/knowledge", headers=claimant_headers)
-    assert res.status_code == 403
 
-    # Document upload:
-    upload_file = ("policy.pdf", BytesIO(b"dummy pdf content"), "application/pdf")
-    form_data = {
-        "title": "Motor Policy Wording",
-        "version": "1.0",
-        "document_type": "POLICY_WORDING",
-        "effective_date": "2026-01-01"
-    }
-    res = client.post("/api/v1/knowledge", data=form_data, files={"file": upload_file}, headers=claimant_headers)
-    assert res.status_code == 403
-
-    # 11. Adjuster can access adjuster workflow
-    res = client.get("/api/v1/adjuster/claims", headers=adjuster_headers)
-    assert res.status_code == 200
-
-    # 12. Adjuster can access policy/regulatory document management
-    # Check upload
-    upload_file_adj = ("policy_2.pdf", BytesIO(b"dummy pdf content 2"), "application/pdf")
-    res = client.post("/api/v1/knowledge", data=form_data, files={"file": upload_file_adj}, headers=adjuster_headers)
-    assert res.status_code == 200
-    doc_res = res.json()
-    assert doc_res["title"] == "Motor Policy Wording"
-    assert doc_res["version"] == "1.0"
-
-    # Check list
-    res = client.get("/api/v1/knowledge", headers=adjuster_headers)
-    assert res.status_code == 200
-    docs_list = res.json()
-    assert len(docs_list) > 0
-    assert docs_list[0]["title"] == "Motor Policy Wording"
 
     # 13. Claimant can only access their own claims
     # Claimant creates a claim:
@@ -157,9 +122,7 @@ def test_auth_and_rbac_flow(client: TestClient):
     res = client.post(f"/api/v1/claims/{ticket_a}/confirm", json={"confirmed": True}, headers=headers_b)
     assert res.status_code == 403
 
-    # Claimant B tries to upload documents to Claimant A's claim:
-    res = client.post(f"/api/v1/claims/{ticket_a}/documents", data={"document_type": "damage_photo"}, files={"file": ("photo.jpg", BytesIO(b"dummy photo"), "image/jpeg")}, headers=headers_b)
-    assert res.status_code == 403
+
 
     # Adjuster can access the claim:
     res = client.get(f"/api/v1/claims/{ticket_a}", headers=adjuster_headers)

@@ -10,8 +10,6 @@ Production-hardened entry point. This module acts as a slim orchestrator:
 All business logic has been extracted into dedicated route modules:
 - auth_routes.py: Authentication (signup, login, logout)
 - claim_routes.py: Claim intake, confirmation, documents
-- adjuster_routes.py: Adjuster review pipeline
-- knowledge_routes.py: Knowledge document management
 """
 import logging
 import os
@@ -31,13 +29,13 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal, dispose_engine
-from src.database.models import Base, Claim, Document, Policy, Adjuster, ConversationTurn, User, KnowledgeDocument
+from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User
 from src.api.voice_ws import router as voice_router
 from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
 
 # Route modules
-from src.api import auth_routes, claim_routes, adjuster_routes, knowledge_routes
+from src.api import auth_routes, claim_routes
 
 logger = app_logger
 security_scheme = HTTPBearer(auto_error=False)
@@ -338,17 +336,7 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
-# Adjuster routes — only ADJUSTER role allowed
-app.include_router(
-    adjuster_routes.router,
-    dependencies=[Depends(require_role(["ADJUSTER"]))],
-)
 
-# Knowledge routes — ADJUSTER role required
-app.include_router(
-    knowledge_routes.router,
-    dependencies=[Depends(require_role(["ADJUSTER"]))],
-)
 
 # Voice WebSocket router
 app.include_router(voice_router)

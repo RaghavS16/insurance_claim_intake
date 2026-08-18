@@ -4,14 +4,13 @@ LangGraph orchestration graphs for Claim Intake and Conversation Turns.
 Review 1 Architecture:
 - Intake Graph: Compiled as singleton `_intake_graph` (claim_extractor -> mandatory_field_checker -> next_question_generator).
 - Conversation Graph: Compiled as singleton `_conversation_graph` (turn processor -> extractor -> validator -> next question / confirmation / completion).
-- Evaluation Graph (Review 2/3): Re-exported from `src.agents.evaluation`.
 """
 import logging
 from langgraph.graph import StateGraph, END
 
 from src.agents.state import ClaimState
 from src.agents import nodes
-from src.agents.evaluation import build_evaluation_graph
+
 
 logger = logging.getLogger(__name__)
 
@@ -91,5 +90,4 @@ def build_conversation_graph():
 __all__ = [
     "build_intake_graph",
     "build_conversation_graph",
-    "build_evaluation_graph",
 ]

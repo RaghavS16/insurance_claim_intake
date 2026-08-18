@@ -545,7 +545,7 @@ export default function ClaimantPage() {
       const data = await res.json();
       setConfirmed(true);
       setConversationStatus("completed");
-      setSubmittedMessage(data.response_message || "Claim submitted and recorded successfully!");
+      setSubmittedMessage(data.message || "Claim submitted and recorded successfully!");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorBanner(`Confirm failed: ${msg}`);
@@ -838,7 +838,7 @@ export default function ClaimantPage() {
           {conversationStatus === "completed" && (
             <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-3xl p-5 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/20 animate-scale-up">
               <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-400">
-                <span>🎉</span> Claim Successfully Filed
+                Verified ✅
               </div>
               <p className="text-xs text-emerald-300 leading-relaxed mt-1">
                 {submittedMessage || "Your structured claim intake has been finalized. Ticket reference: " + ticketId}
