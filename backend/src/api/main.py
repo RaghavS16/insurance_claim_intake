@@ -218,7 +218,6 @@ def _init_db_and_seeds():
 
                 # Seed default claimant john@test.com
                 db.add(User(
-                    id="claimant_john",
                     full_name="John Doe",
                     email="john@test.com",
                     password_hash=get_password_hash("ClaimantPassword123!"),
