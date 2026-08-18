@@ -183,10 +183,10 @@ def confirm_claim(
     policy_id = state.get("extracted_data", {}).get("policy_id")
     policy_valid = verify_policy_basic(policy_id, db)
 
-    claim.status = "verified"
-    claim.conversation_status = "claimant_confirmed"
+    claim.status = "verified"  # type: ignore
+    claim.conversation_status = "claimant_confirmed"  # type: ignore
     state["policy_valid"] = policy_valid
-    claim.pipeline_state = state
+    claim.pipeline_state = state  # type: ignore
     db.commit()
 
     return {
