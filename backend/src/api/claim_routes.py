@@ -250,8 +250,6 @@ def get_claim(
         "incident_date": str(claim.incident_date) if claim.incident_date else None,
         "description": claim.description,
         "claimed_amount": float(claim.claimed_amount) if claim.claimed_amount is not None else None,  # type: ignore[arg-type]
-        "final_decision": claim.final_decision,
-        "closure_status": claim.closure_status,
         "extracted_data": state.get("extracted_data") or {},
         "missing_fields": state.get("missing_fields") or [],
         "response_message": state.get("response_message"),
@@ -292,8 +290,6 @@ def list_claims(
             "claim_type": c.claim_type,
             "status": c.status,
             "conversation_status": c.conversation_status,
-            "final_decision": c.final_decision,
-            "closure_status": c.closure_status,
             "extracted_data": st.get("extracted_data") or {},
             "created_at": c.created_at.isoformat() if c.created_at else None,
         })

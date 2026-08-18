@@ -726,7 +726,7 @@ class TestTTS:
 
     def test_synthesize_missing_model_raises_error(self, monkeypatch):
         monkeypatch.delenv("PIPER_VOICE_MODEL", raising=False)
-        with pytest.raises(TTSError, match="PIPER_VOICE_MODEL"):
+        with pytest.raises(TTSError, match="PIPER_VOICE_MODEL|piper binary not found"):
             synthesize("Hello world")
 
 

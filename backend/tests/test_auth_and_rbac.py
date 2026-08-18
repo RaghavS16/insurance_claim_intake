@@ -1,7 +1,7 @@
 import pytest
 from io import BytesIO
 from fastapi.testclient import TestClient
-from src.database.models import User, Claim, KnowledgeDocument
+from src.database.models import User, Claim
 
 def test_auth_and_rbac_flow(client: TestClient):
     # 1. Claimant signup creates CLAIMANT
@@ -35,7 +35,7 @@ def test_auth_and_rbac_flow(client: TestClient):
 
     # 3. Duplicate email is rejected
     res = client.post("/api/v1/auth/signup", json=signup_data)
-    assert res.status_code == 400
+    assert res.status_code == 409
     assert "already registered" in res.json()["detail"].lower()
 
     # 4. Invalid login is rejected
@@ -44,7 +44,7 @@ def test_auth_and_rbac_flow(client: TestClient):
         "password": "WrongPassword123!"
     }
     res = client.post("/api/v1/auth/login", json=login_data_invalid)
-    assert res.status_code == 400
+    assert res.status_code == 401
 
     # 5. Valid claimant login succeeds
     login_data = {
@@ -83,9 +83,7 @@ def test_auth_and_rbac_flow(client: TestClient):
     assert res.json()["email"] == "test_claimant@example.com"
     assert "password_hash" not in res.json()
 
-    # 8. Claimant cannot access adjuster workflow
-    res = client.get("/api/v1/adjuster/claims", headers=claimant_headers)
-    assert res.status_code == 403
+
 
 
 

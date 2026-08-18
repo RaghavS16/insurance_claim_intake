@@ -24,7 +24,7 @@ os.environ["ENVIRONMENT"] = "test"
 # 2. Import application models and session
 from src.config import settings  # noqa: E402
 from src.api.main import app  # noqa: E402
-from src.database.models import Base, Policy, Adjuster, User, KnowledgeDocument  # noqa: E402
+from src.database.models import Base, Policy, Adjuster, User  # noqa: E402
 from src.database.session import get_db, engine as app_engine  # noqa: E402
 from src.utils.auth import get_password_hash  # noqa: E402
 

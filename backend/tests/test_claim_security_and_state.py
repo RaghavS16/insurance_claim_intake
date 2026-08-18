@@ -59,5 +59,5 @@ def test_auth_claim_endpoints(client: TestClient):
     # 4. Verify list_claims returns only USER-A's claims for USER-A
     res_list = client.get("/api/v1/claims", headers=headers_a)
     assert res_list.status_code == 200
-    claims = res_list.json()
+    claims = res_list.json()["items"]
     assert all(c["ticket_id"] == ticket_id for c in claims)
