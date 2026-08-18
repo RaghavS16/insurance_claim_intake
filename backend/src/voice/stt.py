@@ -269,7 +269,7 @@ class StreamingASRBuffer:
         self._chunk_ms = chunk_ms if chunk_ms is not None else settings.ASR_CHUNK_MS
         # bytes required for one chunk window
         self._chunk_bytes = int(sample_rate * 2 * (self._chunk_ms / 1000.0))
-        self._buffer = b""
+        self._buffer = bytearray()
         self._last_partial_bytes = 0  # how many bytes were in the buffer at last partial call
         self._accumulated_text = ""   # confirmed prefix transcript reconciled so far
         self._last_confidence = 0.0
@@ -317,7 +317,7 @@ class StreamingASRBuffer:
 
     def push(self, pcm_bytes: bytes) -> None:
         """Append raw PCM16 audio to the buffer."""
-        self._buffer += pcm_bytes
+        self._buffer.extend(pcm_bytes)
 
     def partial(self) -> Tuple[str, float]:
         """
@@ -345,12 +345,12 @@ class StreamingASRBuffer:
 
         if len(self._buffer) <= window_bytes:
             # Buffer is short, transcribe the entire thing
-            text, conf = self._provider.transcribe(self._buffer, self._sample_rate)
+            text, conf = self._provider.transcribe(bytes(self._buffer), self._sample_rate)
             self._accumulated_text = text
             self._last_confidence = conf
         else:
             # Transcribe only the last 3 seconds of audio (sliding window)
-            window_audio = self._buffer[-window_bytes:]
+            window_audio = bytes(self._buffer[-window_bytes:])
             suffix_text, conf = self._provider.transcribe(window_audio, self._sample_rate)
             
             # Reconcile new window text with previously accumulated text
@@ -364,7 +364,7 @@ class StreamingASRBuffer:
         Run final transcription on the complete buffer, then reset.
         Always runs Whisper on the full audio to ensure maximum accuracy.
         """
-        pcm = self._buffer
+        pcm = bytes(self._buffer)
         self.reset()
         if not pcm:
             return "", 0.0
@@ -372,7 +372,7 @@ class StreamingASRBuffer:
 
     def reset(self) -> None:
         """Discard buffered audio and reset the accumulated transcript."""
-        self._buffer = b""
+        self._buffer = bytearray()
         self._last_partial_bytes = 0
         self._accumulated_text = ""
         self._last_confidence = 0.0

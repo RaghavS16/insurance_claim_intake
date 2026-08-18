@@ -210,6 +210,13 @@ export default function AdjusterPage() {
       setErrorMsg("Please fill in all upload fields.");
       return;
     }
+    
+    // 10MB limit
+    if (uploadFile && uploadFile.size > 10 * 1024 * 1024) {
+      setErrorMsg("File size must be under 10MB.");
+      return;
+    }
+
     setUploadLoading(true);
     setErrorMsg("");
     setSuccessMsg("");

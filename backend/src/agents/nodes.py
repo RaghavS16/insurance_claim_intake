@@ -409,7 +409,7 @@ def _detect_utterance_intent(text: str) -> str:
             if intent in valid_intents:
                 return intent
     except Exception as exc:
-        logger.debug("LLM intent classification failed: %s", exc)
+        logger.error("LLM intent classification failed: %s", exc, exc_info=True)
 
     # Fallback to broad marker matches if LLM failed
     if any(m in lowered for m in REPEAT_MARKERS):
@@ -581,7 +581,7 @@ def claim_extractor(state: ClaimState) -> ClaimState:
             if isinstance(parsed, dict):
                 llm_extracted = parsed
     except Exception as exc:
-        logger.debug("LLM extraction unavailable (%s), using rule-based extraction.", exc)
+        logger.error("LLM extraction unavailable (%s), using rule-based extraction.", exc, exc_info=True)
 
     merged: Dict[str, Any] = {}
 
@@ -850,6 +850,6 @@ def natural_response_generator(state: ClaimState) -> ClaimState:
             state["next_question"] = text
             state["message"] = text
     except Exception as exc:
-        logger.debug("LLM natural response generation failed: %s", exc)
+        logger.error("LLM natural response generation failed: %s", exc, exc_info=True)
         
     return state

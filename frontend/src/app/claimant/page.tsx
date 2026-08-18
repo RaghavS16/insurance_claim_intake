@@ -465,9 +465,9 @@ export default function ClaimantPage() {
   // Text Submission
   const handleTextSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!textInput.trim() || !ticketId || loading) return;
+    if (!textInput.trim() || textInput.length > 1000 || !ticketId || loading) return;
 
-    const userText = textInput.trim();
+    const userText = textInput.trim().substring(0, 1000);
     setTextInput("");
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -740,6 +740,7 @@ export default function ClaimantPage() {
                     type="text"
                     value={textInput}
                     onChange={(e) => setTextInput(e.target.value)}
+                    maxLength={1000}
                     placeholder={isRecording ? "Speak now or type here to interrupt..." : "Type your response here..."}
                     disabled={loading || confirmed}
                     className="flex-1 bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
