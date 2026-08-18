@@ -74,29 +74,43 @@ def test_intake_multi_turn_fills_missing_fields(client):
     assert second["extracted_data"]["policy_id"] == "XYZ123"
 
 
-def test_confirm_before_fields_complete_rejected(client):
-    """Confirming before mandatory fields are complete should fail."""
+def test_verify_blocked_while_fields_missing(client):
+    """Calling verify before mandatory fields are complete should fail with 400."""
     intake = client.post("/api/v1/claims/intake", json={
         "claim_text": "My car was damaged.",
         "input_mode": "text",
     }).json()
 
-    response = client.post(f"/api/v1/claims/{intake['ticket_id']}/confirm", json={"confirmed": True})
+    response = client.post(f"/api/v1/claims/{intake['ticket_id']}/verify")
     assert response.status_code == 400
 
 
-def test_confirm_completes_verification(client):
+def test_verify_completes_verification(client):
     intake = client.post("/api/v1/claims/intake", json={
         "claim_text": "My car was hit by a truck on 2025-07-15 in Mumbai. Policy XYZ123. Repair cost is 50000 rupees.",
         "input_mode": "text",
     }).json()
     ticket_id = intake["ticket_id"]
-    response = client.post(f"/api/v1/claims/{ticket_id}/confirm", json={"confirmed": True})
+    response = client.post(f"/api/v1/claims/{ticket_id}/verify")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "verified"
-    assert data["policy_valid"] is True
+    assert data["policy_verification"]["valid"] is True
     assert "final_decision" not in data
+
+
+def test_failed_verification_never_marks_claim_verified(client):
+    intake = client.post("/api/v1/claims/intake", json={
+        "claim_text": "My car was hit on 2025-07-15. Policy DOES-NOT-EXIST. Repair cost 50000 rupees.",
+        "input_mode": "text",
+    }).json()
+    ticket_id = intake["ticket_id"]
+    response = client.post(f"/api/v1/claims/{ticket_id}/verify")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "verification_failed"
+    assert data["status"] != "verified"
+    assert data["policy_verification"]["valid"] is False
 
 
 def test_get_conversation_history(client):

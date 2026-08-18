@@ -102,10 +102,10 @@ class Claim(Base):
     extraction_confidence = Column(Float)
     validation_status = Column(String)
 
-    # Claim lifecycle status: draft | verified
+    # Claim lifecycle status: draft | verified | verification_failed
     status = Column(String, default="draft")
 
-    # Conversational intake lifecycle: not_started | collecting | confirming | intake_complete
+    # Conversational intake lifecycle: not_started | collecting | reviewing | pending_verification | verified | verification_failed
     conversation_status = Column(String, default="not_started")
 
     # Full structured ClaimState snapshot persisted as JSON between conversational turns

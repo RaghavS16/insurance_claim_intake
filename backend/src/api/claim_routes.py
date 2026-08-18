@@ -152,11 +152,34 @@ async def intake_claim(
     }
 
 
-@router.post("/{ticket_id}/confirm")
-def confirm_claim(
+def _verify_response(claim, state, cached=False):
+    return {
+        "ticket_id": claim.ticket_id,
+        "status": claim.status,
+        "extracted_data": state.get("extracted_data", {}),
+        "policy_verification": state.get("policy_verification"),
+        "message": "Claim already verified.",
+        "_cached": cached,
+    }
+
+
+def _verification_failure_message(reason: str) -> str:
+    messages = {
+        "policy_not_found": "We couldn't find a policy with that number. Please double-check and try again.",
+        "ownership_mismatch": "This policy isn't linked to your account. Please verify the policy number.",
+        "policy_inactive": "This policy is currently inactive.",
+        "policy_not_active_on_event_date": "This policy wasn't active on the date you reported. Please check the incident date and policy number.",
+        "missing_event_date": "We need a valid incident date to verify your policy.",
+        "invalid_event_date": "The incident date couldn't be understood. Please provide it again.",
+        "no_policy_id": "We need your policy number to verify this claim.",
+    }
+    return messages.get(reason, "We couldn't verify your policy. A specialist will follow up.")
+
+
+@router.post("/{ticket_id}/verify")
+def verify_claim(
     ticket_id: str,
     request: Request,
-    payload: ClaimConfirmRequest = ClaimConfirmRequest(),
     db: Session = Depends(get_db),
 ):
     current_user = _resolve_user(request, db)
@@ -168,36 +191,38 @@ def confirm_claim(
     state = dict(getattr(claim, "pipeline_state", None) or {})
     missing = state.get("missing_fields", [])
     if missing:
-        raise HTTPException(status_code=400, detail=f"Cannot confirm claim: missing mandatory fields {missing}.")
+        raise HTTPException(status_code=400, detail=f"Cannot verify claim: missing mandatory fields {missing}.")
 
     if claim.status == "verified":
-        return {
-            "ticket_id": claim.ticket_id,
-            "status": claim.status,
-            "extracted_data": state.get("extracted_data", {}),
-            "policy_valid": state.get("policy_valid"),
-            "message": "Claim already verified.",
-            "_cached": True,
-        }
+        return _verify_response(claim, state, cached=True)
 
-    policy_id = state.get("extracted_data", {}).get("policy_id")
-    event_date = state.get("extracted_data", {}).get("event_date")
-    verification = verify_policy_for_claim(policy_id, event_date, str(current_user.id), db)
-    policy_valid = verification["valid"]
+    extracted = state.get("extracted_data", {})
+    verification = verify_policy_for_claim(
+        policy_id=extracted.get("policy_id"),
+        event_date_str=extracted.get("event_date"),
+        claimant_user_id=str(current_user.id),
+        db=db,
+    )
 
-    if policy_valid:
+    if verification["valid"]:
         claim.status = "verified"  # type: ignore
-    claim.conversation_status = "intake_complete"  # type: ignore
-    state["policy_valid"] = policy_valid
+        claim.conversation_status = "verified"  # type: ignore
+        message = "Your claim details have been verified."
+    else:
+        claim.status = "verification_failed"  # type: ignore
+        claim.conversation_status = "verification_failed"  # type: ignore
+        message = _verification_failure_message(verification.get("reason", ""))
+
+    state["policy_verification"] = verification
     claim.pipeline_state = state  # type: ignore
     db.commit()
 
     return {
         "ticket_id": claim.ticket_id,
         "status": claim.status,
-        "extracted_data": state.get("extracted_data", {}),
-        "policy_valid": policy_valid,
-        "message": "Your claim details have been verified." if policy_valid else "Details verified, but we couldn't confirm your policy. A specialist will follow up.",
+        "extracted_data": extracted,
+        "policy_verification": verification,
+        "message": message,
     }
 
 

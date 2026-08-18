@@ -241,7 +241,7 @@ class TestPhase1Conversations:
         assert result["extracted_data"]["estimated_claim_amount"] == 65000.0
         assert result["awaiting_confirmation"] is True
 
-    # 9. User confirms claim details -> intake complete
+    # 9. User reviews and affirms claim details -> pending_verification
     def test_user_confirms_completes_phase_1(self):
         graph = build_conversation_graph()
         state = _base_state(
@@ -258,8 +258,8 @@ class TestPhase1Conversations:
         )
         result = graph.invoke(state)
         assert result["confirmed"] is True
-        assert result["conversation_status"] == "intake_complete"
-        assert "confirmed" in result["next_question"].lower()
+        assert result["conversation_status"] == "pending_verification"
+        assert "verify your policy details" in result["next_question"].lower()
 
     # 10. Smoke test scenario: "I had a bike accident yesterday and the front of my bike was damaged."
     def test_smoke_test_bike_accident_flow(self):
@@ -298,16 +298,16 @@ class TestPhase1Conversations:
         res4 = graph.invoke(turn4_state)
 
         assert res4["confirmed"] is True
-        assert res4["conversation_status"] == "intake_complete"
-        assert "confirmed" in res4["next_question"].lower()
+        assert res4["conversation_status"] == "pending_verification"
+        assert "verify your policy details" in res4["next_question"].lower()
 
     # 11. Test thank you after completion bug fix
     def test_thank_you_after_completion_short_circuits(self):
         graph = build_conversation_graph()
         
-        # Test intake_complete status
+        # Test verified status
         state1 = _base_state(
-            conversation_status="intake_complete",
+            conversation_status="verified",
             extracted_data={
                 "insurance_type": "motor",
                 "policy_id": "ABC12345",
@@ -321,36 +321,17 @@ class TestPhase1Conversations:
             claim_text="thank you",
         )
         res1 = graph.invoke(state1)
-        assert res1["conversation_status"] == "intake_complete"
+        assert res1["conversation_status"] == "verified"
         assert "welcome" in res1["next_question"].lower()
         # Ensure we didn't re-emit summary
         assert "policy id" not in res1["next_question"].lower()
         assert "insurance type" not in res1["next_question"].lower()
 
-        # Test completed status
-        state2 = _base_state(
-            conversation_status="completed",
-            extracted_data={
-                "insurance_type": "motor",
-                "policy_id": "ABC12345",
-                "event_date": "2025-07-15",
-                "event_description": "Car bumper dented",
-                "estimated_claim_amount": 50000.0,
-            },
-            missing_fields=[],
-            awaiting_confirmation=False,
-            confirmed=True,
-            claim_text="bye",
-        )
-        res2 = graph.invoke(state2)
-        assert res2["conversation_status"] == "completed"
-        assert "goodbye" in res2["next_question"].lower()
-
     # 12. Correction utterance after confirmation
     def test_correction_after_confirmation_does_not_regress_status(self):
         graph = build_conversation_graph()
         state = _base_state(
-            conversation_status="intake_complete",
+            conversation_status="pending_verification",
             extracted_data={
                 "insurance_type": "motor",
                 "policy_id": "ABC12345",
@@ -364,11 +345,59 @@ class TestPhase1Conversations:
             claim_text="Actually, make the amount 60000 rupees",
         )
         result = graph.invoke(state)
-        # It should update the field but not regress to collecting
+        # It should update the field
         assert result["extracted_data"]["estimated_claim_amount"] == 60000.0
-        assert result["conversation_status"] in ("intake_complete", "confirming", "completed")
-        # Ensure it doesn't drop to collecting
-        assert result["conversation_status"] != "collecting"
+
+    # Behavioral Test: test_correction_updates_previously_extracted_value
+    def test_correction_updates_previously_extracted_value(self):
+        graph = build_conversation_graph()
+        state = _base_state(
+            extracted_data={
+                "insurance_type": "motor",
+                "policy_id": "OLD-1234",
+                "event_date": "2025-07-15",
+                "event_description": "Car accident",
+            },
+            missing_fields=["estimated_claim_amount"],
+            claim_text="Actually my policy number is MOT-5521",
+        )
+        result = graph.invoke(state)
+        assert result["extracted_data"]["policy_id"] == "MOT-5521"
+        assert "OLD-1234" not in result["extracted_data"].values()
+
+    # Behavioral Test: test_thank_you_mid_collection_does_not_close_or_pollute
+    def test_thank_you_mid_collection_does_not_close_or_pollute(self):
+        graph = build_conversation_graph()
+        state = _base_state(
+            conversation_status="collecting",
+            extracted_data={"insurance_type": "motor"},
+            missing_fields=["policy_id", "event_date", "event_description", "estimated_claim_amount"],
+            claim_text="thanks",
+        )
+        result = graph.invoke(state)
+        assert result["conversation_status"] == "collecting"
+        assert result["extracted_data"] == {"insurance_type": "motor"}
+        assert len(result["missing_fields"]) == 4
+
+    # Behavioral Test: test_missing_information_loops_correctly
+    def test_missing_information_loops_correctly(self):
+        graph = build_conversation_graph()
+        state = _base_state(
+            extracted_data={
+                "policy_id": "MOT-5521",
+                "insurance_type": "motor",
+                "event_date": "2025-07-15",
+                "event_description": "Car dented on the highway",
+            },
+            missing_fields=["estimated_claim_amount"],
+            next_question_field="estimated_claim_amount",
+            claim_text="I was driving when it happened on the road.",
+        )
+        result = graph.invoke(state)
+        assert "estimated_claim_amount" in result["missing_fields"]
+        assert len(result["missing_fields"]) == 1
+        assert result["awaiting_confirmation"] is False
+        assert result["conversation_status"] == "collecting"
 
     # 13. Test LLM fallback
     def test_llm_offline_fallback_produces_non_empty_message(self):

@@ -27,7 +27,7 @@ class ClaimState(TypedDict, total=False):
     extraction_confidence: float
 
     # ---- Conversational Turn Management ----
-    conversation_status: str             # "not_started" | "collecting" | "confirming" | "intake_complete" | "submitted" | "completed"
+    conversation_status: str             # "not_started" | "collecting" | "reviewing" | "pending_verification" | "verified" | "verification_failed"
     turn_number: int                     # Monotonically increasing turn count
     conversation_history: List[Dict[str, Any]]  # [{turn, speaker, text}]
     next_question: str                   # Natural question or confirmation prompt to be spoken via TTS / displayed

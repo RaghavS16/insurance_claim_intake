@@ -40,7 +40,7 @@ FIELD_NATURAL_QUESTIONS = {
     "policy_id": "Could you provide your policy number?",
     "event_date": "When did the incident happen?",
     "insurance_type": "What type of insurance policy is this for (Health, Senior Health, Home, Travel, Motor, or Cyber)?",
-    "event_description": "Can you describe what happened and the damage or loss caused?",
+    "event_description": "Could you describe, in your own words, what happened and how it affected you?",
     "estimated_claim_amount": "About how much do you estimate the cost or loss will be?",
 }
 
@@ -456,9 +456,15 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     awaiting_conf = state.get("awaiting_confirmation", False)
     current_status = state.get("conversation_status", "collecting")
 
+    # If verification previously failed, treat any new substantive input as a correction attempt
+    if current_status == "verification_failed" and intent in ("correction", "normal_claim_input"):
+        state["conversation_status"] = "collecting"
+        state["awaiting_confirmation"] = False
+        state["confirmed"] = False
+
     # Fix the "thank you after completion" bug specifically
-    # if conversation_status is already "intake_complete", "submitted", or "completed" AND the new intent is gratitude/closing/acknowledgement
-    if current_status in ("intake_complete", "submitted", "completed") and intent in ("gratitude", "closing", "acknowledgement"):
+    # Only fire once a claim is actually verified
+    if current_status in ("verified",) and intent in ("gratitude", "closing", "acknowledgement"):
         state["_skip_extraction"] = True
         state["_skip_all"] = True
         
@@ -501,9 +507,9 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
         if intent == "affirmation":
             state["confirmed"] = True
             state["awaiting_confirmation"] = False
-            state["conversation_status"] = "intake_complete"
+            state["conversation_status"] = "pending_verification"
             state["_skip_extraction"] = True
-            _audit(state, "Claimant confirmed all extracted intake details.")
+            _audit(state, "Claimant reviewed and affirmed extracted details are accurate.")
             return state
 
         if intent in ("rejection", "correction"):
@@ -658,10 +664,10 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
 
     if state.get("confirmed"):
         state["awaiting_confirmation"] = False
-        state["conversation_status"] = "intake_complete"
+        state["conversation_status"] = "pending_verification"   # was "claimant_confirmed"
     elif not missing:
         state["awaiting_confirmation"] = True
-        state["conversation_status"] = "confirming"
+        state["conversation_status"] = "reviewing"               # was "confirming"
     else:
         state["awaiting_confirmation"] = False
         state["conversation_status"] = "collecting"
@@ -683,24 +689,23 @@ def next_question_generator(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
 
-    # 1. Intake complete / Claimant confirmed
-    # "Never re-emit _build_confirmation_summary() outside the single turn where the claimant is first asked to confirm."
-    if state.get("conversation_status") == "intake_complete" or state.get("confirmed"):
-        msg = "Thank you! Your claim details have been confirmed."
+    # 1. Pending verification
+    if state.get("conversation_status") == "pending_verification" or state.get("confirmed"):
+        msg = "Thanks — let me verify your policy details now."
         state["next_question"] = msg
         state["next_question_field"] = ""
         state["message"] = msg
         return state
 
-    # 2. Awaiting confirmation
+    # 2. Awaiting confirmation / Review
     if state.get("awaiting_confirmation"):
         if state.get("summary_already_shown"):
-            msg = "Does everything look correct? Please say yes to confirm, or let me know what needs to be changed."
+            msg = "Does everything look correct? Please say yes to verify, or let me know what needs to be changed."
         else:
             summary = _build_confirmation_summary(state.get("extracted_data", {}))
             msg = (
                 f"I have collected all the basic details for your claim:\n{summary}\n"
-                "Does everything look correct? Please say yes to confirm and submit, or let me know if you would like to change anything."
+                "Does everything look correct? Please say yes to verify, or let me know if you would like to change anything."
             )
             state["summary_already_shown"] = True
             

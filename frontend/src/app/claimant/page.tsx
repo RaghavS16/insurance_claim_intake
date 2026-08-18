@@ -525,31 +525,35 @@ export default function ClaimantPage() {
     }
   };
 
-  // Confirm Claim
-  const handleConfirmSubmit = async () => {
+  // Verify Claim
+  const handleVerify = async () => {
     if (!ticketId || loading) return;
     setErrorBanner("");
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/verify`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ confirmed: true }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `Server returned ${res.status}`);
       }
       const data = await res.json();
-      setConfirmed(true);
-      setConversationStatus("completed");
-      setSubmittedMessage(data.message || "Claim submitted and recorded successfully!");
+      if (data.status === "verified") {
+        setConfirmed(true);
+        setConversationStatus("verified");
+        setSubmittedMessage(data.message || "Claim details verified successfully!");
+      } else {
+        setConversationStatus("verification_failed");
+        setErrorBanner(data.message || "Policy verification failed.");
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorBanner(`Confirm failed: ${msg}`);
+      setErrorBanner(`Verification failed: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -723,14 +727,14 @@ export default function ClaimantPage() {
                     </div>
                   </div>
 
-                  {(conversationStatus === "confirming" || conversationStatus === "intake_complete") && (
+                  {(conversationStatus === "reviewing" || conversationStatus === "pending_verification") && (
                     <button
-                      id="confirm-submit-btn"
-                      onClick={handleConfirmSubmit}
+                      id="verify-details-btn"
+                      onClick={handleVerify}
                       disabled={loading}
                       className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs rounded-2xl shadow-md shadow-emerald-950/20 active:scale-95 transition"
                     >
-                      ✓ Confirm &amp; Submit Claim
+                      ✓ Verify My Details
                     </button>
                   )}
                 </div>
@@ -779,21 +783,23 @@ export default function ClaimantPage() {
               </h2>
               <span
                 className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
-                  conversationStatus === "completed" || conversationStatus === "submitted"
+                  conversationStatus === "verified"
                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    : conversationStatus === "confirming" || conversationStatus === "intake_complete"
+                    : conversationStatus === "verification_failed"
+                    ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                    : conversationStatus === "reviewing" || conversationStatus === "pending_verification"
                     ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
                     : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                 }`}
               >
-                {conversationStatus === "completed"
-                  ? "Completed"
-                  : conversationStatus === "submitted"
-                  ? "Submitted"
-                  : conversationStatus === "intake_complete"
-                  ? "Claimant Confirmed"
-                  : conversationStatus === "confirming"
-                  ? "Confirming"
+                {conversationStatus === "verified"
+                  ? "Verified"
+                  : conversationStatus === "verification_failed"
+                  ? "Verification Failed"
+                  : conversationStatus === "pending_verification"
+                  ? "Pending Verification"
+                  : conversationStatus === "reviewing"
+                  ? "Reviewing"
                   : conversationStatus === "collecting"
                   ? "Collecting Info"
                   : conversationStatus}
@@ -838,13 +844,23 @@ export default function ClaimantPage() {
             </div>
           </div>
 
-          {conversationStatus === "completed" && (
+          {conversationStatus === "verified" && (
             <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-3xl p-5 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/20 animate-scale-up">
               <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-400">
                 Verified ✅
               </div>
               <p className="text-xs text-emerald-300 leading-relaxed mt-1">
-                {submittedMessage || "Your structured claim intake has been finalized. Ticket reference: " + ticketId}
+                {submittedMessage || "Your claim details have been verified. Ticket reference: " + ticketId}
+              </p>
+            </div>
+          )}
+          {conversationStatus === "verification_failed" && (
+            <div className="bg-rose-950/30 border border-rose-500/30 rounded-3xl p-5 text-rose-100 flex flex-col gap-2 shadow-lg shadow-rose-950/20 animate-scale-up">
+              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-rose-400">
+                Verification Failed ⚠️
+              </div>
+              <p className="text-xs text-rose-300 leading-relaxed mt-1">
+                {errorBanner || "Policy verification could not be completed. You can provide updated details or a corrected policy number."}
               </p>
             </div>
           )}

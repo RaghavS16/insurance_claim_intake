@@ -116,8 +116,8 @@ def test_auth_and_rbac_flow(client: TestClient):
     res = client.get(f"/api/v1/claims/{ticket_a}", headers=headers_b)
     assert res.status_code == 403
 
-    # Claimant B tries to confirm Claimant A's claim:
-    res = client.post(f"/api/v1/claims/{ticket_a}/confirm", json={"confirmed": True}, headers=headers_b)
+    # Claimant B tries to verify Claimant A's claim:
+    res = client.post(f"/api/v1/claims/{ticket_a}/verify", headers=headers_b)
     assert res.status_code == 403
 
 
