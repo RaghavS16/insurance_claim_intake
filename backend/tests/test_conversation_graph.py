@@ -32,7 +32,7 @@ def _base_state(**overrides) -> dict:
     state = {
         "claim_text": "",
         "extracted_data": {},
-        "missing_fields": ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"],
+        "missing_fields": ["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"],
         "field_status": {},
         "next_question": INITIAL_PROMPT,
         "next_question_field": "",
@@ -162,11 +162,11 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
 
         data = result["extracted_data"]
-        assert data["claim_type"] == "motor"
+        assert data["insurance_type"] == "motor"
         assert data["policy_id"] == "ABC12345"
-        assert data["claimed_amount"] == 50000.0
-        assert data["incident_date"] is not None
-        assert "bumper" in data["damage_description"].lower()
+        assert data["estimated_claim_amount"] == 50000.0
+        assert data["event_date"] is not None
+        assert "bumper" in data["event_description"].lower()
         assert result["missing_fields"] == []
         assert result["awaiting_confirmation"] is True
         assert "does everything look correct" in result["next_question"].lower()
@@ -179,9 +179,9 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
 
         data = result["extracted_data"]
-        assert data["claim_type"] == "travel"
+        assert data["insurance_type"] == "travel"
         assert data["policy_id"] == "TRV-3301"
-        assert data["claimed_amount"] == 25000.0
+        assert data["estimated_claim_amount"] == 25000.0
         assert result["missing_fields"] == []
 
     # 5. Free-form senior health claim
@@ -192,9 +192,9 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
 
         data = result["extracted_data"]
-        assert data["claim_type"] == "senior_health"
+        assert data["insurance_type"] == "senior_health"
         assert data["policy_id"] == "SNR-9912"
-        assert data["claimed_amount"] == 80000.0
+        assert data["estimated_claim_amount"] == 80000.0
 
     # 6. Free-form cyber claim
     def test_cyber_claim_free_form(self):
@@ -204,9 +204,9 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
 
         data = result["extracted_data"]
-        assert data["claim_type"] == "cyber"
+        assert data["insurance_type"] == "cyber"
         assert data["policy_id"] == "CYB-8820"
-        assert data["claimed_amount"] == 150000.0
+        assert data["estimated_claim_amount"] == 150000.0
 
     # 7. Partial narrative: asks only for missing fields
     def test_partial_narrative_asks_only_missing(self):
@@ -216,11 +216,11 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
 
         data = result["extracted_data"]
-        assert data["claim_type"] == "motor"
+        assert data["insurance_type"] == "motor"
         assert data["policy_id"] == "MOT-5521"
-        assert "claimed_amount" in result["missing_fields"]
+        assert "estimated_claim_amount" in result["missing_fields"]
         assert "policy_id" not in result["missing_fields"]
-        assert "incident_date" not in result["missing_fields"]
+        assert "event_date" not in result["missing_fields"]
         assert "estimate" in result["next_question"].lower() or "cost" in result["next_question"].lower() or "loss" in result["next_question"].lower()
 
     # 8. User correction during confirmation
@@ -228,18 +228,18 @@ class TestPhase1Conversations:
         graph = build_conversation_graph()
         state = _base_state(
             extracted_data={
-                "claim_type": "motor",
+                "insurance_type": "motor",
                 "policy_id": "ABC12345",
-                "incident_date": "2025-07-15",
-                "damage_description": "Car bumper dented",
-                "claimed_amount": 50000.0,
+                "event_date": "2025-07-15",
+                "event_description": "Car bumper dented",
+                "estimated_claim_amount": 50000.0,
             },
             missing_fields=[],
             awaiting_confirmation=True,
             claim_text="Actually, make the amount 65000 rupees",
         )
         result = graph.invoke(state)
-        assert result["extracted_data"]["claimed_amount"] == 65000.0
+        assert result["extracted_data"]["estimated_claim_amount"] == 65000.0
         assert result["awaiting_confirmation"] is True
 
     # 9. User confirms claim details -> intake complete
@@ -247,11 +247,11 @@ class TestPhase1Conversations:
         graph = build_conversation_graph()
         state = _base_state(
             extracted_data={
-                "claim_type": "motor",
+                "insurance_type": "motor",
                 "policy_id": "ABC12345",
-                "incident_date": "2025-07-15",
-                "damage_description": "Car bumper dented",
-                "claimed_amount": 50000.0,
+                "event_date": "2025-07-15",
+                "event_description": "Car bumper dented",
+                "estimated_claim_amount": 50000.0,
             },
             missing_fields=[],
             awaiting_confirmation=True,
@@ -270,11 +270,11 @@ class TestPhase1Conversations:
         turn1_state = _base_state(claim_text="I had a bike accident yesterday and the front of my bike was damaged.")
         res1 = graph.invoke(turn1_state)
 
-        assert res1["extracted_data"]["claim_type"] == "motor"
-        assert res1["extracted_data"]["incident_date"] is not None
-        assert "bike" in res1["extracted_data"]["damage_description"].lower()
+        assert res1["extracted_data"]["insurance_type"] == "motor"
+        assert res1["extracted_data"]["event_date"] is not None
+        assert "bike" in res1["extracted_data"]["event_description"].lower()
         assert "policy_id" in res1["missing_fields"]
-        assert "claimed_amount" in res1["missing_fields"]
+        assert "estimated_claim_amount" in res1["missing_fields"]
         assert res1["awaiting_confirmation"] is False
 
         # Step 2: Claimant provides policy number
@@ -282,14 +282,14 @@ class TestPhase1Conversations:
         res2 = graph.invoke(turn2_state)
 
         assert res2["extracted_data"]["policy_id"] == "MOT-5521"
-        assert "claimed_amount" in res2["missing_fields"]
+        assert "estimated_claim_amount" in res2["missing_fields"]
         assert "policy_id" not in res2["missing_fields"]
 
         # Step 3: Claimant provides estimated loss amount
         turn3_state = {**res2, "claim_text": "The estimated repair cost is 15000 rupees"}
         res3 = graph.invoke(turn3_state)
 
-        assert res3["extracted_data"]["claimed_amount"] == 15000.0
+        assert res3["extracted_data"]["estimated_claim_amount"] == 15000.0
         assert res3["missing_fields"] == []
         assert res3["awaiting_confirmation"] is True
         assert "does everything look correct" in res3["next_question"].lower()
@@ -310,11 +310,11 @@ class TestPhase1Conversations:
         state1 = _base_state(
             conversation_status="claimant_confirmed",
             extracted_data={
-                "claim_type": "motor",
+                "insurance_type": "motor",
                 "policy_id": "ABC12345",
-                "incident_date": "2025-07-15",
-                "damage_description": "Car bumper dented",
-                "claimed_amount": 50000.0,
+                "event_date": "2025-07-15",
+                "event_description": "Car bumper dented",
+                "estimated_claim_amount": 50000.0,
             },
             missing_fields=[],
             awaiting_confirmation=False,
@@ -332,11 +332,11 @@ class TestPhase1Conversations:
         state2 = _base_state(
             conversation_status="completed",
             extracted_data={
-                "claim_type": "motor",
+                "insurance_type": "motor",
                 "policy_id": "ABC12345",
-                "incident_date": "2025-07-15",
-                "damage_description": "Car bumper dented",
-                "claimed_amount": 50000.0,
+                "event_date": "2025-07-15",
+                "event_description": "Car bumper dented",
+                "estimated_claim_amount": 50000.0,
             },
             missing_fields=[],
             awaiting_confirmation=False,
@@ -353,11 +353,11 @@ class TestPhase1Conversations:
         state = _base_state(
             conversation_status="claimant_confirmed",
             extracted_data={
-                "claim_type": "motor",
+                "insurance_type": "motor",
                 "policy_id": "ABC12345",
-                "incident_date": "2025-07-15",
-                "damage_description": "Car bumper dented",
-                "claimed_amount": 50000.0,
+                "event_date": "2025-07-15",
+                "event_description": "Car bumper dented",
+                "estimated_claim_amount": 50000.0,
             },
             missing_fields=[],
             awaiting_confirmation=False,
@@ -366,7 +366,7 @@ class TestPhase1Conversations:
         )
         result = graph.invoke(state)
         # It should update the field but not regress to collecting
-        assert result["extracted_data"]["claimed_amount"] == 60000.0
+        assert result["extracted_data"]["estimated_claim_amount"] == 60000.0
         assert result["conversation_status"] in ("claimant_confirmed", "confirming", "completed")
         # Ensure it doesn't drop to collecting
         assert result["conversation_status"] != "collecting"

@@ -12,6 +12,7 @@ from langchain_ollama import ChatOllama
 
 from src.config import settings
 from src.agents.state import ClaimState
+from src.agents.constants import SUPPORTED_INSURANCE_TYPES, INSURANCE_TYPE_KEYS
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -23,36 +24,27 @@ llm = ChatOllama(
     timeout=10,
 )
 
-REQUIRED_FIELDS = ["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]
+REQUIRED_FIELDS = ["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"]
 
 INITIAL_PROMPT = "Please tell me what happened. Describe the incident in your own words, and I'll collect the details I need."
 
 FIELD_HUMAN_NAMES = {
     "policy_id": "policy number",
-    "incident_date": "incident date",
-    "claim_type": "insurance type",
-    "damage_description": "incident description",
-    "claimed_amount": "estimated loss or damage cost",
+    "event_date": "incident date",
+    "insurance_type": "insurance type",
+    "event_description": "incident description",
+    "estimated_claim_amount": "estimated loss or damage cost",
 }
 
 FIELD_NATURAL_QUESTIONS = {
     "policy_id": "Could you provide your policy number?",
-    "incident_date": "When did the incident happen?",
-    "claim_type": "What type of insurance policy is this for (Health, Senior Health, Home, Travel, Motor, or Cyber)?",
-    "damage_description": "Can you describe what happened and the damage or loss caused?",
-    "claimed_amount": "About how much do you estimate the cost or loss will be?",
+    "event_date": "When did the incident happen?",
+    "insurance_type": "What type of insurance policy is this for (Health, Senior Health, Home, Travel, Motor, or Cyber)?",
+    "event_description": "Can you describe what happened and the damage or loss caused?",
+    "estimated_claim_amount": "About how much do you estimate the cost or loss will be?",
 }
 
-CLAIM_TYPE_DISPLAY = {
-    "health": "Health",
-    "senior_health": "Senior Health",
-    "home": "Home",
-    "travel": "Travel",
-    "motor": "Motor",
-    "cyber": "Cyber",
-}
 
-VALID_CLAIM_TYPES = {"health", "senior_health", "home", "travel", "motor", "cyber"}
 
 UNKNOWN_SENTINEL = "UNKNOWN"
 
@@ -227,15 +219,15 @@ def _identify_field_from_utterance(text: str, fallback_field: Optional[str] = No
     """Identify which claim field a user is referring to in a correction or deferral."""
     lowered = text.lower()
     if any(w in lowered for w in ("amount", "cost", "rupees", "rs", "price", "estimate", "quote", "bill")):
-        return "claimed_amount"
+        return "estimated_claim_amount"
     if any(w in lowered for w in ("policy", "policy number", "policy id", "policy #")):
         return "policy_id"
     if any(w in lowered for w in ("date", "incident date", "happened on", "occurred on", "yesterday", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")):
-        return "incident_date"
+        return "event_date"
     if any(w in lowered for w in ("insurance type", "claim type", "health", "senior health", "home", "travel", "motor", "cyber")):
-        return "claim_type"
+        return "insurance_type"
     if any(w in lowered for w in ("damage", "description", "details", "hit", "crash", "collision", "bumper", "hospital", "luggage", "hacked", "fire", "accident")):
-        return "damage_description"
+        return "event_description"
     return fallback_field
 
 
@@ -259,11 +251,11 @@ def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str]
         if m_code and m_code.group(1).upper() not in FILLER_OR_GREETING_WORDS:
             result["policy_id"] = m_code.group(1).upper()
 
-    # 2. Claimed Amount
-    if target_field == "claimed_amount":
+    # 2. Estimated Claim Amount
+    if target_field == "estimated_claim_amount":
         amt = _coerce_amount(clean)
         if amt is not None and amt > 0:
-            result["claimed_amount"] = amt
+            result["estimated_claim_amount"] = amt
     else:
         m_amt = re.search(
             r"(?:cost|repair|damage|claimed|loss|estimate|amount|total|bill|worth|value|around|about|₹|rs\.?)\s*(?:is|of|around|about)?\s*[:]?\s*(\d+(?:[,\s]\d+)*(?:\.\d+)?)",
@@ -273,31 +265,31 @@ def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str]
         if m_amt:
             amt = _coerce_amount(m_amt.group(1))
             if amt is not None and amt > 0:
-                result["claimed_amount"] = amt
+                result["estimated_claim_amount"] = amt
         else:
             m_currency = re.search(r"(\d+(?:[,\s]\d+)*(?:\.\d+)?)\s*(?:rupees|rs\.?|inr|usd|\$)", clean, re.IGNORECASE)
             if m_currency:
                 amt = _coerce_amount(m_currency.group(1))
                 if amt is not None and amt > 0:
-                    result["claimed_amount"] = amt
+                    result["estimated_claim_amount"] = amt
 
-    # 3. Claim Type
+    # 3. Insurance Type
     inferred_type = _infer_insurance_type(clean)
     if inferred_type:
-        result["claim_type"] = inferred_type
+        result["insurance_type"] = inferred_type
 
-    # 4. Incident Date
+    # 4. Event Date
     norm_date = _normalize_date(clean)
     if norm_date:
-        result["incident_date"] = norm_date
+        result["event_date"] = norm_date
 
-    # 5. Damage Description
-    if target_field == "damage_description" and len(clean) >= 3:
+    # 5. Event Description
+    if target_field == "event_description" and len(clean) >= 3:
         if clean.upper() not in FILLER_OR_GREETING_WORDS:
-            result["damage_description"] = clean
+            result["event_description"] = clean
     elif any(w in clean.lower() for w in ("damage", "damaged", "hit", "accident", "crash", "broken", "leak", "flood", "dent", "loss", "scratch", "destroyed", "bumper", "hospital", "luggage", "hacked", "fire", "stolen", "surgery", "injured")):
         if clean.upper() not in FILLER_OR_GREETING_WORDS:
-            result["damage_description"] = clean
+            result["event_description"] = clean
 
     return result
 
@@ -307,16 +299,16 @@ Our supported insurance types are ONLY: health, senior_health, home, travel, mot
 Return ONLY valid JSON matching this schema:
 {{
   "policy_id": "string or null",
-  "incident_date": "YYYY-MM-DD or null",
-  "claim_type": "health|senior_health|home|travel|motor|cyber or null",
-  "damage_description": "string or null",
-  "claimed_amount": number or null
+  "event_date": "YYYY-MM-DD or null",
+  "insurance_type": "health|senior_health|home|travel|motor|cyber or null",
+  "event_description": "string or null",
+  "estimated_claim_amount": number or null
 }}
 
 Rules:
-1. claim_type MUST be one of: health, senior_health, home, travel, motor, cyber. Do NOT use auto, car, or business.
-2. claimed_amount must be a numeric value (not a string).
-3. incident_date must be in ISO format YYYY-MM-DD. Convert 'yesterday' or 'today' relative to current context.
+1. insurance_type MUST be one of: health, senior_health, home, travel, motor, cyber. Do NOT use auto, car, or business.
+2. estimated_claim_amount must be a numeric value (not a string).
+3. event_date must be in ISO format YYYY-MM-DD. Convert 'yesterday' or 'today' relative to current context.
 4. Do NOT extract generic words (e.g. 'YOU', 'HELLO', 'YES', 'OKAY') as policy IDs.
 
 Current context question: "{target_field}"
@@ -592,26 +584,31 @@ def claim_extractor(state: ClaimState) -> ClaimState:
         if clean_pol not in FILLER_OR_GREETING_WORDS and len(clean_pol) >= 3:
             merged["policy_id"] = clean_pol
 
-    # Incident Date
-    inc_date = heuristic.get("incident_date") or _normalize_date(str(llm_extracted.get("incident_date", "")))
+    # Event Date
+    inc_date = heuristic.get("event_date") or _normalize_date(str(llm_extracted.get("event_date", "")))
     if inc_date:
-        merged["incident_date"] = inc_date
+        merged["event_date"] = inc_date
 
-    # Claim Type
-    ctype = heuristic.get("claim_type") or llm_extracted.get("claim_type")
-    if ctype and str(ctype).lower() in VALID_CLAIM_TYPES:
-        merged["claim_type"] = str(ctype).lower()
+    # Insurance Type: LLM first, validated against SUPPORTED_INSURANCE_TYPES, keyword rules as fallback only
+    llm_type = llm_extracted.get("insurance_type")
+    if llm_type and str(llm_type).lower() in INSURANCE_TYPE_KEYS:
+        itype = str(llm_type).lower()
+    else:
+        itype = heuristic.get("insurance_type")  # keyword fallback (_infer_insurance_type result)
 
-    # Damage Description
-    desc = heuristic.get("damage_description") or llm_extracted.get("damage_description")
+    if itype and itype in INSURANCE_TYPE_KEYS:
+        merged["insurance_type"] = itype
+
+    # Event Description
+    desc = heuristic.get("event_description") or llm_extracted.get("event_description")
     if desc and isinstance(desc, str) and len(desc.strip()) >= 3:
         if desc.strip().upper() not in FILLER_OR_GREETING_WORDS:
-            merged["damage_description"] = desc.strip()
+            merged["event_description"] = desc.strip()
 
-    # Claimed Amount
-    amt = heuristic.get("claimed_amount") or _coerce_amount(llm_extracted.get("claimed_amount"))
+    # Estimated Claim Amount
+    amt = heuristic.get("estimated_claim_amount") or _coerce_amount(llm_extracted.get("estimated_claim_amount"))
     if amt is not None and amt > 0:
-        merged["claimed_amount"] = amt
+        merged["estimated_claim_amount"] = amt
 
     for k, v in merged.items():
         if v is not None and v != UNKNOWN_SENTINEL:
@@ -722,7 +719,7 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
     if len(missing) == len(REQUIRED_FIELDS) and not state.get("extracted_data"):
         state["next_question"] = INITIAL_PROMPT
-        state["next_question_field"] = "claim_type"
+        state["next_question_field"] = "insurance_type"
         state["message"] = INITIAL_PROMPT
         return state
 
@@ -747,14 +744,14 @@ def next_question_generator(state: ClaimState) -> ClaimState:
         if recent:
             first_ack = recent[0]
             ack_val = state.get("extracted_data", {}).get(first_ack)
-            if first_ack == "claim_type" and ack_val:
-                disp = CLAIM_TYPE_DISPLAY.get(str(ack_val), str(ack_val).title())
+            if first_ack == "insurance_type" and ack_val:
+                disp = SUPPORTED_INSURANCE_TYPES.get(str(ack_val), str(ack_val).title())
                 ack_prefix = f"Got it, a {disp} insurance claim. "
-            elif first_ack == "incident_date" and ack_val:
+            elif first_ack == "event_date" and ack_val:
                 ack_prefix = f"Thank you. "
             elif first_ack == "policy_id" and ack_val:
                 ack_prefix = f"Got your policy number {ack_val}. "
-            elif first_ack == "claimed_amount" and ack_val:
+            elif first_ack == "estimated_claim_amount" and ack_val:
                 ack_prefix = f"Understood, estimated at {ack_val}. "
             else:
                 ack_prefix = "Thank you. "
@@ -769,12 +766,12 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
 def _build_confirmation_summary(data: Dict[str, Any]) -> str:
     """Generate a clean human-readable summary of collected claim fields."""
-    ctype_raw = data.get("claim_type", "")
-    ctype_disp = CLAIM_TYPE_DISPLAY.get(ctype_raw, str(ctype_raw).title() if ctype_raw else "Not specified")
+    ctype_raw = data.get("insurance_type", "")
+    ctype_disp = SUPPORTED_INSURANCE_TYPES.get(ctype_raw, str(ctype_raw).title() if ctype_raw else "Not specified")
     pol_id = data.get("policy_id", "Not provided")
-    date_val = data.get("incident_date", "Not provided")
-    desc = data.get("damage_description", "Not provided")
-    amt_val = data.get("claimed_amount")
+    date_val = data.get("event_date", "Not provided")
+    desc = data.get("event_description", "Not provided")
+    amt_val = data.get("estimated_claim_amount")
     amt_disp = f"₹{amt_val:,.2f}" if isinstance(amt_val, (int, float)) else str(amt_val or "Not provided")
 
     return (

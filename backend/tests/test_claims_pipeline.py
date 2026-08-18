@@ -125,8 +125,8 @@ def test_get_claim_by_ticket_id(client):
     assert res.status_code == 200
     data = res.json()
     assert data["ticket_id"] == tid
-    assert data["claim_type"] == "cyber"
-    assert data["claimed_amount"] == 100000.0
+    assert data["insurance_type"] == "cyber"
+    assert data["estimated_claim_amount"] == 100000.0
 
 
 def test_nonexistent_ticket_id_returns_404(client):

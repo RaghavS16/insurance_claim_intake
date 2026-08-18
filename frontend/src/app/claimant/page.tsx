@@ -2,15 +2,16 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { SUPPORTED_INSURANCE_TYPES } from "../../lib/constants";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface ExtractedData {
   policy_id?: string | null;
-  incident_date?: string | null;
-  claim_type?: string | null;
-  damage_description?: string | null;
-  claimed_amount?: number | null;
+  event_date?: string | null;
+  insurance_type?: string | null;
+  event_description?: string | null;
+  estimated_claim_amount?: number | null;
 }
 
 interface TranscriptSegment {
@@ -44,7 +45,7 @@ export default function ClaimantPage() {
   const [agentState, setAgentState] = useState<string>("listening"); // listening, thinking, speaking
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
   const [missingFields, setMissingFields] = useState<string[]>([
-    "policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"
+    "policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"
   ]);
   const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -146,7 +147,7 @@ export default function ClaimantPage() {
       setSubmittedMessage("");
       setExtractedData({});
       setPartialSegments(new Map());
-      setMissingFields(["policy_id", "incident_date", "claim_type", "damage_description", "claimed_amount"]);
+      setMissingFields(["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"]);
       setHistory([
         {
           turn: 1,
@@ -808,28 +809,30 @@ export default function ClaimantPage() {
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
                 <span className="text-slate-400 font-medium">Insurance Category</span>
-                <span className="font-semibold text-cyan-300 capitalize">
-                  {extractedData.claim_type || <span className="text-slate-600 font-normal italic">Unclassified</span>}
+                <span className="font-semibold text-cyan-300">
+                  {extractedData.insurance_type
+                    ? SUPPORTED_INSURANCE_TYPES[extractedData.insurance_type as keyof typeof SUPPORTED_INSURANCE_TYPES] || extractedData.insurance_type
+                    : <span className="text-slate-600 font-normal italic">Unclassified</span>}
                 </span>
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
                 <span className="text-slate-400 font-medium">Incident Date</span>
                 <span className="font-medium text-slate-200">
-                  {extractedData.incident_date || <span className="text-slate-600 font-normal italic text-slate-500">Not detected</span>}
+                  {extractedData.event_date || <span className="text-slate-600 font-normal italic text-slate-500">Not detected</span>}
                 </span>
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
                 <span className="text-slate-400 font-medium">Claim Estimate</span>
                 <span className="font-bold text-emerald-400">
-                  {extractedData.claimed_amount != null
-                    ? `₹${Number(extractedData.claimed_amount).toLocaleString("en-IN")}`
+                  {extractedData.estimated_claim_amount != null
+                    ? `₹${Number(extractedData.estimated_claim_amount).toLocaleString("en-IN")}`
                     : <span className="text-slate-600 font-normal italic">Calculating...</span>}
                 </span>
               </div>
               <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex flex-col gap-1.5">
                 <span className="text-slate-400 font-medium">Incident Description</span>
                 <p className="text-slate-300 leading-relaxed text-[11px]">
-                  {extractedData.damage_description || <span className="text-slate-600 italic">Please describe the accident or incident details.</span>}
+                  {extractedData.event_description || <span className="text-slate-600 italic">Please describe the accident or incident details.</span>}
                 </p>
               </div>
             </div>

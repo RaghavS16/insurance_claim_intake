@@ -46,12 +46,24 @@ def _seed_db(db):
         ("EXP-0001", "motor", 300000, 5000, date(2020, 1, 1), date(2022, 12, 31), False),
     ]
 
+    claimant_id = "00000000-0000-0000-0000-000000000001"
+    if not db.query(User).filter(User.id == claimant_id).first():
+        db.add(User(
+            id=claimant_id,
+            full_name="Test Claimant",
+            email="claimant@test.com",
+            password_hash=get_password_hash("password123"),
+            role="CLAIMANT",
+            status="active"
+        ))
+
     for pol_num, ptype, cov, ded, eff, exp, active in test_policies:
         if db.query(Policy).filter(Policy.policy_number == pol_num).first() is None:
+            c_id = claimant_id if pol_num == "XYZ123" else str(uuid.uuid4())
             db.add(Policy(
                 id=str(uuid.uuid4()),
                 policy_number=pol_num,
-                customer_id=str(uuid.uuid4()),
+                customer_id=c_id,
                 policy_type=ptype,
                 coverage_amount=cov,
                 deductible=ded,

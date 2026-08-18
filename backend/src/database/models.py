@@ -93,14 +93,13 @@ class Claim(Base):
     customer_id = Column(String, nullable=True, default=None)
     policy_id = _UUID(ForeignKey("policies.id"), nullable=True, default=None)
     claim_date = Column(Date, default=date.today)
-    incident_date = Column(Date)
+    event_date = Column(Date)
     # Strict 6 types: health | senior_health | home | travel | motor | cyber
-    claim_type = Column(String)
+    insurance_type = Column(String)
     input_mode = Column(String, default="text")  # voice | text
-    description = Column(String)
-    claimed_amount = Column(Numeric)
+    event_description = Column(String)
+    estimated_claim_amount = Column(Numeric)
     extraction_confidence = Column(Float)
-    validation_status = Column(String)
     validation_status = Column(String)
 
     # Claim lifecycle status: draft | verified

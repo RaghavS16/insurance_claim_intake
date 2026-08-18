@@ -113,18 +113,18 @@ async def process_claimant_turn(
     result = await asyncio.get_event_loop().run_in_executor(None, lambda: graph.invoke(graph_input))
 
     setattr(claim, "pipeline_state", dict(result))
-    setattr(claim, "claim_type", result.get("extracted_data", {}).get("claim_type"))
-    setattr(claim, "description", result.get("extracted_data", {}).get("damage_description"))
-    setattr(claim, "claimed_amount", result.get("extracted_data", {}).get("claimed_amount"))
+    setattr(claim, "insurance_type", result.get("extracted_data", {}).get("insurance_type"))
+    setattr(claim, "event_description", result.get("extracted_data", {}).get("event_description"))
+    setattr(claim, "estimated_claim_amount", result.get("extracted_data", {}).get("estimated_claim_amount"))
     setattr(claim, "conversation_status", result.get("conversation_status", "collecting"))
 
     if result.get("extraction_confidence") is not None:
         setattr(claim, "extraction_confidence", float(result["extraction_confidence"]))
 
-    incident_date_str = result.get("extracted_data", {}).get("incident_date")
-    if incident_date_str:
+    event_date_str = result.get("extracted_data", {}).get("event_date")
+    if event_date_str:
         try:
-            setattr(claim, "incident_date", datetime.strptime(incident_date_str, "%Y-%m-%d").date())
+            setattr(claim, "event_date", datetime.strptime(event_date_str, "%Y-%m-%d").date())
         except ValueError:
             pass
 

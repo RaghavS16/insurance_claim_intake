@@ -21,7 +21,7 @@ from src.agents.graph import build_conversation_graph
 from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
-from src.agents.policy_check import verify_policy_basic
+from src.agents.policy_check import verify_policy_for_claim
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -181,7 +181,9 @@ def confirm_claim(
         }
 
     policy_id = state.get("extracted_data", {}).get("policy_id")
-    policy_valid = verify_policy_basic(policy_id, db)
+    event_date = state.get("extracted_data", {}).get("event_date")
+    verification = verify_policy_for_claim(policy_id, event_date, str(current_user.id), db)
+    policy_valid = verification["valid"]
 
     claim.status = "verified"  # type: ignore
     claim.conversation_status = "claimant_confirmed"  # type: ignore
@@ -246,10 +248,10 @@ def get_claim(
         "ticket_id": claim.ticket_id,
         "status": claim.status,
         "conversation_status": claim.conversation_status,
-        "claim_type": claim.claim_type,
-        "incident_date": str(claim.incident_date) if claim.incident_date else None,
-        "description": claim.description,
-        "claimed_amount": float(claim.claimed_amount) if claim.claimed_amount is not None else None,  # type: ignore[arg-type]
+        "insurance_type": claim.insurance_type,
+        "event_date": str(claim.event_date) if claim.event_date else None,
+        "event_description": claim.event_description,
+        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,  # type: ignore[arg-type]
         "extracted_data": state.get("extracted_data") or {},
         "missing_fields": state.get("missing_fields") or [],
         "response_message": state.get("response_message"),
@@ -287,7 +289,7 @@ def list_claims(
         results.append({
             "id": str(c.id),
             "ticket_id": c.ticket_id,
-            "claim_type": c.claim_type,
+            "insurance_type": c.insurance_type,
             "status": c.status,
             "conversation_status": c.conversation_status,
             "extracted_data": st.get("extracted_data") or {},

@@ -60,11 +60,11 @@ CREATE TABLE IF NOT EXISTS claims (
     claimant_id           UUID REFERENCES users(id),
     customer_id           VARCHAR,
     claim_date            DATE NOT NULL DEFAULT CURRENT_DATE,
-    incident_date         DATE,
-    claim_type            VARCHAR,          -- health | senior_health | home | travel | motor | cyber
+    event_date            DATE,
+    insurance_type        VARCHAR,          -- health | senior_health | home | travel | motor | cyber
     input_mode            VARCHAR NOT NULL DEFAULT 'text',   -- text | voice
-    description           TEXT,
-    claimed_amount        NUMERIC,
+    event_description     TEXT,
+    estimated_claim_amount NUMERIC,
     extraction_confidence FLOAT,
     validation_status     VARCHAR,          -- valid | rejected
     status                VARCHAR NOT NULL DEFAULT 'draft',  -- draft | verified

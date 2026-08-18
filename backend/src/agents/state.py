@@ -12,7 +12,7 @@ class ClaimState(TypedDict, total=False):
     ticket_id: str
     claim_text: str
     input_mode: str  # "voice" or "text"
-    claim_type_hint: Optional[str]
+    insurance_type_hint: Optional[str]
 
     extracted_data: Dict[str, Any]
     missing_fields: List[str]            # Mandatory fields still required from claimant
