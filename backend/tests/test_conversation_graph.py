@@ -23,7 +23,6 @@ from src.agents.nodes import (
     _infer_insurance_type,
     _rule_based_fallback_extraction,
     INITIAL_PROMPT,
-    CLAIM_TYPE_DISPLAY,
 )
 from src.agents.graph import build_conversation_graph
 
@@ -259,7 +258,7 @@ class TestPhase1Conversations:
         )
         result = graph.invoke(state)
         assert result["confirmed"] is True
-        assert result["conversation_status"] == "claimant_confirmed"
+        assert result["conversation_status"] == "intake_complete"
         assert "confirmed" in result["next_question"].lower()
 
     # 10. Smoke test scenario: "I had a bike accident yesterday and the front of my bike was damaged."
@@ -299,16 +298,16 @@ class TestPhase1Conversations:
         res4 = graph.invoke(turn4_state)
 
         assert res4["confirmed"] is True
-        assert res4["conversation_status"] == "claimant_confirmed"
+        assert res4["conversation_status"] == "intake_complete"
         assert "confirmed" in res4["next_question"].lower()
 
     # 11. Test thank you after completion bug fix
     def test_thank_you_after_completion_short_circuits(self):
         graph = build_conversation_graph()
         
-        # Test claimant_confirmed status
+        # Test intake_complete status
         state1 = _base_state(
-            conversation_status="claimant_confirmed",
+            conversation_status="intake_complete",
             extracted_data={
                 "insurance_type": "motor",
                 "policy_id": "ABC12345",
@@ -322,7 +321,7 @@ class TestPhase1Conversations:
             claim_text="thank you",
         )
         res1 = graph.invoke(state1)
-        assert res1["conversation_status"] == "claimant_confirmed"
+        assert res1["conversation_status"] == "intake_complete"
         assert "welcome" in res1["next_question"].lower()
         # Ensure we didn't re-emit summary
         assert "policy id" not in res1["next_question"].lower()
@@ -351,7 +350,7 @@ class TestPhase1Conversations:
     def test_correction_after_confirmation_does_not_regress_status(self):
         graph = build_conversation_graph()
         state = _base_state(
-            conversation_status="claimant_confirmed",
+            conversation_status="intake_complete",
             extracted_data={
                 "insurance_type": "motor",
                 "policy_id": "ABC12345",
@@ -367,7 +366,7 @@ class TestPhase1Conversations:
         result = graph.invoke(state)
         # It should update the field but not regress to collecting
         assert result["extracted_data"]["estimated_claim_amount"] == 60000.0
-        assert result["conversation_status"] in ("claimant_confirmed", "confirming", "completed")
+        assert result["conversation_status"] in ("intake_complete", "confirming", "completed")
         # Ensure it doesn't drop to collecting
         assert result["conversation_status"] != "collecting"
 

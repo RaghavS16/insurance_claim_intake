@@ -46,7 +46,7 @@ def _seed_db(db):
         ("EXP-0001", "motor", 300000, 5000, date(2020, 1, 1), date(2022, 12, 31), False),
     ]
 
-    claimant_id = "00000000-0000-0000-0000-000000000001"
+    claimant_id = "TEST_USER_ID"
     if not db.query(User).filter(User.id == claimant_id).first():
         db.add(User(
             id=claimant_id,
@@ -131,6 +131,15 @@ def setup_test_db():
         _tmp_db_path.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+@pytest.fixture
+def db():
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 @pytest.fixture(autouse=True)

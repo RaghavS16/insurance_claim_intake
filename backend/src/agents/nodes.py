@@ -457,8 +457,8 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     current_status = state.get("conversation_status", "collecting")
 
     # Fix the "thank you after completion" bug specifically
-    # if conversation_status is already "claimant_confirmed", "submitted", or "completed" AND the new intent is gratitude/closing/acknowledgement
-    if current_status in ("claimant_confirmed", "submitted", "completed") and intent in ("gratitude", "closing", "acknowledgement"):
+    # if conversation_status is already "intake_complete", "submitted", or "completed" AND the new intent is gratitude/closing/acknowledgement
+    if current_status in ("intake_complete", "submitted", "completed") and intent in ("gratitude", "closing", "acknowledgement"):
         state["_skip_extraction"] = True
         state["_skip_all"] = True
         
@@ -501,7 +501,7 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
         if intent == "affirmation":
             state["confirmed"] = True
             state["awaiting_confirmation"] = False
-            state["conversation_status"] = "claimant_confirmed"
+            state["conversation_status"] = "intake_complete"
             state["_skip_extraction"] = True
             _audit(state, "Claimant confirmed all extracted intake details.")
             return state
@@ -658,7 +658,7 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
 
     if state.get("confirmed"):
         state["awaiting_confirmation"] = False
-        state["conversation_status"] = "claimant_confirmed"
+        state["conversation_status"] = "intake_complete"
     elif not missing:
         state["awaiting_confirmation"] = True
         state["conversation_status"] = "confirming"
@@ -685,7 +685,7 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
     # 1. Intake complete / Claimant confirmed
     # "Never re-emit _build_confirmation_summary() outside the single turn where the claimant is first asked to confirm."
-    if state.get("conversation_status") == "claimant_confirmed" or state.get("confirmed"):
+    if state.get("conversation_status") == "intake_complete" or state.get("confirmed"):
         msg = "Thank you! Your claim details have been confirmed."
         state["next_question"] = msg
         state["next_question_field"] = ""

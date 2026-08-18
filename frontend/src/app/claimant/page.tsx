@@ -723,7 +723,7 @@ export default function ClaimantPage() {
                     </div>
                   </div>
 
-                  {(conversationStatus === "confirming" || conversationStatus === "claimant_confirmed") && (
+                  {(conversationStatus === "confirming" || conversationStatus === "intake_complete") && (
                     <button
                       id="confirm-submit-btn"
                       onClick={handleConfirmSubmit}
@@ -781,7 +781,7 @@ export default function ClaimantPage() {
                 className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
                   conversationStatus === "completed" || conversationStatus === "submitted"
                     ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    : conversationStatus === "confirming" || conversationStatus === "claimant_confirmed"
+                    : conversationStatus === "confirming" || conversationStatus === "intake_complete"
                     ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
                     : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
                 }`}
@@ -790,7 +790,7 @@ export default function ClaimantPage() {
                   ? "Completed"
                   : conversationStatus === "submitted"
                   ? "Submitted"
-                  : conversationStatus === "claimant_confirmed"
+                  : conversationStatus === "intake_complete"
                   ? "Claimant Confirmed"
                   : conversationStatus === "confirming"
                   ? "Confirming"

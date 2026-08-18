@@ -185,8 +185,9 @@ def confirm_claim(
     verification = verify_policy_for_claim(policy_id, event_date, str(current_user.id), db)
     policy_valid = verification["valid"]
 
-    claim.status = "verified"  # type: ignore
-    claim.conversation_status = "claimant_confirmed"  # type: ignore
+    if policy_valid:
+        claim.status = "verified"  # type: ignore
+    claim.conversation_status = "intake_complete"  # type: ignore
     state["policy_valid"] = policy_valid
     claim.pipeline_state = state  # type: ignore
     db.commit()
