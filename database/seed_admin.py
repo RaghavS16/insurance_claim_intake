@@ -14,8 +14,8 @@ from src.utils.auth import get_password_hash
 def seed_admin():
     db = SessionLocal()
     try:
-        admin_email = os.environ.get("ADMIN_EMAIL", "ops@yourcompany.com")
-        admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMeImmediately123!")
+        admin_email = os.environ.get("ADMIN_EMAIL", "admin@insurance.com")
+        admin_password = os.environ.get("ADMIN_PASSWORD", "InsuranceAdmin@0101")
 
         if not db.query(User).filter(User.email == admin_email).first():
             db.add(User(

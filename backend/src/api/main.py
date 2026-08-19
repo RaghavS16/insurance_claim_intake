@@ -204,86 +204,81 @@ def _init_db_and_seeds():
                 except Exception:
                     pass
 
-        db = SessionLocal()
-        try:
-            # Seed policies if empty
-            if db.query(Policy).first() is None:
-                canonical_policies = [
-                    ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
-                    ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
-                    ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True, "Alice Smith", date(1985, 8, 20), "5678"),
-                    ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True, "Robert Johnson", date(1978, 12, 10), "9012"),
-                    ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True, "Mary Davis", date(1955, 3, 25), "3456"),
-                    ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True, "David Wilson", date(1992, 11, 5), "7890"),
-                    ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True, "TechCorp LLC", date(2000, 1, 1), "0000"),
-                ]
-                for pnum, ptype, cov, ded, eff, exp, active, hname, hdob, hphone in canonical_policies:
-                    db.add(Policy(
-                        id=str(uuid.uuid4()),
-                        policy_number=pnum,
-                        customer_id=None,
-                        policy_type=ptype,
-                        coverage_amount=cov,
-                        deductible=ded,
-                        effective_date=eff,
-                        expiry_date=exp,
-                        is_active=active,
-                        policyholder_name=hname,
-                        policyholder_dob=hdob,
-                        policyholder_phone_last4=hphone,
-                        link_attempts=0,
-                    ))
+        # Only seed demo sample policies and test users in development and test environments
+        if settings.ENVIRONMENT in ("development", "test"):
+            db = SessionLocal()
+            try:
+                # Seed policies if empty
+                if db.query(Policy).first() is None:
+                    canonical_policies = [
+                        ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
+                        ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
+                        ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True, "Alice Smith", date(1985, 8, 20), "5678"),
+                        ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True, "Robert Johnson", date(1978, 12, 10), "9012"),
+                        ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True, "Mary Davis", date(1955, 3, 25), "3456"),
+                        ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True, "David Wilson", date(1992, 11, 5), "7890"),
+                        ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True, "TechCorp LLC", date(2000, 1, 1), "0000"),
+                    ]
+                    for pnum, ptype, cov, ded, eff, exp, active, hname, hdob, hphone in canonical_policies:
+                        db.add(Policy(
+                            id=str(uuid.uuid4()),
+                            policy_number=pnum,
+                            customer_id=None,
+                            policy_type=ptype,
+                            coverage_amount=cov,
+                            deductible=ded,
+                            effective_date=eff,
+                            expiry_date=exp,
+                            is_active=active,
+                            policyholder_name=hname,
+                            policyholder_dob=hdob,
+                            policyholder_phone_last4=hphone,
+                            link_attempts=0,
+                        ))
 
-                canonical_adjusters = [
-                    ("motor", "Priya Sharma", "priya.motor@insure.co"),
-                    ("home", "Rohan Mehta", "rohan.home@insure.co"),
-                    ("health", "Dr. Anita Roy", "anita.health@insure.co"),
-                    ("senior_health", "Dr. V. Rao", "rao.senior@insure.co"),
-                    ("travel", "Vikram Sen", "vikram.travel@insure.co"),
-                    ("cyber", "Neha Kapoor", "neha.cyber@insure.co"),
-                ]
-                for spec, name, email in canonical_adjusters:
-                    uid = str(uuid.uuid4())
-                    db.add(Adjuster(
-                        id=uid,
-                        name=name,
-                        email=email,
-                        specialization=spec,
-                        claims_assigned=0,
-                        is_active=True,
-                    ))
-                    # Seed matching user credentials
+                    canonical_adjusters = [
+                        ("motor", "Priya Sharma", "priya.motor@insure.co"),
+                        ("home", "Rohan Mehta", "rohan.home@insure.co"),
+                        ("health", "Dr. Anita Roy", "anita.health@insure.co"),
+                        ("senior_health", "Dr. V. Rao", "rao.senior@insure.co"),
+                        ("travel", "Vikram Sen", "vikram.travel@insure.co"),
+                        ("cyber", "Neha Kapoor", "neha.cyber@insure.co"),
+                    ]
+                    for spec, name, email in canonical_adjusters:
+                        uid = str(uuid.uuid4())
+                        db.add(Adjuster(
+                            id=uid,
+                            name=name,
+                            email=email,
+                            specialization=spec,
+                            claims_assigned=0,
+                            is_active=True,
+                        ))
+                        # Seed matching user credentials
+                        db.add(User(
+                            id=uid,
+                            full_name=name,
+                            email=email,
+                            password_hash=get_password_hash("AdjusterPassword123!"),
+                            role="ADJUSTER",
+                            status="active"
+                        ))
+
+                    # Seed default claimant john@test.com
                     db.add(User(
-                        id=uid,
-                        full_name=name,
-                        email=email,
-                        password_hash=get_password_hash("AdjusterPassword123!"),
-                        role="ADJUSTER",
+                        full_name="John Doe",
+                        email="john@test.com",
+                        password_hash=get_password_hash("ClaimantPassword123!"),
+                        role="CLAIMANT",
                         status="active"
                     ))
 
-                # Seed default claimant john@test.com
-                db.add(User(
-                    full_name="John Doe",
-                    email="john@test.com",
-                    password_hash=get_password_hash("ClaimantPassword123!"),
-                    role="CLAIMANT",
-                    status="active"
-                ))
-
-                # Seed default admin ops@yourcompany.com
-                db.add(User(
-                    full_name="Ops Admin",
-                    email="ops@yourcompany.com",
-                    password_hash=get_password_hash("ChangeMeImmediately123!"),
-                    role="ADMIN",
-                    status="active"
-                ))
-
-                db.commit()
-                logger.info("Database schema initialized and canonical records seeded.")
-        finally:
-            db.close()
+                    db.commit()
+                    logger.info("Development database initialized with canonical demo policies and test users.")
+            finally:
+                db.close()
+        else:
+            logger.info("Production environment detected: Skipping automatic demo record seeding.")
     except Exception as exc:
         logger.warning("Database schema check notice: %s", exc)
 
