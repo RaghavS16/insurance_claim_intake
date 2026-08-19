@@ -101,3 +101,77 @@ def test_admin_list_all_policies(client):
     assert "items" in data
     assert "total" in data
     assert data["total"] >= 2
+
+
+def test_admin_adjuster_crud_lifecycle(client, db):
+    # 1. Create Adjuster
+    create_res = client.post("/api/v1/admin/adjusters", json={
+        "name": "Alex Murphy",
+        "email": "alex.murphy@insure.co",
+        "specialization": "cyber",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert create_res.status_code == 200
+    adj_id = create_res.json()["id"]
+
+    # 2. Get Single Adjuster
+    get_res = client.get(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Alex Murphy"
+    assert get_res.json()["specialization"] == "cyber"
+    assert get_res.json()["is_active"] is True
+
+    # 3. Update Adjuster (Change specialization and active status)
+    update_res = client.put(f"/api/v1/admin/adjusters/{adj_id}", json={
+        "name": "Alex J. Murphy",
+        "specialization": "home",
+        "is_active": False,
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert update_res.status_code == 200
+    assert update_res.json()["name"] == "Alex J. Murphy"
+    assert update_res.json()["specialization"] == "home"
+    assert update_res.json()["is_active"] is False
+
+    # Check user model sync
+    user = db.query(User).filter(User.id == adj_id).first()
+    assert user is not None
+    assert user.full_name == "Alex J. Murphy"
+    assert user.status == "inactive"
+
+    # 4. Reset Password
+    reset_res = client.post(f"/api/v1/admin/adjusters/{adj_id}/reset-password", headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert reset_res.status_code == 200
+    assert "temporary_password" in reset_res.json()
+    assert len(reset_res.json()["temporary_password"]) > 6
+
+    # 5. Delete Adjuster (claims_assigned = 0)
+    del_res = client.delete(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert del_res.status_code == 200
+
+    # Ensure deleted from DB
+    assert db.query(Adjuster).filter(Adjuster.id == adj_id).first() is None
+    assert db.query(User).filter(User.id == adj_id).first() is None
+
+
+def test_admin_delete_adjuster_blocked_if_claims_assigned(client, db):
+    # Create an adjuster and manually assign claims_assigned = 3
+    create_res = client.post("/api/v1/admin/adjusters", json={
+        "name": "Busy Adjuster",
+        "email": "busy.adj@insure.co",
+        "specialization": "motor",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert create_res.status_code == 200
+    adj_id = create_res.json()["id"]
+
+    adj = db.query(Adjuster).filter(Adjuster.id == adj_id).first()
+    adj.claims_assigned = 3
+    db.commit()
+
+    # Attempt deletion -> should fail with 400
+    del_res = client.delete(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert del_res.status_code == 400
+    assert "active assigned claims" in del_res.json()["detail"]
+
+    # Cleanup
+    adj.claims_assigned = 0
+    db.commit()
+    client.delete(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})

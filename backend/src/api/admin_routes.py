@@ -41,6 +41,16 @@ class AddAdjusterRequest(BaseModel):
     )
 
 
+class UpdateAdjusterRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=100, description="Full name of the adjuster")
+    email: Optional[str] = Field(None, min_length=3, max_length=254, description="Adjuster email address")
+    specialization: Optional[str] = Field(
+        None,
+        description="Canonical specialization: health, senior_health, home, travel, motor, or cyber",
+    )
+    is_active: Optional[bool] = Field(None, description="Active status of adjuster")
+
+
 # ---------------------------------------------------------------------------
 # Helper: resolve admin user
 # ---------------------------------------------------------------------------
@@ -308,6 +318,207 @@ def list_adjusters(
         }
         for a in adjusters
     ]
+
+
+@router.get("/adjusters/{adjuster_id}")
+def get_adjuster(
+    adjuster_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Retrieve details of a single adjuster."""
+    _resolve_admin(request, db)
+
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    if not adjuster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Adjuster not found.",
+        )
+
+    return {
+        "id": str(adjuster.id),
+        "name": adjuster.name,
+        "email": adjuster.email,
+        "specialization": adjuster.specialization,
+        "claims_assigned": adjuster.claims_assigned,
+        "is_active": adjuster.is_active,
+    }
+
+
+@router.put("/adjusters/{adjuster_id}")
+def update_adjuster(
+    adjuster_id: str,
+    payload: UpdateAdjusterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Update an adjuster's information (name, email, specialization, active status).
+    Synchronizes the corresponding User account.
+    """
+    _resolve_admin(request, db)
+
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    if not adjuster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Adjuster not found.",
+        )
+
+    user = db.query(User).filter(User.id == adjuster_id).first()
+
+    if payload.name is not None:
+        try:
+            clean_name = validate_full_name(payload.name)
+            adjuster.name = clean_name  # type: ignore[assignment]
+            if user:
+                user.full_name = clean_name  # type: ignore[assignment]
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+
+    if payload.email is not None:
+        try:
+            clean_email = validate_email(payload.email)
+            if clean_email != adjuster.email:
+                existing = db.query(User).filter(User.email == clean_email, User.id != adjuster_id).first()
+                if existing:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Another user with this email already exists.",
+                    )
+                adjuster.email = clean_email  # type: ignore[assignment]
+                if user:
+                    user.email = clean_email  # type: ignore[assignment]
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+
+    if payload.specialization is not None:
+        spec = payload.specialization.strip().lower()
+        if spec not in CANONICAL_POLICY_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}",
+            )
+        adjuster.specialization = spec  # type: ignore[assignment]
+
+    if payload.is_active is not None:
+        adjuster.is_active = payload.is_active  # type: ignore[assignment]
+        if user:
+            user.status = "active" if payload.is_active else "inactive"  # type: ignore[assignment]
+
+    try:
+        db.commit()
+        db.refresh(adjuster)
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to update adjuster {adjuster_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update adjuster.",
+        )
+
+    return {
+        "id": str(adjuster.id),
+        "name": adjuster.name,
+        "email": adjuster.email,
+        "specialization": adjuster.specialization,
+        "claims_assigned": adjuster.claims_assigned,
+        "is_active": adjuster.is_active,
+        "message": "Adjuster updated successfully.",
+    }
+
+
+@router.post("/adjusters/{adjuster_id}/reset-password")
+def reset_adjuster_password(
+    adjuster_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Reset an adjuster's password and generate a new temporary password.
+    """
+    _resolve_admin(request, db)
+
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    if not adjuster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Adjuster not found.",
+        )
+
+    user = db.query(User).filter(User.id == adjuster_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Linked user account not found.",
+        )
+
+    temp_password = f"Adj!{secrets.token_urlsafe(8)}9#"
+    user.password_hash = get_password_hash(temp_password)  # type: ignore[assignment]
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to reset password for adjuster {adjuster_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reset adjuster password.",
+        )
+
+    return {
+        "id": str(adjuster.id),
+        "email": adjuster.email,
+        "temporary_password": temp_password,
+        "message": "Password reset successfully. Provide the new temporary password to the adjuster.",
+    }
+
+
+@router.delete("/adjusters/{adjuster_id}")
+def delete_adjuster(
+    adjuster_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete an adjuster and their associated user record.
+    Prevents deletion if active claims are assigned (suggests deactivation instead).
+    """
+    _resolve_admin(request, db)
+
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    if not adjuster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Adjuster not found.",
+        )
+
+    if (adjuster.claims_assigned or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot delete adjuster with {adjuster.claims_assigned} active assigned claims. Deactivate the adjuster account instead.",
+        )
+
+    user = db.query(User).filter(User.id == adjuster_id).first()
+
+    try:
+        db.delete(adjuster)
+        if user:
+            db.delete(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to delete adjuster {adjuster_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete adjuster.",
+        )
+
+    return {
+        "id": adjuster_id,
+        "message": "Adjuster deleted successfully.",
+    }
 
 
 @router.get("/policies")

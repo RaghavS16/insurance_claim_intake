@@ -67,6 +67,23 @@ export default function AdminDashboardPage() {
   const [adjusterError, setAdjusterError] = useState("");
   const [copiedPass, setCopiedPass] = useState(false);
 
+  // Adjuster Edit / Actions State
+  const [editingAdjuster, setEditingAdjuster] = useState<AdjusterItem | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editSpec, setEditSpec] = useState("motor");
+  const [editActive, setEditActive] = useState(true);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  const [passwordResetData, setPasswordResetData] = useState<{ adjuster: AdjusterItem; tempPass: string } | null>(null);
+  const [resettingPasswordId, setResettingPasswordId] = useState<string | null>(null);
+  const [copiedResetPass, setCopiedResetPass] = useState(false);
+
+  const [deletingAdjuster, setDeletingAdjuster] = useState<AdjusterItem | null>(null);
+  const [deletingLoading, setDeletingLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
   // Authenticate Admin
   useEffect(() => {
     const token = localStorage.getItem("access_token");
@@ -211,6 +228,121 @@ export default function AdminDashboardPage() {
       setAdjusterError(err.message || "Error creating adjuster.");
     } finally {
       setCreatingAdjuster(false);
+    }
+  };
+
+  const openEditModal = (adj: AdjusterItem) => {
+    setEditingAdjuster(adj);
+    setEditName(adj.name);
+    setEditEmail(adj.email);
+    setEditSpec(adj.specialization);
+    setEditActive(adj.is_active);
+    setEditError("");
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdjuster) return;
+
+    setSavingEdit(true);
+    setEditError("");
+    const token = localStorage.getItem("access_token");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${editingAdjuster.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: editName.trim(),
+          email: editEmail.trim(),
+          specialization: editSpec,
+          is_active: editActive,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to update adjuster.");
+      }
+
+      setEditingAdjuster(null);
+      fetchAdjusters();
+    } catch (err: any) {
+      setEditError(err.message || "Failed to update adjuster.");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleToggleAdjusterStatus = async (adj: AdjusterItem) => {
+    const token = localStorage.getItem("access_token");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${adj.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          is_active: !adj.is_active,
+        }),
+      });
+      if (res.ok) {
+        fetchAdjusters();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleResetPassword = async (adj: AdjusterItem) => {
+    const token = localStorage.getItem("access_token");
+    setResettingPasswordId(adj.id);
+    setCopiedResetPass(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${adj.id}/reset-password`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to reset password.");
+      }
+      setPasswordResetData({
+        adjuster: adj,
+        tempPass: data.temporary_password,
+      });
+    } catch (err: any) {
+      alert(err.message || "Failed to reset password.");
+    } finally {
+      setResettingPasswordId(null);
+    }
+  };
+
+  const handleDeleteAdjuster = async () => {
+    if (!deletingAdjuster) return;
+    setDeletingLoading(true);
+    setDeleteError("");
+    const token = localStorage.getItem("access_token");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${deletingAdjuster.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to delete adjuster.");
+      }
+      setDeletingAdjuster(null);
+      fetchAdjusters();
+    } catch (err: any) {
+      setDeleteError(err.message || "Failed to delete adjuster.");
+    } finally {
+      setDeletingLoading(false);
     }
   };
 
@@ -636,6 +768,7 @@ export default function AdminDashboardPage() {
                         <th className="py-3 px-3">Specialization</th>
                         <th className="py-3 px-3">Assigned</th>
                         <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
@@ -650,9 +783,46 @@ export default function AdminDashboardPage() {
                           </td>
                           <td className="py-3 px-3 text-slate-300 font-mono">{a.claims_assigned}</td>
                           <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-semibold">
-                              Active
-                            </span>
+                            <button
+                              onClick={() => handleToggleAdjusterStatus(a)}
+                              title="Click to toggle active status"
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border transition cursor-pointer ${
+                                a.is_active
+                                  ? "bg-emerald-950/80 text-emerald-300 border-emerald-800 hover:bg-emerald-900"
+                                  : "bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900"
+                              }`}
+                            >
+                              {a.is_active ? "● Active" : "○ Inactive"}
+                            </button>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => openEditModal(a)}
+                                title="Edit Adjuster Details"
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition"
+                              >
+                                ✏️ Edit
+                              </button>
+                              <button
+                                onClick={() => handleResetPassword(a)}
+                                disabled={resettingPasswordId === a.id}
+                                title="Reset Temporary Password"
+                                className="px-2 py-1 rounded-lg bg-amber-950/60 hover:bg-amber-900/80 text-amber-200 border border-amber-800/50 text-[11px] font-medium transition disabled:opacity-50"
+                              >
+                                {resettingPasswordId === a.id ? "..." : "🔑 Reset"}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setDeletingAdjuster(a);
+                                  setDeleteError("");
+                                }}
+                                title="Delete Adjuster"
+                                className="px-2 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 text-rose-200 border border-rose-800/50 text-[11px] font-medium transition"
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -660,6 +830,220 @@ export default function AdminDashboardPage() {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Edit Adjuster */}
+        {editingAdjuster && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>✏️</span> Edit Adjuster
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Update credentials, status, or category assignment</p>
+                </div>
+                <button
+                  onClick={() => setEditingAdjuster(null)}
+                  className="text-slate-400 hover:text-white text-lg transition px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {editError && (
+                <div className="p-3 bg-rose-950/70 border border-rose-600/50 rounded-2xl text-xs text-rose-200">
+                  {editError}
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEdit} className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 px-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    required
+                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 transition"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 px-1">Email Address</label>
+                  <input
+                    type="email"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    required
+                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 transition"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 px-1">Specialization</label>
+                  <select
+                    value={editSpec}
+                    onChange={(e) => setEditSpec(e.target.value)}
+                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500 transition"
+                  >
+                    {CANONICAL_TYPES.map((t) => (
+                      <option key={t.value} value={t.value} className="bg-slate-900 text-slate-100">
+                        {t.label} Insurance
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between p-3 bg-slate-950/50 border border-slate-800/80 rounded-2xl">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-200 block">Account Status</span>
+                    <span className="text-[11px] text-slate-400">Enable or disable claim intake assignment</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditActive(!editActive)}
+                    className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+                      editActive
+                        ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                        : "bg-rose-950 text-rose-300 border-rose-800"
+                    }`}
+                  >
+                    {editActive ? "Active" : "Inactive"}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingAdjuster(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition disabled:opacity-50"
+                  >
+                    {savingEdit ? "Saving Changes..." : "Save Changes"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Password Reset Result */}
+        {passwordResetData && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>🔑</span> Password Reset Generated
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Temporary credentials generated for <span className="text-white font-medium">{passwordResetData.adjuster.name}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPasswordResetData(null)}
+                  className="text-slate-400 hover:text-white text-lg transition px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-2xl flex flex-col gap-2">
+                <span className="text-[11px] text-amber-300 font-semibold">New Temporary Password:</span>
+                <div className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <span className="font-mono font-bold text-amber-200 text-sm">{passwordResetData.tempPass}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(passwordResetData.tempPass);
+                      setCopiedResetPass(true);
+                      setTimeout(() => setCopiedResetPass(false), 3000);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition"
+                  >
+                    {copiedResetPass ? "✓ Copied" : "Copy"}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1">
+                  Share this credential securely with the adjuster. They will be required to change it upon first login.
+                </span>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setPasswordResetData(null)}
+                  className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Delete Confirmation */}
+        {deletingAdjuster && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-rose-400 flex items-center gap-2">
+                    <span>⚠️</span> Delete Adjuster Account
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Are you sure you want to remove <span className="text-white font-semibold">{deletingAdjuster.name}</span>?
+                  </p>
+                </div>
+                <button
+                  onClick={() => setDeletingAdjuster(null)}
+                  className="text-slate-400 hover:text-white text-lg transition px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {deleteError && (
+                <div className="p-3 bg-rose-950/80 border border-rose-600/60 rounded-2xl text-xs text-rose-200 flex flex-col gap-1">
+                  <span className="font-bold">Cannot Delete:</span>
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              {deletingAdjuster.claims_assigned > 0 ? (
+                <div className="p-3.5 bg-amber-950/40 border border-amber-600/40 rounded-2xl text-xs text-amber-200">
+                  This adjuster currently has <strong>{deletingAdjuster.claims_assigned}</strong> active claims assigned. Deletion is blocked to preserve claim integrity. Please toggle the account status to <strong>Inactive</strong> instead.
+                </div>
+              ) : (
+                <p className="text-xs text-slate-300">
+                  This action will permanently delete the adjuster profile and their login account. This action cannot be undone.
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingAdjuster(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAdjuster}
+                  disabled={deletingLoading || deletingAdjuster.claims_assigned > 0}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition disabled:opacity-50"
+                >
+                  {deletingLoading ? "Deleting..." : "Delete Permanently"}
+                </button>
+              </div>
             </div>
           </div>
         )}
