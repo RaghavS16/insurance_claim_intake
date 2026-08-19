@@ -1,7 +1,5 @@
-"use client";
-
-import React, { useState, useEffect, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/router";
 import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -18,9 +16,9 @@ interface LinkedPolicy {
   linked_at?: string;
 }
 
-function LinkPolicyContent() {
+export default function LinkPolicyPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const { policy } = router.query;
 
   const [policyNumber, setPolicyNumber] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
@@ -32,13 +30,12 @@ function LinkPolicyContent() {
   const [myPolicies, setMyPolicies] = useState<LinkedPolicy[]>([]);
   const [loadingPolicies, setLoadingPolicies] = useState(true);
 
-  // Initialize from search param if available
+  // Initialize from query param if available
   useEffect(() => {
-    const pParam = searchParams.get("policy");
-    if (pParam) {
-      setPolicyNumber(pParam.toUpperCase());
+    if (policy && typeof policy === "string") {
+      setPolicyNumber(policy.toUpperCase());
     }
-  }, [searchParams]);
+  }, [policy]);
 
   // Fetch current user's linked policies
   const fetchMyPolicies = async () => {
@@ -317,13 +314,5 @@ function LinkPolicyContent() {
         </div>
       </div>
     </div>
-  );
-}
-
-export default function LinkPolicyPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-400 p-8">Loading...</div>}>
-      <LinkPolicyContent />
-    </Suspense>
   );
 }

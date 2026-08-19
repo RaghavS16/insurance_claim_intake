@@ -1,8 +1,6 @@
-"use client";
-
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { SUPPORTED_INSURANCE_TYPES } from "../../lib/constants";
+import { useRouter } from "next/router";
+import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
