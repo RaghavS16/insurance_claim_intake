@@ -51,6 +51,8 @@ export default function LoginPage() {
         router.push("/claimant");
       } else if (meData.role === "ADJUSTER") {
         router.push("/adjuster");
+      } else if (meData.role === "ADMIN") {
+        router.push("/admin");
       } else {
         setError("Invalid user role.");
       }

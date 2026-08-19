@@ -57,9 +57,20 @@ def _seed_db(db):
             status="active"
         ))
 
+    admin_id = "TEST_ADMIN_ID"
+    if not db.query(User).filter(User.id == admin_id).first():
+        db.add(User(
+            id=admin_id,
+            full_name="Test Admin",
+            email="admin@test.com",
+            password_hash=get_password_hash("AdminPassword123!"),
+            role="ADMIN",
+            status="active"
+        ))
+
     for pol_num, ptype, cov, ded, eff, exp, active in test_policies:
         if db.query(Policy).filter(Policy.policy_number == pol_num).first() is None:
-            c_id = claimant_id if pol_num == "XYZ123" else str(uuid.uuid4())
+            c_id = claimant_id if pol_num == "XYZ123" else (None if pol_num == "MOT-5521" else str(uuid.uuid4()))
             db.add(Policy(
                 id=str(uuid.uuid4()),
                 policy_number=pol_num,
@@ -70,6 +81,10 @@ def _seed_db(db):
                 effective_date=eff,
                 expiry_date=exp,
                 is_active=active,
+                policyholder_name="Test Policyholder",
+                policyholder_dob=date(1990, 5, 15),
+                policyholder_phone_last4="1234",
+                link_attempts=0,
             ))
 
     test_adjusters = [

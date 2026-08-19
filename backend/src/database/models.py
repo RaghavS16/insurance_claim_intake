@@ -38,7 +38,7 @@ Base = declarative_base()
 
 
 class User(Base):
-    """Registered application user (CLAIMANT or ADJUSTER)."""
+    """Registered application user (CLAIMANT, ADJUSTER, or ADMIN)."""
     __tablename__ = "users"
 
     id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -46,7 +46,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     phone = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False)  # CLAIMANT | ADJUSTER
+    role = Column(String, nullable=False)  # CLAIMANT | ADJUSTER | ADMIN
     status = Column(String, nullable=False, default="active")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
@@ -59,7 +59,7 @@ class Policy(Base):
 
     id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     policy_number = Column(String, unique=True, nullable=False)
-    customer_id = _UUID(nullable=False, default=lambda: str(uuid.uuid4()))
+    customer_id = _UUID(ForeignKey("users.id"), nullable=True, default=None)
     # Strict 6 types: health | senior_health | home | travel | motor | cyber
     policy_type = Column(String, nullable=False)
     coverage_amount = Column(Numeric, nullable=False)
@@ -67,6 +67,23 @@ class Policy(Base):
     effective_date = Column(Date, nullable=False)
     expiry_date = Column(Date, nullable=False)
     is_active = Column(Boolean, default=True)
+    policyholder_name = Column(String, nullable=True)
+    policyholder_dob = Column(Date, nullable=True)
+    policyholder_phone_last4 = Column(String(4), nullable=True)
+    linked_at = Column(DateTime, nullable=True)
+    link_attempts = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PolicyLinkAudit(Base):
+    """Audit log for policy linking attempts."""
+    __tablename__ = "policy_link_audit"
+
+    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = _UUID(ForeignKey("users.id"), nullable=False)
+    policy_number = Column(String, nullable=False)
+    outcome = Column(String, nullable=False)
+    ip_address = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

@@ -35,7 +35,7 @@ from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
 
 # Route modules
-from src.api import auth_routes, claim_routes
+from src.api import auth_routes, claim_routes, policy_routes, admin_routes
 
 logger = app_logger
 security_scheme = HTTPBearer(auto_error=False)
@@ -146,46 +146,92 @@ def _init_db_and_seeds():
     try:
         Base.metadata.create_all(bind=engine)
 
-        # Safe SQLite migration: dynamically add customer_id/claimant_id to claims if missing
+        # Safe auto-migration: dynamically add columns to claims and policies if missing
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
-        if "claims" in inspector.get_table_names():
-            columns = [c["name"] for c in inspector.get_columns("claims")]
-            with engine.connect() as conn:
-                if "customer_id" not in columns:
+        tables = inspector.get_table_names()
+        is_pg = settings.DATABASE_URL.startswith("postgresql")
+
+        with engine.connect() as conn:
+            if "claims" in tables:
+                claim_cols = [c["name"] for c in inspector.get_columns("claims")]
+                if "customer_id" not in claim_cols:
                     logger.info("Database auto-migration: adding customer_id to claims table")
                     conn.execute(text("ALTER TABLE claims ADD COLUMN customer_id VARCHAR"))
                     conn.commit()
-                if "claimant_id" not in columns:
+                if "claimant_id" not in claim_cols:
                     logger.info("Database auto-migration: adding claimant_id to claims table")
-                    col_type = "UUID REFERENCES users(id)" if settings.DATABASE_URL.startswith("postgresql") else "VARCHAR"
+                    col_type = "UUID REFERENCES users(id)" if is_pg else "VARCHAR"
                     conn.execute(text(f"ALTER TABLE claims ADD COLUMN claimant_id {col_type}"))
                     conn.commit()
+
+            if "policies" in tables:
+                policy_cols = [c["name"] for c in inspector.get_columns("policies")]
+                if "policyholder_name" not in policy_cols:
+                    logger.info("Database auto-migration: adding policyholder_name to policies table")
+                    conn.execute(text("ALTER TABLE policies ADD COLUMN policyholder_name VARCHAR"))
+                    conn.commit()
+                if "policyholder_dob" not in policy_cols:
+                    logger.info("Database auto-migration: adding policyholder_dob to policies table")
+                    conn.execute(text("ALTER TABLE policies ADD COLUMN policyholder_dob DATE"))
+                    conn.commit()
+                if "policyholder_phone_last4" not in policy_cols:
+                    logger.info("Database auto-migration: adding policyholder_phone_last4 to policies table")
+                    conn.execute(text("ALTER TABLE policies ADD COLUMN policyholder_phone_last4 VARCHAR(4)"))
+                    conn.commit()
+                if "linked_at" not in policy_cols:
+                    logger.info("Database auto-migration: adding linked_at to policies table")
+                    dt_type = "TIMESTAMPTZ" if is_pg else "DATETIME"
+                    conn.execute(text(f"ALTER TABLE policies ADD COLUMN linked_at {dt_type}"))
+                    conn.commit()
+                if "link_attempts" not in policy_cols:
+                    logger.info("Database auto-migration: adding link_attempts to policies table")
+                    conn.execute(text("ALTER TABLE policies ADD COLUMN link_attempts INTEGER DEFAULT 0"))
+                    conn.commit()
+
+                if is_pg:
+                    try:
+                        conn.execute(text("ALTER TABLE policies ALTER COLUMN customer_id DROP NOT NULL"))
+                        conn.commit()
+                    except Exception:
+                        pass
+
+            if is_pg and "users" in tables:
+                try:
+                    conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check"))
+                    conn.execute(text("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('CLAIMANT', 'ADJUSTER', 'ADMIN'))"))
+                    conn.commit()
+                except Exception:
+                    pass
 
         db = SessionLocal()
         try:
             # Seed policies if empty
             if db.query(Policy).first() is None:
                 canonical_policies = [
-                    ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True),
-                    ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True),
-                    ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True),
-                    ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True),
-                    ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True),
-                    ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True),
-                    ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True),
+                    ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
+                    ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
+                    ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True, "Alice Smith", date(1985, 8, 20), "5678"),
+                    ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True, "Robert Johnson", date(1978, 12, 10), "9012"),
+                    ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True, "Mary Davis", date(1955, 3, 25), "3456"),
+                    ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True, "David Wilson", date(1992, 11, 5), "7890"),
+                    ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True, "TechCorp LLC", date(2000, 1, 1), "0000"),
                 ]
-                for pnum, ptype, cov, ded, eff, exp, active in canonical_policies:
+                for pnum, ptype, cov, ded, eff, exp, active, hname, hdob, hphone in canonical_policies:
                     db.add(Policy(
                         id=str(uuid.uuid4()),
                         policy_number=pnum,
-                        customer_id=str(uuid.uuid4()),
+                        customer_id=None,
                         policy_type=ptype,
                         coverage_amount=cov,
                         deductible=ded,
                         effective_date=eff,
                         expiry_date=exp,
                         is_active=active,
+                        policyholder_name=hname,
+                        policyholder_dob=hdob,
+                        policyholder_phone_last4=hphone,
+                        link_attempts=0,
                     ))
 
                 canonical_adjusters = [
@@ -222,6 +268,15 @@ def _init_db_and_seeds():
                     email="john@test.com",
                     password_hash=get_password_hash("ClaimantPassword123!"),
                     role="CLAIMANT",
+                    status="active"
+                ))
+
+                # Seed default admin ops@yourcompany.com
+                db.add(User(
+                    full_name="Ops Admin",
+                    email="ops@yourcompany.com",
+                    password_hash=get_password_hash("ChangeMeImmediately123!"),
+                    role="ADMIN",
                     status="active"
                 ))
 
@@ -335,7 +390,17 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+# Policy routes — inject get_current_user dependency
+app.include_router(
+    policy_routes.router,
+    dependencies=[Depends(get_current_user)],
+)
 
+# Admin routes — inject get_current_user dependency
+app.include_router(
+    admin_routes.router,
+    dependencies=[Depends(get_current_user)],
+)
 
 # Voice WebSocket router
 app.include_router(voice_router)

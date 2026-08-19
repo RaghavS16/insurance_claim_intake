@@ -550,6 +550,16 @@ export default function ClaimantPage() {
       } else {
         setConversationStatus("verification_failed");
         setErrorBanner(data.message || "Policy verification failed.");
+
+        if (
+          data.policy_verification?.reason === "ownership_mismatch" ||
+          data.policy_verification?.reason === "policy_not_linked"
+        ) {
+          const pnum = extractedData.policy_id || "";
+          setTimeout(() => {
+            router.push(`/claimant/link-policy?policy=${encodeURIComponent(pnum)}`);
+          }, 1500);
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -589,6 +599,13 @@ export default function ClaimantPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => router.push("/claimant/link-policy")}
+            className="px-3 py-1.5 text-[11px] font-medium bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-700/50 rounded-xl transition flex items-center gap-1.5"
+          >
+            <span>🛡️</span>
+            <span>My Policies</span>
+          </button>
           <div className="hidden md:flex flex-col text-right">
             <span className="text-xs font-semibold text-slate-200">{userName}</span>
             <span className="text-[9px] text-slate-500">Claimant Session</span>

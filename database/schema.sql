@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     email           VARCHAR UNIQUE NOT NULL,
     phone           VARCHAR,
     password_hash   VARCHAR NOT NULL,
-    role            VARCHAR NOT NULL CHECK (role IN ('CLAIMANT', 'ADJUSTER')),
+    role            VARCHAR NOT NULL CHECK (role IN ('CLAIMANT', 'ADJUSTER', 'ADMIN')),
     status          VARCHAR NOT NULL DEFAULT 'active',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -26,15 +26,32 @@ CREATE TABLE IF NOT EXISTS users (
 -- Policies
 -- -------------------------
 CREATE TABLE IF NOT EXISTS policies (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    policy_number           VARCHAR UNIQUE NOT NULL,
+    customer_id             UUID REFERENCES users(id),
+    policy_type             VARCHAR NOT NULL,          -- health | senior_health | home | travel | motor | cyber
+    coverage_amount         NUMERIC NOT NULL,
+    deductible              NUMERIC NOT NULL,
+    effective_date          DATE NOT NULL,
+    expiry_date             DATE NOT NULL,
+    is_active               BOOLEAN NOT NULL DEFAULT TRUE,
+    policyholder_name       VARCHAR,
+    policyholder_dob        DATE,
+    policyholder_phone_last4 VARCHAR(4),
+    linked_at               TIMESTAMPTZ,
+    link_attempts           INTEGER NOT NULL DEFAULT 0,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- -------------------------
+-- Policy Link Audit
+-- -------------------------
+CREATE TABLE IF NOT EXISTS policy_link_audit (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    policy_number   VARCHAR UNIQUE NOT NULL,
-    customer_id     UUID NOT NULL,
-    policy_type     VARCHAR NOT NULL,          -- health | senior_health | home | travel | motor | cyber
-    coverage_amount NUMERIC NOT NULL,
-    deductible      NUMERIC NOT NULL,
-    effective_date  DATE NOT NULL,
-    expiry_date     DATE NOT NULL,
-    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    user_id         UUID NOT NULL REFERENCES users(id),
+    policy_number   VARCHAR NOT NULL,
+    outcome         VARCHAR NOT NULL,
+    ip_address      VARCHAR,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

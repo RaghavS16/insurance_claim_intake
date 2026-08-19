@@ -166,7 +166,9 @@ def _verify_response(claim, state, cached=False):
 def _verification_failure_message(reason: str) -> str:
     messages = {
         "policy_not_found": "We couldn't find a policy with that number. Please double-check and try again.",
+        "policy_not_linked": "Please link this policy to your account before filing a claim.",
         "ownership_mismatch": "This policy isn't linked to your account. Please verify the policy number.",
+        "insurance_type_mismatch": "This policy type doesn't match the claim you're filing.",
         "policy_inactive": "This policy is currently inactive.",
         "policy_not_active_on_event_date": "This policy wasn't active on the date you reported. Please check the incident date and policy number.",
         "missing_event_date": "We need a valid incident date to verify your policy.",
@@ -197,10 +199,13 @@ def verify_claim(
         return _verify_response(claim, state, cached=True)
 
     extracted = state.get("extracted_data", {})
+    raw_itype = extracted.get("insurance_type") or getattr(claim, "insurance_type", None)
+    insurance_type = str(raw_itype) if raw_itype else None
     verification = verify_policy_for_claim(
         policy_id=extracted.get("policy_id"),
         event_date_str=extracted.get("event_date"),
         claimant_user_id=str(current_user.id),
+        insurance_type=insurance_type,
         db=db,
     )
 
