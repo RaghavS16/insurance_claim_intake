@@ -23,19 +23,20 @@ interface PolicyItem {
   expiry_date: string;
   is_active: boolean;
   policyholder_name?: string;
+  policyholder_dob?: string;
   policyholder_phone_last4?: string;
   is_linked: boolean;
   customer_id?: string;
   linked_at?: string;
 }
 
-const CANONICAL_TYPES = [
-  { value: "motor", label: "Motor" },
-  { value: "health", label: "Health" },
+const SPECIALIZATION_OPTIONS = [
+  { value: "motor", label: "Motor / Auto" },
+  { value: "home", label: "Home / Property" },
+  { value: "health", label: "Health & Medical" },
   { value: "senior_health", label: "Senior Health" },
-  { value: "home", label: "Home" },
-  { value: "travel", label: "Travel" },
-  { value: "cyber", label: "Cyber" },
+  { value: "travel", label: "Travel & Trip" },
+  { value: "cyber", label: "Cyber & Tech" },
 ];
 
 export default function AdminPage() {
@@ -48,14 +49,45 @@ export default function AdminPage() {
 
   // Policies State
   const [policies, setPolicies] = useState<PolicyItem[]>([]);
+  const [policySearch, setPolicySearch] = useState("");
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [importingCsv, setImportingCsv] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
   const [importError, setImportError] = useState("");
 
+  // Policy Create Modal State
+  const [showAddPolicyModal, setShowAddPolicyModal] = useState(false);
+  const [newPolicyNum, setNewPolicyNum] = useState("");
+  const [newPolicyType, setNewPolicyType] = useState("motor");
+  const [newPolicyCov, setNewPolicyCov] = useState("500000");
+  const [newPolicyDed, setNewPolicyDed] = useState("5000");
+  const [newPolicyEff, setNewPolicyEff] = useState(new Date().toISOString().split("T")[0]);
+  const [newPolicyExp, setNewPolicyExp] = useState(new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split("T")[0]);
+  const [newPolicyHolder, setNewPolicyHolder] = useState("");
+  const [newPolicyDob, setNewPolicyDob] = useState("1990-01-01");
+  const [newPolicyPhone4, setNewPolicyPhone4] = useState("");
+  const [newPolicyActive, setNewPolicyActive] = useState(true);
+  const [creatingPolicy, setCreatingPolicy] = useState(false);
+  const [createPolicyError, setCreatePolicyError] = useState("");
+
+  // Policy Edit Modal State
+  const [editingPolicy, setEditingPolicy] = useState<PolicyItem | null>(null);
+  const [editPolicyType, setEditPolicyType] = useState("motor");
+  const [editPolicyCov, setEditPolicyCov] = useState("");
+  const [editPolicyDed, setEditPolicyDed] = useState("");
+  const [editPolicyEff, setEditPolicyEff] = useState("");
+  const [editPolicyExp, setEditPolicyExp] = useState("");
+  const [editPolicyHolder, setEditPolicyHolder] = useState("");
+  const [editPolicyDob, setEditPolicyDob] = useState("");
+  const [editPolicyPhone4, setEditPolicyPhone4] = useState("");
+  const [editPolicyActive, setEditPolicyActive] = useState(true);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [editPolicyError, setEditPolicyError] = useState("");
+
   // Adjusters State
   const [adjusters, setAdjusters] = useState<AdjusterItem[]>([]);
+  const [adjusterSearch, setAdjusterSearch] = useState("");
   const [loadingAdjusters, setLoadingAdjusters] = useState(false);
   const [newAdjusterName, setNewAdjusterName] = useState("");
   const [newAdjusterEmail, setNewAdjusterEmail] = useState("");
@@ -80,7 +112,6 @@ export default function AdminPage() {
 
   const [deletingAdjuster, setDeletingAdjuster] = useState<AdjusterItem | null>(null);
   const [deletingLoading, setDeletingLoading] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
 
   // Authenticate Admin
   useEffect(() => {
@@ -95,9 +126,7 @@ export default function AdminPage() {
         const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok) {
-          throw new Error("Unauthorized");
-        }
+        if (!res.ok) throw new Error("Unauthorized");
         const data = await res.json();
         if (data.role !== "ADMIN") {
           router.push(data.role === "ADJUSTER" ? "/adjuster" : "/claimant");
@@ -154,20 +183,34 @@ export default function AdminPage() {
     }
   };
 
-  const handleCsvUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    router.push("/login");
+  };
+
+  // CSV Import handler
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setCsvFile(e.target.files[0]);
+      setImportError("");
+      setImportResult(null);
+    }
+  };
+
+  const handleUploadCsv = async () => {
     if (!csvFile) return;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
 
     setImportingCsv(true);
     setImportError("");
     setImportResult(null);
 
-    const token = localStorage.getItem("access_token");
     const formData = new FormData();
     formData.append("file", csvFile);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies/import`, {
+      const res = await fetch(`${API_BASE}/api/v1/admin/policies/import-csv`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -181,30 +224,147 @@ export default function AdminPage() {
       setImportResult(data);
       setCsvFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      fetchPolicies();
+      fetchPolicies(token);
     } catch (err: any) {
-      setImportError(err.message || "An error occurred during CSV import.");
+      setImportError(err.message || "An error occurred during import.");
     } finally {
       setImportingCsv(false);
     }
   };
 
+  // Create Single Policy
+  const handleCreatePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPolicyNum.trim()) {
+      setCreatePolicyError("Policy number is required.");
+      return;
+    }
+
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+
+    setCreatingPolicy(true);
+    setCreatePolicyError("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/policies`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_number: newPolicyNum.trim().toUpperCase(),
+          policy_type: newPolicyType,
+          coverage_amount: parseFloat(newPolicyCov) || 100000,
+          deductible: parseFloat(newPolicyDed) || 0,
+          effective_date: newPolicyEff,
+          expiry_date: newPolicyExp,
+          policyholder_name: newPolicyHolder.trim() || undefined,
+          policyholder_dob: newPolicyDob.trim() || undefined,
+          policyholder_phone_last4: newPolicyPhone4.trim() ? newPolicyPhone4.trim().slice(-4) : undefined,
+          is_active: newPolicyActive,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to create policy.");
+      }
+
+      setShowAddPolicyModal(false);
+      setNewPolicyNum("");
+      setNewPolicyHolder("");
+      setNewPolicyPhone4("");
+      fetchPolicies(token);
+    } catch (err: any) {
+      setCreatePolicyError(err.message || "Failed to create policy.");
+    } finally {
+      setCreatingPolicy(false);
+    }
+  };
+
+  // Open Edit Policy
+  const handleOpenEditPolicy = (p: PolicyItem) => {
+    setEditingPolicy(p);
+    setEditPolicyType(p.policy_type || "motor");
+    setEditPolicyCov(String(p.coverage_amount || ""));
+    setEditPolicyDed(String(p.deductible || ""));
+    setEditPolicyEff(p.effective_date || "");
+    setEditPolicyExp(p.expiry_date || "");
+    setEditPolicyHolder(p.policyholder_name || "");
+    setEditPolicyDob(p.policyholder_dob || "");
+    setEditPolicyPhone4(p.policyholder_phone_last4 || "");
+    setEditPolicyActive(p.is_active);
+    setEditPolicyError("");
+  };
+
+  // Save Edit Policy
+  const handleSaveEditPolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPolicy) return;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+
+    setSavingPolicy(true);
+    setEditPolicyError("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/policies/${editingPolicy.policy_number}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          policy_type: editPolicyType,
+          coverage_amount: parseFloat(editPolicyCov) || undefined,
+          deductible: parseFloat(editPolicyDed) || undefined,
+          effective_date: editPolicyEff || undefined,
+          expiry_date: editPolicyExp || undefined,
+          policyholder_name: editPolicyHolder.trim() || undefined,
+          policyholder_dob: editPolicyDob.trim() || undefined,
+          policyholder_phone_last4: editPolicyPhone4.trim() ? editPolicyPhone4.trim().slice(-4) : undefined,
+          is_active: editPolicyActive,
+        }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || "Failed to update policy.");
+      }
+
+      setEditingPolicy(null);
+      fetchPolicies(token);
+    } catch (err: any) {
+      setEditPolicyError(err.message || "Failed to save policy updates.");
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
+  // Create Adjuster
   const handleCreateAdjuster = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAdjusterError("");
-    setCreatedAdjusterData(null);
-    setCopiedPass(false);
+    if (!newAdjusterName.trim() || !newAdjusterEmail.trim()) {
+      setAdjusterError("Please provide both name and email.");
+      return;
+    }
 
     const token = localStorage.getItem("access_token");
     if (!token) return;
 
     setCreatingAdjuster(true);
+    setAdjusterError("");
+    setCreatedAdjusterData(null);
+    setCopiedPass(false);
+
     try {
       const res = await fetch(`${API_BASE}/api/v1/admin/adjusters`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           name: newAdjusterName.trim(),
@@ -215,43 +375,45 @@ export default function AdminPage() {
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || "Failed to create adjuster account.");
+        throw new Error(data.detail || "Failed to create adjuster.");
       }
 
       setCreatedAdjusterData(data);
       setNewAdjusterName("");
       setNewAdjusterEmail("");
-      fetchAdjusters();
+      fetchAdjusters(token);
     } catch (err: any) {
-      setAdjusterError(err.message || "Error creating adjuster.");
+      setAdjusterError(err.message || "Failed to provision adjuster account.");
     } finally {
       setCreatingAdjuster(false);
     }
   };
 
-  const openEditModal = (adj: AdjusterItem) => {
+  // Edit Adjuster
+  const handleOpenEditAdjuster = (adj: AdjusterItem) => {
     setEditingAdjuster(adj);
     setEditName(adj.name);
     setEditEmail(adj.email);
-    setEditSpec(adj.specialization);
+    setEditSpec(adj.specialization || "motor");
     setEditActive(adj.is_active);
     setEditError("");
   };
 
-  const handleSaveEdit = async (e: React.FormEvent) => {
+  const handleSaveEditAdjuster = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAdjuster) return;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
 
     setSavingEdit(true);
     setEditError("");
-    const token = localStorage.getItem("access_token");
 
     try {
       const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${editingAdjuster.id}`, {
         method: "PUT",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           name: editName.trim(),
@@ -261,791 +423,1157 @@ export default function AdminPage() {
         }),
       });
 
-      const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || "Failed to update adjuster.");
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || "Failed to update adjuster.");
       }
 
       setEditingAdjuster(null);
-      fetchAdjusters();
+      fetchAdjusters(token);
     } catch (err: any) {
-      setEditError(err.message || "Failed to update adjuster.");
+      setEditError(err.message || "Failed to save adjustments.");
     } finally {
       setSavingEdit(false);
     }
   };
 
-  const handleToggleAdjusterStatus = async (adj: AdjusterItem) => {
-    const token = localStorage.getItem("access_token");
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${adj.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          is_active: !adj.is_active,
-        }),
-      });
-      if (res.ok) {
-        fetchAdjusters();
-      }
-    } catch {
-      // ignore
-    }
-  };
-
+  // Reset Password
   const handleResetPassword = async (adj: AdjusterItem) => {
     const token = localStorage.getItem("access_token");
+    if (!token) return;
     setResettingPasswordId(adj.id);
     setCopiedResetPass(false);
+
     try {
       const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${adj.id}/reset-password`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
+
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to reset password.");
-      }
+      if (!res.ok) throw new Error(data.detail || "Failed to reset password.");
+
       setPasswordResetData({
         adjuster: adj,
         tempPass: data.temporary_password,
       });
     } catch (err: any) {
-      alert(err.message || "Failed to reset password.");
+      alert(`Password reset error: ${err.message}`);
     } finally {
       setResettingPasswordId(null);
     }
   };
 
+  // Delete Adjuster
   const handleDeleteAdjuster = async () => {
     if (!deletingAdjuster) return;
-    setDeletingLoading(true);
-    setDeleteError("");
     const token = localStorage.getItem("access_token");
+    if (!token) return;
 
+    setDeletingLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${deletingAdjuster.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || "Failed to delete adjuster.");
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || "Failed to delete adjuster.");
       }
       setDeletingAdjuster(null);
-      fetchAdjusters();
+      fetchAdjusters(token);
     } catch (err: any) {
-      setDeleteError(err.message || "Failed to delete adjuster.");
+      alert(`Delete error: ${err.message}`);
     } finally {
       setDeletingLoading(false);
     }
   };
 
-  const handleDownloadSampleCsv = () => {
-    const csvContent =
-      "policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,policyholder_name,policyholder_dob,policyholder_phone_last4,is_active\n" +
-      "MOT-9901,motor,750000,5000,2024-01-01,2028-12-31,Vikram Patel,1988-04-12,9876,true\n" +
-      "HLT-4402,health,1200000,2500,2024-06-01,2027-05-31,Ananya Sharma,1992-09-25,1234,true\n" +
-      "CYB-1010,cyber,2000000,20000,2025-01-01,2026-12-31,Apex Tech,2000-01-01,0000,true\n";
+  // Delete Policy
+  const handleDeletePolicy = async (policyNumber: string) => {
+    if (!confirm(`Are you sure you want to remove policy ${policyNumber}?`)) return;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", "policies_sample_template.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/policies/${policyNumber}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        fetchPolicies(token);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        alert(d.detail || "Could not delete policy.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to delete policy.");
+    }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("access_token");
-    router.push("/login");
-  };
-
-  if (loading) {
+  // Filtered lists
+  const filteredPolicies = policies.filter((p) => {
+    const q = policySearch.toLowerCase();
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 font-sans">
-        <div className="flex items-center gap-3">
-          <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-sm">Verifying Administrator Access...</span>
-        </div>
-      </div>
+      p.policy_number?.toLowerCase().includes(q) ||
+      p.policyholder_name?.toLowerCase().includes(q) ||
+      p.policy_type?.toLowerCase().includes(q)
     );
-  }
+  });
+
+  const filteredAdjusters = adjusters.filter((a) => {
+    const q = adjusterSearch.toLowerCase();
+    return (
+      a.name?.toLowerCase().includes(q) ||
+      a.email?.toLowerCase().includes(q) ||
+      a.specialization?.toLowerCase().includes(q)
+    );
+  });
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-cyan-500 selection:text-white">
-      {/* Top Header */}
-      <header className="border-b border-slate-800/80 bg-slate-900/50 backdrop-blur-md sticky top-0 z-30 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-xl shadow-lg shadow-purple-500/20">
-              ⚡
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold text-white tracking-tight">Insurance Claims Administration</h1>
-                <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-md bg-purple-950 text-purple-300 border border-purple-800">
-                  Admin
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">Policy ingestion, role administration & verification controls</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex flex-col text-right">
-              <span className="text-xs font-semibold text-white">{currentUser?.full_name || "Ops Admin"}</span>
-              <span className="text-[11px] text-slate-400">{currentUser?.email}</span>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="text-xs font-semibold px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-            >
-              Log Out
-            </button>
-          </div>
+    <div className="bg-[#f7f9fb] font-body text-[#191c1e] min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
+      {/* Mobile Top App Bar */}
+      <header className="md:hidden flex justify-between items-center px-4 py-3 w-full sticky top-0 bg-white border-b border-[#e0e3e5] z-50">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-[#00647c] text-2xl">graphic_eq</span>
+          <h1 className="font-headline text-lg font-bold text-[#191c1e]">InsureClaimAI Admin</h1>
         </div>
+        <button onClick={handleLogout} className="text-[#505f76] hover:text-[#ba1a1a] p-1 rounded">
+          <span className="material-symbols-outlined">logout</span>
+        </button>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 md:p-8 flex flex-col gap-6">
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-3 border-b border-slate-800 pb-2">
+      {/* Side NavBar (Desktop) */}
+      <aside className="hidden md:flex flex-col h-full min-h-screen py-8 px-4 w-64 fixed left-0 top-0 bg-[#f7f9fb] border-r border-[#e0e3e5] z-40">
+        <div className="mb-8 px-2 flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-lg bg-[#b7eaff] flex items-center justify-center text-[#00647c] font-bold">
+            <span className="material-symbols-outlined text-xl">admin_panel_settings</span>
+          </div>
+          <div>
+            <h2 className="font-headline text-lg font-bold text-[#191c1e]">InsureClaimAI</h2>
+            <p className="font-label text-[11px] text-[#505f76]">Admin Console</p>
+          </div>
+        </div>
+
+        <nav className="flex-1 flex flex-col gap-1">
           <button
             onClick={() => setActiveTab("policies")}
-            className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 ${
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${
               activeTab === "policies"
-                ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-950/40"
-                : "text-slate-400 hover:text-white hover:bg-slate-900"
+                ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
+                : "text-[#505f76] hover:bg-[#eceef0]"
             }`}
           >
-            <span>📜</span>
-            <span>Policy Management & CSV Import</span>
-            <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-full bg-slate-900/60">
-              {policies.length}
+            <span
+              className="material-symbols-outlined text-[20px]"
+              style={{ fontVariationSettings: activeTab === "policies" ? "'FILL' 1" : "'FILL' 0" }}
+            >
+              policy
             </span>
+            <span>Policy Management</span>
           </button>
 
           <button
             onClick={() => setActiveTab("adjusters")}
-            className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 ${
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${
               activeTab === "adjusters"
-                ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-950/40"
-                : "text-slate-400 hover:text-white hover:bg-slate-900"
+                ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
+                : "text-[#505f76] hover:bg-[#eceef0]"
             }`}
           >
-            <span>👥</span>
-            <span>Adjuster Accounts</span>
-            <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-full bg-slate-900/60">
-              {adjusters.length}
+            <span
+              className="material-symbols-outlined text-[20px]"
+              style={{ fontVariationSettings: activeTab === "adjusters" ? "'FILL' 1" : "'FILL' 0" }}
+            >
+              supervisor_account
             </span>
+            <span>Adjuster Accounts</span>
+          </button>
+        </nav>
+
+        <div className="mt-6 pt-4 border-t border-[#e0e3e5] flex items-center justify-between px-2">
+          <div className="flex items-center gap-2 truncate">
+            <div className="w-8 h-8 rounded-full bg-[#00647c] text-white flex items-center justify-center font-bold text-xs">
+              A
+            </div>
+            <div className="flex flex-col truncate">
+              <span className="font-label text-xs text-[#191c1e] font-semibold truncate">
+                {currentUser?.full_name || "Admin User"}
+              </span>
+              <span className="font-label text-[10px] text-[#505f76]">System Administrator</span>
+            </div>
+          </div>
+          <button onClick={handleLogout} title="Sign out" className="text-[#505f76] hover:text-[#ba1a1a] p-1 cursor-pointer">
+            <span className="material-symbols-outlined text-lg">logout</span>
           </button>
         </div>
+      </aside>
 
-        {/* Tab 1: Policy Management */}
-        {activeTab === "policies" && (
-          <div className="flex flex-col gap-8">
-            {/* Top Import Row */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-              {/* CSV Upload Card */}
-              <div className="md:col-span-8 bg-slate-900/60 border border-slate-800 rounded-3xl p-6 md:p-8 backdrop-blur-md shadow-xl flex flex-col gap-5">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h2 className="text-base font-bold text-white flex items-center gap-2">
-                      <span>📥</span> Import Policy Data (CSV)
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Bulk upload or update insurance policies. Existing claimant links will be preserved.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleDownloadSampleCsv}
-                    className="text-xs font-medium px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition flex items-center gap-1.5"
-                  >
-                    <span>📄</span> Download Template
-                  </button>
-                </div>
+      {/* Main Content Area */}
+      <main className="flex-1 md:ml-64 min-h-screen overflow-y-auto bg-white">
+        {/* Top App Bar (Desktop) */}
+        <header className="hidden md:flex justify-between items-center px-8 py-4 w-full sticky top-0 bg-white/90 backdrop-blur-xl border-b border-[#e0e3e5] z-30">
+          <h1 className="font-headline text-xl font-bold text-[#191c1e]">
+            {activeTab === "policies" ? "Policy Management" : "Adjuster Administration"}
+          </h1>
+          <div className="flex items-center gap-3">
+            <span className="font-label text-xs text-[#505f76]">{currentUser?.email}</span>
+            <div className="w-8 h-8 rounded-full bg-[#d0e1fb] flex items-center justify-center text-[#54647a]">
+              <span className="material-symbols-outlined text-base">account_circle</span>
+            </div>
+          </div>
+        </header>
 
-                {importError && (
-                  <div className="p-3.5 bg-rose-950/70 border border-rose-600/50 rounded-2xl text-xs text-rose-200 flex items-start gap-2">
-                    <span>⚠️</span>
-                    <span>{importError}</span>
-                  </div>
-                )}
+        <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-8 pb-32">
+          {/* TAB 1: Policy Management */}
+          {activeTab === "policies" && (
+            <>
+              <div>
+                <h2 className="font-headline text-2xl md:text-3xl font-bold text-[#191c1e] mb-1">
+                  Policy Management
+                </h2>
+                <p className="font-body text-sm text-[#505f76]">
+                  Import, validate, and manage system-wide policy data for claimant intake verification.
+                </p>
+              </div>
 
-                {importResult && (
-                  <div className="p-4 bg-emerald-950/60 border border-emerald-600/40 rounded-2xl text-xs text-emerald-200 flex flex-col gap-2">
-                    <div className="flex items-center gap-2 font-bold text-white">
-                      <span>✓</span>
-                      <span>Import Completed Successfully!</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 mt-1">
-                      <div className="p-2 bg-slate-900/80 rounded-xl">
-                        <span className="text-slate-400 block text-[10px]">New Policies</span>
-                        <span className="font-bold text-cyan-400 text-sm">{importResult.imported}</span>
-                      </div>
-                      <div className="p-2 bg-slate-900/80 rounded-xl">
-                        <span className="text-slate-400 block text-[10px]">Updated Policies</span>
-                        <span className="font-bold text-purple-400 text-sm">{importResult.updated}</span>
-                      </div>
-                      <div className="p-2 bg-slate-900/80 rounded-xl">
-                        <span className="text-slate-400 block text-[10px]">Total Processed</span>
-                        <span className="font-bold text-white text-sm">{importResult.total_processed}</span>
-                      </div>
-                    </div>
-                    {importResult.errors && importResult.errors.length > 0 && (
-                      <div className="mt-2 text-rose-300 text-[11px]">
-                        <span className="font-bold">Errors in {importResult.errors.length} rows:</span>
-                        <ul className="list-disc pl-4 mt-1">
-                          {importResult.errors.slice(0, 3).map((e: any, i: number) => (
-                            <li key={i}>Row {e.row}: {e.error}</li>
-                          ))}
-                        </ul>
-                      </div>
+              {/* Import Section */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* CSV Import Dropzone */}
+                <div className="md:col-span-2 bg-white border-2 border-dashed border-[#bdc8ce] hover:border-[#0891B2] rounded-2xl p-6 md:p-8 flex flex-col justify-center items-center text-center transition-colors relative group shadow-sm">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileChange}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+                  />
+                  <span className="material-symbols-outlined text-4xl text-[#505f76] mb-2 group-hover:text-[#0891B2] transition-colors">
+                    upload_file
+                  </span>
+                  <h3 className="font-headline text-base font-bold text-[#191c1e] mb-1">
+                    {csvFile ? csvFile.name : "Drag and drop CSV files here"}
+                  </h3>
+                  <p className="font-body text-xs text-[#505f76] mb-4">
+                    {csvFile
+                      ? `${(csvFile.size / 1024).toFixed(1)} KB selected`
+                      : "or click anywhere to browse from your computer"}
+                  </p>
+
+                  <div className="flex items-center gap-3 z-20">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-[#0891B2] hover:bg-[#007f9d] text-white font-label text-xs font-semibold px-4 py-2 rounded-full transition-colors cursor-pointer shadow-sm"
+                    >
+                      {csvFile ? "Change File" : "Select CSV File"}
+                    </button>
+                    {csvFile && (
+                      <button
+                        type="button"
+                        onClick={handleUploadCsv}
+                        disabled={importingCsv}
+                        className="bg-[#00647c] hover:bg-[#007f9d] text-white font-label text-xs font-semibold px-4 py-2 rounded-full transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      >
+                        {importingCsv ? (
+                          <>
+                            <span className="material-symbols-outlined text-xs animate-spin">progress_activity</span>
+                            <span>Importing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="material-symbols-outlined text-xs">publish</span>
+                            <span>Run Ingestion</span>
+                          </>
+                        )}
+                      </button>
                     )}
                   </div>
-                )}
 
-                <form onSubmit={handleCsvUpload} className="flex flex-col gap-4">
-                  <div className="border-2 border-dashed border-slate-800 hover:border-cyan-500/50 rounded-2xl p-6 text-center flex flex-col items-center justify-center gap-2 transition bg-slate-950/40">
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      accept=".csv"
-                      onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
-                      className="hidden"
-                      id="csv-file-input"
-                    />
-                    <label
-                      htmlFor="csv-file-input"
-                      className="cursor-pointer flex flex-col items-center gap-2"
+                  {importResult && (
+                    <div className="mt-4 p-3 bg-emerald-50 border border-emerald-300 rounded-lg text-emerald-800 text-xs flex items-center gap-2">
+                      <span className="material-symbols-outlined text-sm text-emerald-600">check_circle</span>
+                      <span>
+                        Successfully imported {importResult.imported_count || importResult.rows_processed || 0} policies!
+                      </span>
+                    </div>
+                  )}
+
+                  {importError && (
+                    <div className="mt-4 p-3 bg-[#ffdad6] border border-[#ba1a1a]/30 rounded-lg text-[#93000a] text-xs flex items-center gap-2">
+                      <span className="material-symbols-outlined text-sm text-[#ba1a1a]">error</span>
+                      <span>{importError}</span>
+                    </div>
+                  )}
+
+                  <div className="mt-4 pt-4 border-t border-[#e6e8ea] w-full flex justify-end">
+                    <a
+                      href="data:text/csv;charset=utf-8,policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,is_active,policyholder_name,policyholder_dob,policyholder_phone%0APOL-8492-AX,motor,250000,1000,2023-01-01,2026-12-31,true,Sarah Jenkins,1990-05-15,5550192834%0APOL-3321-HM,home,400000,2000,2023-03-01,2027-03-01,true,Michael Chang,1985-08-20,5558471029"
+                      download="policy_template.csv"
+                      className="text-[#0891B2] hover:underline font-label text-xs flex items-center gap-1 z-20"
                     >
-                      <span className="text-3xl">📁</span>
-                      <span className="text-xs font-semibold text-slate-300">
-                        {csvFile ? csvFile.name : "Click to browse or drag and drop a .CSV file"}
+                      <span className="material-symbols-outlined text-[16px]">download</span>
+                      <span>Download Sample CSV Template</span>
+                    </a>
+                  </div>
+                </div>
+
+                {/* Ingestion Rules Card */}
+                <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 shadow-sm">
+                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[#f2f4f6]">
+                    <span className="material-symbols-outlined text-[#505f76]">rule</span>
+                    <h3 className="font-headline text-base font-bold text-[#191c1e]">Ingestion Rules</h3>
+                  </div>
+                  <ul className="space-y-4">
+                    <li className="flex items-start gap-2.5">
+                      <span className="material-symbols-outlined text-[#0891B2] text-[18px] mt-0.5">
+                        check_circle
                       </span>
-                      <span className="text-[11px] text-slate-500">
-                        Supported: Standard CSV with policy details and PII verification columns
+                      <div>
+                        <h4 className="font-label text-xs font-semibold text-[#191c1e]">Data Validation</h4>
+                        <p className="font-body text-xs text-[#505f76] mt-0.5">
+                          Dates must follow standard YYYY-MM-DD format.
+                        </p>
+                      </div>
+                    </li>
+                    <li className="flex items-start gap-2.5">
+                      <span className="material-symbols-outlined text-[#0891B2] text-[18px] mt-0.5">
+                        check_circle
                       </span>
-                    </label>
+                      <div>
+                        <h4 className="font-label text-xs font-semibold text-[#191c1e]">Required Fields</h4>
+                        <p className="font-body text-xs text-[#505f76] mt-0.5">
+                          Policy Number, Type, Coverage, and Holder DOB are mandatory.
+                        </p>
+                      </div>
+                    </li>
+                    <li className="flex items-start gap-2.5">
+                      <span className="material-symbols-outlined text-[#ba1a1a] text-[18px] mt-0.5">
+                        error
+                      </span>
+                      <div>
+                        <h4 className="font-label text-xs font-semibold text-[#191c1e]">Duplicate Handling</h4>
+                        <p className="font-body text-xs text-[#505f76] mt-0.5">
+                          Existing Policy IDs will be updated in place with new parameters.
+                        </p>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* System Policies Directory Table */}
+              <div className="bg-white border border-[#e0e3e5] rounded-2xl overflow-hidden shadow-sm">
+                <div className="p-4 md:p-6 border-b border-[#f2f4f6] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-[#f7f9fb]">
+                  <div>
+                    <h3 className="font-headline text-lg font-bold text-[#191c1e]">System Policies Directory</h3>
+                    <p className="font-label text-xs text-[#505f76] mt-0.5">
+                      Showing {filteredPolicies.length} of {policies.length} total policies
+                    </p>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={!csvFile || importingCsv}
-                    className="w-full p-3 rounded-2xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs shadow-md shadow-cyan-950/30 transition disabled:opacity-50"
-                  >
-                    {importingCsv ? "Processing CSV Import..." : "Import Policies"}
-                  </button>
-                </form>
-              </div>
-
-              {/* Ingestion Guidelines */}
-              <div className="md:col-span-4 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 flex flex-col gap-3 text-xs text-slate-400">
-                <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-                  <span>ℹ️</span> Policy Ingestion Rules
-                </h3>
-                <ul className="space-y-2 text-[11px] leading-relaxed">
-                  <li className="flex items-start gap-2">
-                    <span className="text-cyan-400">▪</span>
-                    <span><strong>6 Canonical Types:</strong> <code>health</code>, <code>senior_health</code>, <code>home</code>, <code>travel</code>, <code>motor</code>, <code>cyber</code>.</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-cyan-400">▪</span>
-                    <span><strong>PII Columns:</strong> <code>policyholder_dob</code> (YYYY-MM-DD) and <code>policyholder_phone_last4</code> (4 digits).</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-cyan-400">▪</span>
-                    <span><strong>Ownership Safety:</strong> Re-importing existing policy numbers will update coverage/dates but will <em>never</em> overwrite existing claimant ownership.</span>
-                  </li>
-                </ul>
-              </div>
-            </div>
-
-            {/* Policies Directory Table */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 backdrop-blur-md shadow-xl flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-white">System Policies Directory</h3>
-                  <p className="text-xs text-slate-400">All registered policies and their current claimant link status</p>
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <div className="relative w-full sm:w-64">
+                      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#505f76] text-[18px]">
+                        search
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Search policy ID or holder..."
+                        value={policySearch}
+                        onChange={(e) => setPolicySearch(e.target.value)}
+                        className="input-minimal w-full pl-9 pr-4 py-1.5 bg-white border border-[#e0e3e5] rounded-full font-body text-xs text-[#191c1e]"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddPolicyModal(true)}
+                      className="bg-[#00647c] hover:bg-[#007f9d] text-white font-label text-xs font-semibold px-4 py-2 rounded-full transition-colors flex items-center gap-1 shadow-sm shrink-0 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-base">add</span>
+                      <span>Add Policy</span>
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => fetchPolicies()}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-                >
-                  ↻ Refresh
-                </button>
-              </div>
 
-              {loadingPolicies ? (
-                <div className="py-12 text-center text-xs text-slate-500 animate-pulse">Loading policy records...</div>
-              ) : policies.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-500">No policies in system. Upload a CSV above to get started.</div>
-              ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
+                  <table className="w-full text-left border-collapse min-w-[750px]">
                     <thead>
-                      <tr className="border-b border-slate-800 text-slate-400 text-[11px] uppercase tracking-wider">
-                        <th className="py-3 px-3">Policy #</th>
-                        <th className="py-3 px-3">Type</th>
-                        <th className="py-3 px-3">Policyholder</th>
-                        <th className="py-3 px-3">Phone Last-4</th>
-                        <th className="py-3 px-3">Coverage</th>
-                        <th className="py-3 px-3">Expiry</th>
-                        <th className="py-3 px-3">Link Status</th>
+                      <tr className="bg-[#f2f4f6] border-b border-[#e0e3e5] font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                        <th className="py-3 px-4">Policy ID</th>
+                        <th className="py-3 px-4">Type</th>
+                        <th className="py-3 px-4">Holder</th>
+                        <th className="py-3 px-4">Phone</th>
+                        <th className="py-3 px-4">Coverage</th>
+                        <th className="py-3 px-4">Expiry</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-center">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/60">
-                      {policies.map((p) => (
-                        <tr key={p.id} className="hover:bg-slate-800/30 transition">
-                          <td className="py-3 px-3 font-mono font-bold text-cyan-400">{p.policy_number}</td>
-                          <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] uppercase font-bold">
-                              {p.policy_type.replace("_", " ")}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-slate-200">{p.policyholder_name || "—"}</td>
-                          <td className="py-3 px-3 font-mono text-slate-400">{p.policyholder_phone_last4 ? `••• ${p.policyholder_phone_last4}` : "—"}</td>
-                          <td className="py-3 px-3 text-slate-300 font-mono">₹{p.coverage_amount.toLocaleString()}</td>
-                          <td className="py-3 px-3 text-slate-400">{p.expiry_date}</td>
-                          <td className="py-3 px-3">
-                            {p.is_linked ? (
-                              <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-semibold">
-                                Linked
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800 text-[10px] font-semibold">
-                                Unlinked
-                              </span>
-                            )}
+                    <tbody className="divide-y divide-[#f2f4f6] font-body text-xs">
+                      {loadingPolicies ? (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-[#505f76] animate-pulse">
+                            Loading policies...
                           </td>
                         </tr>
-                      ))}
+                      ) : filteredPolicies.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-[#505f76]">
+                            No policies found matching your search.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPolicies.map((p) => (
+                          <tr key={p.policy_number} className="hover:bg-[#f7f9fb] transition-colors">
+                            <td className="py-3.5 px-4 font-mono font-bold text-[#00647c]">{p.policy_number}</td>
+                            <td className="py-3.5 px-4 text-[#505f76] capitalize">{p.policy_type?.replace("_", " ")}</td>
+                            <td className="py-3.5 px-4 font-medium text-[#191c1e]">{p.policyholder_name || "—"}</td>
+                            <td className="py-3.5 px-4 text-[#505f76] font-mono">
+                              {p.policyholder_phone_last4 ? `•••• ${p.policyholder_phone_last4}` : "—"}
+                            </td>
+                            <td className="py-3.5 px-4 font-medium text-[#191c1e]">₹{p.coverage_amount?.toLocaleString()}</td>
+                            <td className="py-3.5 px-4 text-[#505f76]">{p.expiry_date}</td>
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                  p.is_active
+                                    ? "bg-[#d0e1fb] text-[#54647a]"
+                                    : "bg-[#ffdad6] text-[#93000a]"
+                                }`}
+                              >
+                                {p.is_active ? "Active" : "Inactive"}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => handleOpenEditPolicy(p)}
+                                  title="Edit Policy"
+                                  className="text-[#00647c] hover:text-[#007f9d] p-1 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px]">edit</span>
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePolicy(p.policy_number)}
+                                  title="Delete Policy"
+                                  className="text-[#505f76] hover:text-[#ba1a1a] p-1 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px]">delete</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
+              </div>
+            </>
+          )}
 
-        {/* Tab 2: Adjuster Accounts */}
-        {activeTab === "adjusters" && (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-            {/* Create Adjuster Form Card */}
-            <div className="md:col-span-5 bg-slate-900/60 border border-slate-800 rounded-3xl p-6 md:p-8 backdrop-blur-md shadow-xl flex flex-col gap-5">
+          {/* TAB 2: Adjuster Administration */}
+          {activeTab === "adjusters" && (
+            <>
               <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <span>➕</span> Create Adjuster Account
+                <h2 className="font-headline text-2xl md:text-3xl font-bold text-[#191c1e] mb-1">
+                  Adjuster Administration
                 </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Provision a claim adjuster with a specialization and secure initial credentials.
+                <p className="font-body text-sm text-[#505f76]">
+                  Provision new adjuster accounts and manage roster assignments.
                 </p>
               </div>
 
-              {adjusterError && (
-                <div className="p-3.5 bg-rose-950/70 border border-rose-600/50 rounded-2xl text-xs text-rose-200 flex items-start gap-2">
-                  <span>⚠️</span>
-                  <span>{adjusterError}</span>
-                </div>
-              )}
-
-              {createdAdjusterData && (
-                <div className="p-4 bg-emerald-950/60 border border-emerald-500/50 rounded-2xl text-xs text-emerald-200 flex flex-col gap-3">
-                  <div className="flex items-center gap-2 font-bold text-white">
-                    <span>✓</span>
-                    <span>Adjuster Created Successfully!</span>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                {/* Left Column: Create Adjuster Form */}
+                <div className="lg:col-span-1 bg-white rounded-2xl border border-[#e0e3e5] p-6 shadow-sm flex flex-col gap-4">
+                  <div>
+                    <h3 className="font-headline text-lg font-bold text-[#191c1e]">Create Adjuster Account</h3>
+                    <p className="font-body text-xs text-[#505f76] mt-0.5">Provision new personnel to the claims roster.</p>
                   </div>
-                  <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-1.5">
-                    <div className="text-[11px] text-slate-400">
-                      Email: <span className="text-white font-medium">{createdAdjusterData.email}</span>
+
+                  {adjusterError && (
+                    <div className="p-3 bg-[#ffdad6] border border-[#ba1a1a]/30 rounded-lg text-[#93000a] text-xs flex items-start gap-2">
+                      <span className="material-symbols-outlined text-sm text-[#ba1a1a]">error</span>
+                      <span>{adjusterError}</span>
                     </div>
-                    <div className="text-[11px] text-slate-400">
-                      Specialization: <span className="text-cyan-300 uppercase font-bold">{createdAdjusterData.specialization}</span>
-                    </div>
-                    <div className="mt-1 pt-1 border-t border-slate-800/80 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] text-amber-400 block">Temporary Password:</span>
-                        <span className="font-mono font-bold text-amber-200 text-sm">{createdAdjusterData.temporary_password}</span>
+                  )}
+
+                  {createdAdjusterData && (
+                    <div className="p-4 bg-emerald-50 border border-emerald-400 rounded-xl text-emerald-900 text-xs flex flex-col gap-2">
+                      <div className="flex items-center gap-2 font-bold">
+                        <span className="material-symbols-outlined text-emerald-700">check_circle</span>
+                        <span>Account Provisioned!</span>
                       </div>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(createdAdjusterData.temporary_password);
-                          setCopiedPass(true);
-                          setTimeout(() => setCopiedPass(false), 3000);
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] transition"
+                      <p>
+                        Email: <span className="font-mono font-bold">{createdAdjusterData.adjuster?.email}</span>
+                      </p>
+                      <div className="p-2 bg-emerald-100/70 rounded border border-emerald-300 font-mono text-xs flex justify-between items-center">
+                        <span>Temp Pass: {createdAdjusterData.temporary_password}</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(createdAdjusterData.temporary_password);
+                            setCopiedPass(true);
+                            setTimeout(() => setCopiedPass(false), 2000);
+                          }}
+                          className="text-[11px] font-bold text-emerald-800 underline ml-2"
+                        >
+                          {copiedPass ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
+                      <span className="text-[10px] text-emerald-700">
+                        Share this temporary password with the adjuster.
+                      </span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleCreateAdjuster} className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1">
+                      <label className="font-label text-xs font-medium text-[#505f76]" htmlFor="fullName">
+                        Full Name *
+                      </label>
+                      <input
+                        id="fullName"
+                        type="text"
+                        required
+                        placeholder="Jane Doe"
+                        value={newAdjusterName}
+                        onChange={(e) => setNewAdjusterName(e.target.value)}
+                        className="input-minimal bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="font-label text-xs font-medium text-[#505f76]" htmlFor="emailAddress">
+                        Email Address *
+                      </label>
+                      <input
+                        id="emailAddress"
+                        type="email"
+                        required
+                        placeholder="jane.doe@insureclaimai.com"
+                        value={newAdjusterEmail}
+                        onChange={(e) => setNewAdjusterEmail(e.target.value)}
+                        className="input-minimal bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="font-label text-xs font-medium text-[#505f76]" htmlFor="specialization">
+                        Specialization *
+                      </label>
+                      <select
+                        id="specialization"
+                        value={newAdjusterSpec}
+                        onChange={(e) => setNewAdjusterSpec(e.target.value)}
+                        className="w-full bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3 py-2 text-xs text-[#191c1e] cursor-pointer"
                       >
-                        {copiedPass ? "✓ Copied" : "Copy"}
+                        {SPECIALIZATION_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="submit"
+                        disabled={creatingAdjuster}
+                        className="w-full bg-[#0891B2] hover:bg-[#007f9d] text-white font-label text-xs font-semibold py-2.5 rounded-lg flex justify-center items-center gap-1.5 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                      >
+                        {creatingAdjuster ? (
+                          <>
+                            <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                            <span>Provisioning...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                            <span>Provision Account</span>
+                          </>
+                        )}
                       </button>
                     </div>
+                  </form>
+                </div>
+
+                {/* Right Column: Adjusters Roster Table */}
+                <div className="lg:col-span-2 bg-white rounded-2xl border border-[#e0e3e5] flex flex-col shadow-sm overflow-hidden">
+                  <div className="p-4 md:p-6 border-b border-[#e0e3e5] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                    <div>
+                      <h3 className="font-headline text-lg font-bold text-[#191c1e]">Adjusters Roster</h3>
+                      <p className="font-label text-xs text-[#505f76]">
+                        {filteredAdjusters.length} active personnel registered
+                      </p>
+                    </div>
+
+                    <div className="relative w-full sm:w-56">
+                      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#505f76] text-[18px]">
+                        search
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Search roster..."
+                        value={adjusterSearch}
+                        onChange={(e) => setAdjusterSearch(e.target.value)}
+                        className="input-minimal w-full pl-9 pr-4 py-1.5 bg-[#f7f9fb] border border-[#e0e3e5] rounded-full font-body text-xs text-[#191c1e]"
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
 
-              <form onSubmit={handleCreateAdjuster} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Maya Lin"
-                    value={newAdjusterName}
-                    onChange={(e) => setNewAdjusterName(e.target.value)}
-                    required
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Email Address</label>
-                  <input
-                    type="email"
-                    placeholder="e.g. maya.lin@insure.co"
-                    value={newAdjusterEmail}
-                    onChange={(e) => setNewAdjusterEmail(e.target.value)}
-                    required
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Specialization</label>
-                  <select
-                    value={newAdjusterSpec}
-                    onChange={(e) => setNewAdjusterSpec(e.target.value)}
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-slate-100 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition"
-                  >
-                    {CANONICAL_TYPES.map((t) => (
-                      <option key={t.value} value={t.value} className="bg-slate-900 text-slate-100">
-                        {t.label} Insurance
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={creatingAdjuster}
-                  className="w-full mt-2 p-3.5 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-purple-950/30 transition disabled:opacity-50"
-                >
-                  {creatingAdjuster ? "Creating Adjuster..." : "Create Adjuster"}
-                </button>
-              </form>
-            </div>
-
-            {/* Adjusters Directory */}
-            <div className="md:col-span-7 bg-slate-900/60 border border-slate-800 rounded-3xl p-6 backdrop-blur-md shadow-xl flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-white">Adjusters Roster</h3>
-                  <p className="text-xs text-slate-400">Active adjusters assigned across insurance categories</p>
-                </div>
-                <button
-                  onClick={() => fetchAdjusters()}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-                >
-                  ↻ Refresh
-                </button>
-              </div>
-
-              {loadingAdjusters ? (
-                <div className="py-12 text-center text-xs text-slate-500 animate-pulse">Loading adjusters roster...</div>
-              ) : adjusters.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-500">No adjusters registered yet.</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400 text-[11px] uppercase tracking-wider">
-                        <th className="py-3 px-3">Name</th>
-                        <th className="py-3 px-3">Email</th>
-                        <th className="py-3 px-3">Specialization</th>
-                        <th className="py-3 px-3">Assigned</th>
-                        <th className="py-3 px-3">Status</th>
-                        <th className="py-3 px-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60">
-                      {adjusters.map((a) => (
-                        <tr key={a.id} className="hover:bg-slate-800/30 transition">
-                          <td className="py-3 px-3 font-semibold text-white">{a.name}</td>
-                          <td className="py-3 px-3 text-slate-400">{a.email}</td>
-                          <td className="py-3 px-3">
-                            <span className="px-2 py-0.5 rounded-md bg-purple-950 text-purple-300 border border-purple-800 text-[10px] uppercase font-bold">
-                              {a.specialization.replace("_", " ")}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-slate-300 font-mono">{a.claims_assigned}</td>
-                          <td className="py-3 px-3">
-                            <button
-                              onClick={() => handleToggleAdjusterStatus(a)}
-                              title="Click to toggle active status"
-                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border transition cursor-pointer ${
-                                a.is_active
-                                  ? "bg-emerald-950/80 text-emerald-300 border-emerald-800 hover:bg-emerald-900"
-                                  : "bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900"
-                              }`}
-                            >
-                              {a.is_active ? "● Active" : "○ Inactive"}
-                            </button>
-                          </td>
-                          <td className="py-3 px-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => openEditModal(a)}
-                                title="Edit Adjuster Details"
-                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition"
-                              >
-                                ✏️ Edit
-                              </button>
-                              <button
-                                onClick={() => handleResetPassword(a)}
-                                disabled={resettingPasswordId === a.id}
-                                title="Reset Temporary Password"
-                                className="px-2 py-1 rounded-lg bg-amber-950/60 hover:bg-amber-900/80 text-amber-200 border border-amber-800/50 text-[11px] font-medium transition disabled:opacity-50"
-                              >
-                                {resettingPasswordId === a.id ? "..." : "🔑 Reset"}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setDeletingAdjuster(a);
-                                  setDeleteError("");
-                                }}
-                                title="Delete Adjuster"
-                                className="px-2 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 text-rose-200 border border-rose-800/50 text-[11px] font-medium transition"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          </td>
+                  <div className="overflow-x-auto w-full">
+                    <table className="w-full text-left border-collapse min-w-[620px]">
+                      <thead>
+                        <tr className="bg-[#f7f9fb] border-b border-[#e0e3e5] font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                          <th className="py-3 px-4">Name</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">Specialization</th>
+                          <th className="py-3 px-4 text-center">Active Claims</th>
+                          <th className="py-3 px-4 text-center">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Modal: Edit Adjuster */}
-        {editingAdjuster && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span>✏️</span> Edit Adjuster
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Update credentials, status, or category assignment</p>
-                </div>
-                <button
-                  onClick={() => setEditingAdjuster(null)}
-                  className="text-slate-400 hover:text-white text-lg transition px-2"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {editError && (
-                <div className="p-3 bg-rose-950/70 border border-rose-600/50 rounded-2xl text-xs text-rose-200">
-                  {editError}
-                </div>
-              )}
-
-              <form onSubmit={handleSaveEdit} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Full Name</label>
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    required
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 transition"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Email Address</label>
-                  <input
-                    type="email"
-                    value={editEmail}
-                    onChange={(e) => setEditEmail(e.target.value)}
-                    required
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500 transition"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-slate-300 px-1">Specialization</label>
-                  <select
-                    value={editSpec}
-                    onChange={(e) => setEditSpec(e.target.value)}
-                    className="bg-slate-950/70 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-purple-500 transition"
-                  >
-                    {CANONICAL_TYPES.map((t) => (
-                      <option key={t.value} value={t.value} className="bg-slate-900 text-slate-100">
-                        {t.label} Insurance
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-slate-950/50 border border-slate-800/80 rounded-2xl">
-                  <div>
-                    <span className="text-xs font-semibold text-slate-200 block">Account Status</span>
-                    <span className="text-[11px] text-slate-400">Enable or disable claim intake assignment</span>
+                      </thead>
+                      <tbody className="divide-y divide-[#e0e3e5] font-body text-xs">
+                        {loadingAdjusters ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-[#505f76] animate-pulse">
+                              Loading adjusters...
+                            </td>
+                          </tr>
+                        ) : filteredAdjusters.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-[#505f76]">
+                              No adjusters found.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredAdjusters.map((adj) => (
+                            <tr key={adj.id} className="hover:bg-[#f7f9fb] transition-colors">
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-8 h-8 rounded-full bg-[#d0e1fb] text-[#54647a] flex items-center justify-center font-bold text-xs shrink-0">
+                                    {adj.name?.charAt(0) || "A"}
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="font-label text-xs text-[#191c1e] font-semibold">{adj.name}</span>
+                                    <span className="text-[11px] text-[#505f76]">{adj.email}</span>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                {adj.is_active ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-label text-[10px] font-semibold border border-emerald-200">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
+                                    Active
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#eceef0] text-[#505f76] font-label text-[10px]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#6e797e]"></span>
+                                    Offline
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4 text-[#505f76] capitalize">
+                                {SPECIALIZATION_OPTIONS.find((s) => s.value === adj.specialization)?.label ||
+                                  adj.specialization}
+                              </td>
+                              <td className="py-3.5 px-4 text-center font-semibold text-[#191c1e]">
+                                {adj.claims_assigned || 0}
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => handleOpenEditAdjuster(adj)}
+                                    title="Edit Adjuster"
+                                    className="text-[#505f76] hover:text-[#00647c] p-1.5 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
+                                  >
+                                    <span className="material-symbols-outlined text-[17px]">edit</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleResetPassword(adj)}
+                                    disabled={resettingPasswordId === adj.id}
+                                    title="Reset Password"
+                                    className="text-[#505f76] hover:text-[#0891B2] p-1.5 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
+                                  >
+                                    <span className="material-symbols-outlined text-[17px]">key</span>
+                                  </button>
+                                  <button
+                                    onClick={() => setDeletingAdjuster(adj)}
+                                    title="Delete Adjuster"
+                                    className="text-[#505f76] hover:text-[#ba1a1a] p-1.5 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
+                                  >
+                                    <span className="material-symbols-outlined text-[17px]">delete</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setEditActive(!editActive)}
-                    className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
-                      editActive
-                        ? "bg-emerald-950 text-emerald-300 border-emerald-800"
-                        : "bg-rose-950 text-rose-300 border-rose-800"
-                    }`}
-                  >
-                    {editActive ? "Active" : "Inactive"}
-                  </button>
-                </div>
 
-                <div className="flex items-center justify-end gap-3 mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditingAdjuster(null)}
-                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingEdit}
-                    className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition disabled:opacity-50"
-                  >
-                    {savingEdit ? "Saving Changes..." : "Save Changes"}
-                  </button>
+                  <div className="p-3 border-t border-[#e0e3e5] bg-white text-center">
+                    <span className="text-[11px] text-[#505f76]">
+                      Showing {filteredAdjusters.length} of {adjusters.length} adjusters
+                    </span>
+                  </div>
                 </div>
-              </form>
-            </div>
-          </div>
-        )}
+              </div>
+            </>
+          )}
+        </div>
+      </main>
 
-        {/* Modal: Password Reset Result */}
-        {passwordResetData && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span>🔑</span> Password Reset Generated
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Temporary credentials generated for <span className="text-white font-medium">{passwordResetData.adjuster.name}</span>
-                  </p>
-                </div>
-                <button
-                  onClick={() => setPasswordResetData(null)}
-                  className="text-slate-400 hover:text-white text-lg transition px-2"
+      {/* Edit Adjuster Modal */}
+      {editingAdjuster && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="font-headline text-lg font-bold text-[#191c1e] mb-1">Edit Adjuster</h3>
+            <p className="font-body text-xs text-[#505f76] mb-4">Modify personnel profile and status.</p>
+
+            {editError && (
+              <div className="mb-4 p-3 bg-[#ffdad6] text-[#93000a] text-xs rounded-lg">{editError}</div>
+            )}
+
+            <form onSubmit={handleSaveEditAdjuster} className="space-y-4">
+              <div>
+                <label className="font-label text-xs text-[#505f76] block mb-1">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                />
+              </div>
+
+              <div>
+                <label className="font-label text-xs text-[#505f76] block mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                />
+              </div>
+
+              <div>
+                <label className="font-label text-xs text-[#505f76] block mb-1">Specialization</label>
+                <select
+                  value={editSpec}
+                  onChange={(e) => setEditSpec(e.target.value)}
+                  className="w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3 py-2 text-xs text-[#191c1e]"
                 >
-                  ✕
-                </button>
+                  {SPECIALIZATION_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-2xl flex flex-col gap-2">
-                <span className="text-[11px] text-amber-300 font-semibold">New Temporary Password:</span>
-                <div className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-xl">
-                  <span className="font-mono font-bold text-amber-200 text-sm">{passwordResetData.tempPass}</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(passwordResetData.tempPass);
-                      setCopiedResetPass(true);
-                      setTimeout(() => setCopiedResetPass(false), 3000);
-                    }}
-                    className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition"
-                  >
-                    {copiedResetPass ? "✓ Copied" : "Copy"}
-                  </button>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-1">
-                  Share this credential securely with the adjuster. They will be required to change it upon first login.
-                </span>
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="activeCheck"
+                  checked={editActive}
+                  onChange={(e) => setEditActive(e.target.checked)}
+                  className="rounded text-[#0891B2] focus:ring-[#0891B2]"
+                />
+                <label htmlFor="activeCheck" className="font-body text-xs text-[#191c1e] cursor-pointer">
+                  Account is Active
+                </label>
               </div>
 
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setPasswordResetData(null)}
-                  className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Modal: Delete Confirmation */}
-        {deletingAdjuster && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl flex flex-col gap-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-rose-400 flex items-center gap-2">
-                    <span>⚠️</span> Delete Adjuster Account
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Are you sure you want to remove <span className="text-white font-semibold">{deletingAdjuster.name}</span>?
-                  </p>
-                </div>
-                <button
-                  onClick={() => setDeletingAdjuster(null)}
-                  className="text-slate-400 hover:text-white text-lg transition px-2"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {deleteError && (
-                <div className="p-3 bg-rose-950/80 border border-rose-600/60 rounded-2xl text-xs text-rose-200 flex flex-col gap-1">
-                  <span className="font-bold">Cannot Delete:</span>
-                  <span>{deleteError}</span>
-                </div>
-              )}
-
-              {deletingAdjuster.claims_assigned > 0 ? (
-                <div className="p-3.5 bg-amber-950/40 border border-amber-600/40 rounded-2xl text-xs text-amber-200">
-                  This adjuster currently has <strong>{deletingAdjuster.claims_assigned}</strong> active claims assigned. Deletion is blocked to preserve claim integrity. Please toggle the account status to <strong>Inactive</strong> instead.
-                </div>
-              ) : (
-                <p className="text-xs text-slate-300">
-                  This action will permanently delete the adjuster profile and their login account. This action cannot be undone.
-                </p>
-              )}
-
-              <div className="flex items-center justify-end gap-3 mt-2">
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#e0e3e5]">
                 <button
                   type="button"
-                  onClick={() => setDeletingAdjuster(null)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                  onClick={() => setEditingAdjuster(null)}
+                  className="px-4 py-2 rounded-lg bg-[#f7f9fb] border border-[#bdc8ce] text-[#505f76] text-xs font-semibold hover:text-[#191c1e] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="button"
-                  onClick={handleDeleteAdjuster}
-                  disabled={deletingLoading || deletingAdjuster.claims_assigned > 0}
-                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition disabled:opacity-50"
+                  type="submit"
+                  disabled={savingEdit}
+                  className="px-4 py-2 rounded-lg bg-[#0891B2] hover:bg-[#007f9d] text-white text-xs font-semibold shadow-sm disabled:opacity-50 cursor-pointer"
                 >
-                  {deletingLoading ? "Deleting..." : "Delete Permanently"}
+                  {savingEdit ? "Saving..." : "Save Changes"}
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Password Reset Modal */}
+      {passwordResetData && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-2 text-emerald-700 font-bold mb-2">
+              <span className="material-symbols-outlined">key</span>
+              <h3 className="font-headline text-lg">Password Reset Successfully</h3>
+            </div>
+            <p className="font-body text-xs text-[#505f76] mb-4">
+              A temporary password has been generated for{" "}
+              <span className="font-semibold text-[#191c1e]">{passwordResetData.adjuster.name}</span>.
+            </p>
+
+            <div className="p-3 bg-[#F1F5F9] rounded-xl border border-[#bdc8ce] font-mono text-xs flex justify-between items-center mb-4">
+              <span>{passwordResetData.tempPass}</span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(passwordResetData.tempPass);
+                  setCopiedResetPass(true);
+                  setTimeout(() => setCopiedResetPass(false), 2000);
+                }}
+                className="text-xs font-bold text-[#0891B2] underline ml-2 cursor-pointer"
+              >
+                {copiedResetPass ? "Copied!" : "Copy"}
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPasswordResetData(null)}
+                className="px-4 py-2 rounded-lg bg-[#00647c] text-white text-xs font-semibold cursor-pointer"
+              >
+                Done
+              </button>
             </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
+
+      {/* Delete Adjuster Modal */}
+      {deletingAdjuster && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="font-headline text-lg font-bold text-[#ba1a1a] mb-2">Confirm Delete</h3>
+            <p className="font-body text-xs text-[#505f76] mb-4">
+              Are you sure you want to permanently remove adjuster account{" "}
+              <span className="font-semibold text-[#191c1e]">{deletingAdjuster.name}</span> ({deletingAdjuster.email})?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeletingAdjuster(null)}
+                className="px-4 py-2 rounded-lg bg-[#f7f9fb] border border-[#bdc8ce] text-[#505f76] text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAdjuster}
+                disabled={deletingLoading}
+                className="px-4 py-2 rounded-lg bg-[#ba1a1a] hover:bg-[#93000a] text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {deletingLoading ? "Deleting..." : "Delete Adjuster"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Add Policy Modal */}
+      {showAddPolicyModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h3 className="font-headline text-lg font-bold text-[#191c1e] mb-1">Add New Policy</h3>
+            <p className="font-body text-xs text-[#505f76] mb-4">Register a new insurance policy in the system database.</p>
+
+            {createPolicyError && (
+              <div className="mb-4 p-3 bg-[#ffdad6] text-[#93000a] text-xs rounded-lg">{createPolicyError}</div>
+            )}
+
+            <form onSubmit={handleCreatePolicy} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policy Number *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. MOT-5521"
+                    value={newPolicyNum}
+                    onChange={(e) => setNewPolicyNum(e.target.value.toUpperCase())}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs font-mono uppercase text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policy Type *</label>
+                  <select
+                    value={newPolicyType}
+                    onChange={(e) => setNewPolicyType(e.target.value)}
+                    className="w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3 py-2 text-xs text-[#191c1e]"
+                  >
+                    {SPECIALIZATION_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. John Doe"
+                    value={newPolicyHolder}
+                    onChange={(e) => setNewPolicyHolder(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Phone (Last 4)</label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="1234"
+                    value={newPolicyPhone4}
+                    onChange={(e) => setNewPolicyPhone4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs font-mono text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Coverage Limit (₹) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={newPolicyCov}
+                    onChange={(e) => setNewPolicyCov(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Deductible (₹) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={newPolicyDed}
+                    onChange={(e) => setNewPolicyDed(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Holder DOB</label>
+                  <input
+                    type="date"
+                    value={newPolicyDob}
+                    onChange={(e) => setNewPolicyDob(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Effective Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newPolicyEff}
+                    onChange={(e) => setNewPolicyEff(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Expiry Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newPolicyExp}
+                    onChange={(e) => setNewPolicyExp(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="newPolicyActiveCheck"
+                  checked={newPolicyActive}
+                  onChange={(e) => setNewPolicyActive(e.target.checked)}
+                  className="rounded text-[#00647c] focus:ring-[#00647c]"
+                />
+                <label htmlFor="newPolicyActiveCheck" className="font-body text-xs text-[#191c1e] cursor-pointer">
+                  Policy is Active
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#e0e3e5]">
+                <button
+                  type="button"
+                  onClick={() => setShowAddPolicyModal(false)}
+                  className="px-4 py-2 rounded-lg bg-[#f7f9fb] border border-[#bdc8ce] text-[#505f76] text-xs font-semibold hover:text-[#191c1e] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingPolicy}
+                  className="px-4 py-2 rounded-lg bg-[#00647c] hover:bg-[#007f9d] text-white text-xs font-semibold shadow-sm disabled:opacity-50 cursor-pointer"
+                >
+                  {creatingPolicy ? "Creating..." : "Save Policy"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Policy Modal */}
+      {editingPolicy && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h3 className="font-headline text-lg font-bold text-[#191c1e] mb-1">
+              Edit Policy <span className="font-mono text-[#00647c]">{editingPolicy.policy_number}</span>
+            </h3>
+            <p className="font-body text-xs text-[#505f76] mb-4">Modify coverage, dates, policyholder info, and status.</p>
+
+            {editPolicyError && (
+              <div className="mb-4 p-3 bg-[#ffdad6] text-[#93000a] text-xs rounded-lg">{editPolicyError}</div>
+            )}
+
+            <form onSubmit={handleSaveEditPolicy} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policy Type</label>
+                  <select
+                    value={editPolicyType}
+                    onChange={(e) => setEditPolicyType(e.target.value)}
+                    className="w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3 py-2 text-xs text-[#191c1e]"
+                  >
+                    {SPECIALIZATION_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Phone (Last 4)</label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="1234"
+                    value={editPolicyPhone4}
+                    onChange={(e) => setEditPolicyPhone4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs font-mono text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. John Doe"
+                    value={editPolicyHolder}
+                    onChange={(e) => setEditPolicyHolder(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Holder Date of Birth</label>
+                  <input
+                    type="date"
+                    value={editPolicyDob}
+                    onChange={(e) => setEditPolicyDob(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Coverage Limit (₹)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={editPolicyCov}
+                    onChange={(e) => setEditPolicyCov(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Deductible (₹)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editPolicyDed}
+                    onChange={(e) => setEditPolicyDed(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Effective Date</label>
+                  <input
+                    type="date"
+                    value={editPolicyEff}
+                    onChange={(e) => setEditPolicyEff(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+                <div>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Expiry Date</label>
+                  <input
+                    type="date"
+                    value={editPolicyExp}
+                    onChange={(e) => setEditPolicyExp(e.target.value)}
+                    className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="editPolicyActiveCheck"
+                  checked={editPolicyActive}
+                  onChange={(e) => setEditPolicyActive(e.target.checked)}
+                  className="rounded text-[#00647c] focus:ring-[#00647c]"
+                />
+                <label htmlFor="editPolicyActiveCheck" className="font-body text-xs text-[#191c1e] cursor-pointer">
+                  Policy is Active
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#e0e3e5]">
+                <button
+                  type="button"
+                  onClick={() => setEditingPolicy(null)}
+                  className="px-4 py-2 rounded-lg bg-[#f7f9fb] border border-[#bdc8ce] text-[#505f76] text-xs font-semibold hover:text-[#191c1e] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPolicy}
+                  className="px-4 py-2 rounded-lg bg-[#00647c] hover:bg-[#007f9d] text-white text-xs font-semibold shadow-sm disabled:opacity-50 cursor-pointer"
+                >
+                  {savingPolicy ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

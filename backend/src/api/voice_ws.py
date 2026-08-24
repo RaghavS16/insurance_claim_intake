@@ -616,6 +616,7 @@ async def _send_loop(
 # ---------------------------------------------------------------------------
 
 @router.websocket("/ws/claims/{ticket_id}/voice")
+@router.websocket("/api/v1/claims/ws/{ticket_id}")
 async def voice_conversation(
     websocket: WebSocket,
     ticket_id: str,
@@ -730,6 +731,9 @@ async def voice_conversation(
         try:
             while True:
                 message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    logger.info("Voice session %s received disconnect frame.", ticket_id)
+                    break
 
                 if "bytes" in message and message["bytes"] is not None:
                     chunk = message["bytes"]
@@ -810,7 +814,47 @@ async def voice_conversation(
                         voice_session.clear_echo_suppression()
                         await change_agent_state(voice_session, "listening", outbound_queue)
 
-        except WebSocketDisconnect:
+                    # Handle manual edits dispatched from the UI
+                    elif msg_type == "manual_edit":
+                        edit_field = payload.get("field")
+                        edit_val = payload.get("value")
+                        if edit_field:
+                            from datetime import datetime
+                            st = dict(getattr(claim, "pipeline_state", None) or {})
+                            ext = dict(st.get("extracted_data") or {})
+                            ext[edit_field] = edit_val
+                            st["extracted_data"] = ext
+                            setattr(claim, "pipeline_state", st)
+
+                            if edit_field == "insurance_type":
+                                setattr(claim, "insurance_type", edit_val)
+                            elif edit_field == "event_description":
+                                setattr(claim, "event_description", edit_val)
+                            elif edit_field == "estimated_claim_amount":
+                                setattr(claim, "estimated_claim_amount", edit_val)
+                            elif edit_field == "event_date" and edit_val:
+                                try:
+                                    setattr(claim, "event_date", datetime.strptime(edit_val, "%Y-%m-%d").date())
+                                except ValueError:
+                                    pass
+
+                            try:
+                                db.commit()
+                            except Exception as exc:
+                                logger.warning("Failed to save manual_edit to db: %s", exc)
+                                db.rollback()
+
+                            await outbound_queue.put({
+                                "json": {
+                                    "type": "state_update",
+                                    "extracted_data": ext,
+                                    "conversation_status": getattr(claim, "conversation_status", "collecting"),
+                                    "global_seq": voice_session.next_global_sequence(),
+                                    "timestamp": time.time(),
+                                }
+                            })
+
+        except (WebSocketDisconnect, RuntimeError):
             logger.info("Voice session %s disconnected cleanly.", ticket_id)
         except Exception:
             logger.exception("Voice session %s encountered an unexpected error.", ticket_id)

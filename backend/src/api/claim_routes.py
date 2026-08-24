@@ -42,6 +42,19 @@ class ClaimConfirmRequest(BaseModel):
     confirmed: bool = Field(True, description="True to confirm and submit claim")
 
 
+class VoiceSessionRequest(BaseModel):
+    policy_number: Optional[str] = Field(None, description="Preselected policy number")
+
+
+class UpdateClaimRequest(BaseModel):
+    policy_id: Optional[str] = None
+    insurance_type: Optional[str] = None
+    event_date: Optional[str] = None
+    event_description: Optional[str] = None
+    estimated_claim_amount: Optional[float] = None
+    extracted_data: Optional[Dict[str, Any]] = None
+
+
 # ---------------------------------------------------------------------------
 # Lazy dependency accessor to avoid circular imports
 # ---------------------------------------------------------------------------
@@ -57,11 +70,17 @@ def _get_current_user():
 @router.post("/voice-session")
 def start_voice_session(
     request: Request,
+    payload: Optional[VoiceSessionRequest] = None,
     db: Session = Depends(get_db),
 ):
     """Create a new draft claim session and return ticket_id for WebSocket voice streaming."""
     current_user = _resolve_user(request, db)
     ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    
+    init_extracted: Dict[str, Any] = {}
+    if payload and payload.policy_number:
+        init_extracted["policy_id"] = payload.policy_number.strip().upper()
+    
     claim = Claim(
         ticket_id=ticket_id,
         claimant_id=current_user.id,
@@ -69,6 +88,7 @@ def start_voice_session(
         input_mode="voice",
         status="draft",
         conversation_status="not_started",
+        pipeline_state={"extracted_data": init_extracted} if init_extracted else {},
     )
     db.add(claim)
     try:
@@ -79,6 +99,7 @@ def start_voice_session(
         raise HTTPException(status_code=500, detail="Failed to create claim session.")
     return {
         "ticket_id": ticket_id,
+        "extracted_data": init_extracted,
         "initial_message": "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
     }
 
@@ -231,6 +252,145 @@ def verify_claim(
     }
 
 
+@router.post("/{ticket_id}/confirm")
+@router.post("/confirm/{ticket_id}")
+async def confirm_claim(
+    ticket_id: str,
+    request: Request,
+    payload: Optional[ClaimConfirmRequest] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Confirm and submit a claim after verifying required fields and policy validity.
+    Assigns claim to specialization adjuster and marks status as submitted/confirmed.
+    """
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+
+    state = dict(getattr(claim, "pipeline_state", None) or {})
+    extracted = dict(state.get("extracted_data") or {})
+
+    # Extract all required claim fields
+    policy_id = extracted.get("policy_id")
+    raw_itype = extracted.get("insurance_type") or getattr(claim, "insurance_type", None)
+    insurance_type = str(raw_itype) if raw_itype else None
+    event_date_str = extracted.get("event_date") or (str(claim.event_date) if claim.event_date else None)
+    est_amount = extracted.get("estimated_claim_amount") or getattr(claim, "estimated_claim_amount", None)
+
+    missing = []
+    if not policy_id:
+        missing.append("Policy ID")
+    if not insurance_type:
+        missing.append("Insurance Category")
+    if not event_date_str:
+        missing.append("Incident Date")
+    if est_amount is None:
+        missing.append("Estimated Cost")
+
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot submit claim: Please provide all required details: {', '.join(missing)}.",
+        )
+
+    # Perform strict policy verification against database
+    verification = verify_policy_for_claim(
+        policy_id=str(policy_id),
+        event_date_str=str(event_date_str),
+        claimant_user_id=str(current_user.id),
+        insurance_type=insurance_type,
+        db=db,
+    )
+
+    if not verification.get("valid"):
+        reason = verification.get("reason", "")
+        fail_msg = _verification_failure_message(reason)
+        claim.status = "verification_failed"
+        claim.conversation_status = "verification_failed"
+        state["policy_verification"] = verification
+        claim.pipeline_state = state
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Claim verification failed: {fail_msg}",
+        )
+
+    # Policy verified: Link policy foreign key if available
+    from src.database.models import Policy
+    pol_record = db.query(Policy).filter(Policy.policy_number == str(policy_id).strip().upper()).first()
+    if pol_record:
+        claim.policy_id = pol_record.id
+
+    # Mark as confirmed / submitted
+    claim.status = "submitted"
+    claim.conversation_status = "confirmed"
+
+    state["confirmed"] = True
+    state["awaiting_confirmation"] = False
+    state["policy_verification"] = verification
+    claim.pipeline_state = state
+
+    # Assign to an adjuster matching the specialization if available
+    try:
+        from src.database.models import Adjuster
+        claim_itype = claim.insurance_type or extracted.get("insurance_type")
+        if claim_itype:
+            adjuster = db.query(Adjuster).filter(
+                Adjuster.specialization == claim_itype,
+                Adjuster.is_active == True
+            ).first()
+            if adjuster:
+                adjuster.claims_assigned = (adjuster.claims_assigned or 0) + 1
+    except Exception:
+        pass
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to confirm claim: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to save claim confirmation.")
+
+    return {
+        "ticket_id": claim.ticket_id,
+        "status": "submitted",
+        "conversation_status": "confirmed",
+        "confirmed": True,
+        "policy_verification": verification,
+        "message": f"Claim #{ticket_id} has been verified, confirmed, and submitted to an adjuster.",
+    }
+
+
+@router.post("/message/{ticket_id}")
+async def send_claim_message(
+    ticket_id: str,
+    payload: Dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Text-based message submission fallback for claim intake."""
+    message_text = payload.get("message") or payload.get("text") or ""
+    req = ClaimIntakeRequest(
+        claim_text=message_text,
+        input_mode="text",
+        ticket_id=ticket_id,
+    )
+    result = await intake_claim(req, request, db)
+    return {
+        "ticket_id": ticket_id,
+        "agent_message": result.get("message"),
+        "extracted_data": result.get("extracted_data"),
+        "missing_fields": result.get("missing_fields"),
+        "confirmed": result.get("confirmed", False),
+    }
+
+
 @router.get("/{ticket_id}/conversation")
 def get_conversation_history(
     ticket_id: str,
@@ -287,6 +447,74 @@ def get_claim(
         "missing_fields": state.get("missing_fields") or [],
         "response_message": state.get("response_message"),
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
+    }
+
+
+@router.patch("/{ticket_id}")
+def update_claim_details(
+    ticket_id: str,
+    payload: UpdateClaimRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Partially update claim details and extracted data."""
+    from datetime import datetime
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+
+    state = dict(getattr(claim, "pipeline_state", None) or {})
+    extracted = dict(state.get("extracted_data") or {})
+
+    if payload.extracted_data:
+        extracted.update(payload.extracted_data)
+
+    if payload.policy_id is not None:
+        extracted["policy_id"] = payload.policy_id.strip().upper() if payload.policy_id else None
+
+    if payload.insurance_type is not None:
+        claim.insurance_type = payload.insurance_type.strip().lower() if payload.insurance_type else None
+        extracted["insurance_type"] = claim.insurance_type
+
+    if payload.event_date is not None:
+        extracted["event_date"] = payload.event_date.strip() if payload.event_date else None
+        if payload.event_date and payload.event_date.strip():
+            try:
+                claim.event_date = datetime.strptime(payload.event_date.strip(), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+    if payload.event_description is not None:
+        claim.event_description = payload.event_description
+        extracted["event_description"] = payload.event_description
+
+    if payload.estimated_claim_amount is not None:
+        claim.estimated_claim_amount = payload.estimated_claim_amount
+        extracted["estimated_claim_amount"] = payload.estimated_claim_amount
+
+    state["extracted_data"] = extracted
+    claim.pipeline_state = state
+
+    try:
+        db.commit()
+        db.refresh(claim)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to patch claim %s", ticket_id)
+        raise HTTPException(status_code=500, detail="Failed to update claim.")
+
+    return {
+        "ticket_id": claim.ticket_id,
+        "status": claim.status,
+        "conversation_status": claim.conversation_status,
+        "insurance_type": claim.insurance_type,
+        "event_date": str(claim.event_date) if claim.event_date else None,
+        "event_description": claim.event_description,
+        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
+        "extracted_data": extracted,
+        "message": "Claim updated successfully.",
     }
 
 

@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     # Auth
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, ge=5, le=1440, description="JWT access token expiry in minutes")
 
+    # Password Reset OTP / Email
+    SMTP_HOST: Optional[str] = Field(None, description="SMTP server host; if unset, OTP is logged instead of emailed (dev/test)")
+    SMTP_PORT: int = Field(587, description="SMTP server port")
+    SMTP_USERNAME: Optional[str] = Field(None, description="SMTP auth username")
+    SMTP_PASSWORD: Optional[str] = Field(None, description="SMTP auth password")
+    SMTP_FROM_EMAIL: str = Field("no-reply@insurance-claims.local", description="From address for outbound emails")
+    SMTP_USE_TLS: bool = Field(True, description="Use STARTTLS for SMTP connection")
+
+    OTP_LENGTH: int = Field(6, ge=4, le=8, description="Digits in the OTP code")
+    OTP_EXPIRY_MINUTES: int = Field(10, ge=1, le=60, description="OTP validity window in minutes")
+    OTP_MAX_ATTEMPTS: int = Field(5, ge=1, le=20, description="Max incorrect OTP attempts before invalidation")
+    OTP_RESEND_COOLDOWN_SECONDS: int = Field(60, ge=0, description="Minimum seconds between OTP resend requests")
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = Field(10, ge=1, le=60, description="Short-lived reset token validity after OTP verification")
+
     # Database
     DATABASE_URL: str = Field(
         "postgresql://postgres:DBpassword@localhost:5433/insurance_claims",

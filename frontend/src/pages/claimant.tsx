@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/router";
+import Link from "next/link";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -35,23 +36,28 @@ interface ConversationTurn {
 
 export default function ClaimantPage() {
   const router = useRouter();
+  const { policy: queryPolicy } = router.query;
+
   const [token, setToken] = useState<string>("");
   const [userId, setUserId] = useState<string>("");
   const [userName, setUserName] = useState<string>("");
   const [ticketId, setTicketId] = useState<string>("");
   const [conversationStatus, setConversationStatus] = useState<string>("not_started");
-  const [agentState, setAgentState] = useState<string>("listening"); // listening, thinking, speaking
+  const [agentState, setAgentState] = useState<string>("idle"); // idle, listening, thinking, speaking
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
-  const [missingFields, setMissingFields] = useState<string[]>([
-    "policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"
-  ]);
   const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [textMode, setTextMode] = useState<boolean>(false);
   const [textInput, setTextInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [confirmed, setConfirmed] = useState<boolean>(false);
+  const [submittingClaim, setSubmittingClaim] = useState<boolean>(false);
   const [submittedMessage, setSubmittedMessage] = useState<string>("");
   const [errorBanner, setErrorBanner] = useState<string>("");
+
+  // Edit Modal State
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>("");
 
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
 
@@ -84,11 +90,11 @@ export default function ClaimantPage() {
       })
       .then((data) => {
         if (data.role !== "CLAIMANT") {
-          router.push("/login");
+          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
           return;
         }
         setUserId(data.id);
-        setUserName(data.full_name);
+        setUserName(data.full_name || "Claimant");
       })
       .catch(() => {
         localStorage.removeItem("access_token");
@@ -100,74 +106,23 @@ export default function ClaimantPage() {
   const scrollToBottom = useCallback((force = false) => {
     const container = chatContainerRef.current;
     if (!container) return;
-    const threshold = 150;
+    const threshold = 300;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
     if (force || isNearBottom) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth",
-      });
+      setTimeout(() => {
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: "smooth",
+          });
+        }
+      }, 50);
     }
   }, []);
 
   useEffect(() => {
     scrollToBottom(true);
-  }, [history.length, scrollToBottom]);
-
-  // Handle Logout
-  const handleLogout = () => {
-    if (isRecording) {
-      stopVoiceRecording();
-    }
-    localStorage.removeItem("access_token");
-    router.push("/login");
-  };
-
-  // Initialize Session
-  const initSession = useCallback(async () => {
-    if (!token || !userId) return;
-    try {
-      setLoading(true);
-      setErrorBanner("");
-      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
-      }
-      const data = await res.json();
-      setTicketId(data.ticket_id);
-      setConversationStatus("collecting");
-      setConfirmed(false);
-      setSubmittedMessage("");
-      setExtractedData({});
-      setPartialSegments(new Map());
-      setMissingFields(["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"]);
-      setHistory([
-        {
-          turn: 1,
-          speaker: "agent",
-          text: data.initial_message || "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
-          global_seq: 0,
-          timestamp: Date.now() - 1000,
-        },
-      ]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorBanner(`Failed to start claim session: ${msg}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, userId]);
-
-  useEffect(() => {
-    if (token && userId) {
-      initSession();
-    }
-  }, [token, userId, initSession]);
+  }, [history.length, partialSegments.size, scrollToBottom]);
 
   // Audio queue playback
   const enqueueAudio = useCallback((blob: Blob) => {
@@ -184,6 +139,7 @@ export default function ClaimantPage() {
       activeAudioRef.current = next;
 
       next.onplay = () => {
+        setAgentState("speaking");
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "tts_started" }));
         }
@@ -197,6 +153,9 @@ export default function ClaimantPage() {
         }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
+        }
+        if (audioQueueRef.current.length === 0) {
+          setAgentState(isRecording ? "listening" : "idle");
         }
         playNext();
       };
@@ -213,7 +172,7 @@ export default function ClaimantPage() {
     };
 
     playNext();
-  }, []);
+  }, [isRecording]);
 
   // WebSocket message handler
   const handleWsMessage = useCallback((event: MessageEvent) => {
@@ -226,7 +185,6 @@ export default function ClaimantPage() {
       }
 
       if (msg.type === "barge_in") {
-        console.log("Interruption detected: stopping agent playback");
         if (activeAudioRef.current) {
           activeAudioRef.current.pause();
           activeAudioRef.current = null;
@@ -320,7 +278,6 @@ export default function ClaimantPage() {
 
       } else if (msg.type === "state_update") {
         setExtractedData((msg.extracted_data as ExtractedData) || {});
-        setMissingFields((msg.missing_fields as string[]) || []);
         if (msg.conversation_status) {
           setConversationStatus(msg.conversation_status as string);
         }
@@ -346,541 +303,1016 @@ export default function ClaimantPage() {
         });
         if ("speechSynthesis" in window) {
           const utterance = new SpeechSynthesisUtterance(text);
-          utteranceRef.current = utterance; // Prevent Chrome garbage collection
-          
+          utteranceRef.current = utterance;
           utterance.onstart = () => {
             isSpeakingFallbackRef.current = true;
+            setAgentState("speaking");
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               wsRef.current.send(JSON.stringify({ type: "tts_started" }));
             }
           };
           utterance.onend = () => {
             isSpeakingFallbackRef.current = false;
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
-            }
-          };
-          utterance.onerror = () => {
-            isSpeakingFallbackRef.current = false;
+            setAgentState(isRecording ? "listening" : "idle");
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
             }
           };
           window.speechSynthesis.speak(utterance);
         }
-
-      } else if (msg.type === "error") {
-        setErrorBanner((msg.detail as string) || "An unexpected error occurred.");
-
-      } else if (msg.type === "session_end") {
-        setIsRecording(false);
       }
     } else if (event.data instanceof Blob) {
       enqueueAudio(event.data);
     }
-  }, [enqueueAudio]);
+  }, [enqueueAudio, isRecording]);
 
-  // Voice recording
-  const startVoiceRecording = async () => {
-    if (!ticketId || !token) return;
-    setErrorBanner("");
-
-    try {
-      const wsUrl = API_BASE.replace(/^http/, "ws") + `/ws/claims/${ticketId}/voice?token=${token}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onmessage = handleWsMessage;
-      ws.onclose = () => {
-        setIsRecording(false);
-        setPartialSegments(new Map());
-      };
-      ws.onerror = () => {
-        setErrorBanner("WebSocket connection error. Please reconnect.");
-        setIsRecording(false);
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        ws.onopen = () => resolve();
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 8000);
-      });
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      streamRef.current = stream;
-
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioContext = new AudioCtx({ sampleRate: 16000 });
-      audioContextRef.current = audioContext;
-
-      await audioContext.audioWorklet.addModule("/audio-processor.js");
-
-      const source = audioContext.createMediaStreamSource(stream);
-      const workletNode = new AudioWorkletNode(audioContext, "pcm16-processor");
-      workletNodeRef.current = workletNode;
-
-      workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-        if (ws.readyState === WebSocket.OPEN && !isSpeakingFallbackRef.current) {
-          ws.send(e.data);
-        }
-      };
-
-      source.connect(workletNode);
-      setIsRecording(true);
-
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorBanner(`Voice initialization failed: ${msg}`);
-      setIsRecording(false);
+  // Connect WebSocket
+  const connectWebSocket = useCallback((ticket: string, userToken: string) => {
+    if (wsRef.current) {
+      wsRef.current.close();
     }
-  };
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = API_BASE.replace(/^https?:\/\//, "");
+    const wsUrl = `${wsProtocol}//${host}/ws/claims/${ticket}/voice?token=${userToken}`;
 
-  const stopVoiceRecording = () => {
-    if (workletNodeRef.current) {
-      workletNodeRef.current.disconnect();
-      workletNodeRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "end_session" }));
-    }
-    setIsRecording(false);
-  };
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-  // Text Submission
-  const handleTextSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!textInput.trim() || textInput.length > 1000 || !ticketId || loading) return;
+    ws.onopen = () => {
+      setErrorBanner("");
+    };
 
-    const userText = textInput.trim().substring(0, 1000);
-    setTextInput("");
+    ws.onmessage = handleWsMessage;
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: "text_input",
-        text: userText,
-      }));
-      return;
-    }
+    ws.onerror = () => {
+      console.warn("WebSocket status warning - falling back to API channels if disconnected.");
+    };
 
-    setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text: userText, timestamp: Date.now() }]);
+    ws.onclose = () => {
+      // ws closed
+    };
+  }, [handleWsMessage]);
+
+  // Load existing session or initialize new
+  const loadOrInitSession = useCallback(async () => {
+    if (!token || !userId) return;
     setLoading(true);
     setErrorBanner("");
 
+    const savedTicket = localStorage.getItem("active_claim_ticket_id");
+    if (savedTicket) {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/claims/${savedTicket}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const claimData = await res.json();
+          const convRes = await fetch(`${API_BASE}/api/v1/claims/${savedTicket}/conversation`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          let turns: ConversationTurn[] = [];
+          if (convRes.ok) {
+            const convData = await convRes.json();
+            turns = convData.map((t: any) => ({
+              turn: t.turn,
+              speaker: t.speaker,
+              text: t.text,
+              timestamp: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
+            }));
+          }
+
+          if (turns.length === 0) {
+            turns = [
+              {
+                turn: 1,
+                speaker: "agent",
+                text: "Hello! I'm here to assist you in filing your insurance claim. Please describe what happened, and I will capture all the details for you.",
+                global_seq: 0,
+                timestamp: Date.now(),
+              },
+            ];
+          }
+
+          setTicketId(savedTicket);
+          setConversationStatus(claimData.conversation_status || "collecting");
+          const isSubmitted = claimData.status === "submitted" || claimData.conversation_status === "confirmed";
+          setConfirmed(isSubmitted);
+          if (isSubmitted) {
+            setSubmittedMessage(`Claim #${savedTicket} has been submitted.`);
+          }
+
+          let ext = claimData.extracted_data || {};
+          if (queryPolicy && typeof queryPolicy === "string") {
+            ext = { ...ext, policy_id: queryPolicy.toUpperCase() };
+            fetch(`${API_BASE}/api/v1/claims/${savedTicket}`, {
+              method: "PATCH",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ policy_id: queryPolicy.toUpperCase() }),
+            }).catch(() => {});
+          }
+          setExtractedData(ext);
+          setHistory(turns);
+          setPartialSegments(new Map());
+          connectWebSocket(savedTicket, token);
+          setLoading(false);
+          return;
+        } else {
+          localStorage.removeItem("active_claim_ticket_id");
+        }
+      } catch (err) {
+        console.warn("Failed to restore saved claim session:", err);
+        localStorage.removeItem("active_claim_ticket_id");
+      }
+    }
+
+    // Initialize fresh session
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/intake`, {
+      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          ticket_id: ticketId,
-          claim_text: userText,
-          input_mode: "text",
-        }),
+        body: JSON.stringify(queryPolicy ? { policy_number: queryPolicy } : {}),
       });
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}`);
       }
       const data = await res.json();
-      setExtractedData(data.extracted_data || {});
-      setMissingFields(data.missing_fields || []);
-      if (data.conversation_status) {
-        setConversationStatus(data.conversation_status);
-      }
-      if (data.confirmed) {
-        setConfirmed(true);
-      }
-      setHistory((prev) => [
-        ...prev,
+      setTicketId(data.ticket_id);
+      localStorage.setItem("active_claim_ticket_id", data.ticket_id);
+      setConversationStatus("collecting");
+      setConfirmed(false);
+      setSubmittedMessage("");
+      setExtractedData(data.extracted_data || (queryPolicy ? { policy_id: queryPolicy as string } : {}));
+      setPartialSegments(new Map());
+      setHistory([
         {
-          turn: prev.length + 1,
+          turn: 1,
           speaker: "agent",
-          text: data.message || "Thank you for providing those details.",
+          text: data.initial_message || "Hello! I'm here to assist you in filing your insurance claim. Please describe what happened, and I will capture all the details for you.",
+          global_seq: 0,
           timestamp: Date.now(),
         },
       ]);
+
+      connectWebSocket(data.ticket_id, token);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorBanner(`Text intake failed: ${msg}`);
+      setErrorBanner(`Failed to initialize claim intake: ${msg}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, userId, queryPolicy, connectWebSocket]);
 
-  // Verify Claim
-  const handleVerify = async () => {
-    if (!ticketId || loading) return;
-    setErrorBanner("");
+  useEffect(() => {
+    if (token && userId && !ticketId) {
+      loadOrInitSession();
+    }
+  }, [token, userId, ticketId, loadOrInitSession]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        audioContextRef.current.close();
+      }
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // Voice recording triggers
+  const startVoiceRecording = async () => {
     try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/verify`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      setErrorBanner("");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
         },
       });
+      streamRef.current = stream;
+
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000,
+      });
+      audioContextRef.current = audioCtx;
+
+      await audioCtx.audioWorklet.addModule("/audio-processor.js");
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioCtx, "pcm16-processor");
+      workletNodeRef.current = workletNode;
+
+      workletNode.port.onmessage = (event) => {
+        const pcmBuffer = event.data;
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(pcmBuffer);
+        }
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
+
+      setIsRecording(true);
+      setAgentState("listening");
+    } catch (err: any) {
+      setErrorBanner(`Microphone access error: ${err.message || "Please allow microphone permissions."}`);
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    setIsRecording(false);
+    setAgentState("idle");
+  };
+
+  const toggleMic = () => {
+    if (isRecording) {
+      stopVoiceRecording();
+    } else {
+      startVoiceRecording();
+    }
+  };
+
+  // Text message submission fallback
+  const handleSendText = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!textInput.trim()) return;
+
+    const userText = textInput.trim();
+    setTextInput("");
+
+    setHistory((prev) => [
+      ...prev,
+      {
+        turn: prev.length + 1,
+        speaker: "user",
+        text: userText,
+        timestamp: Date.now(),
+      },
+    ]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "text_input",
+          text: userText,
+        })
+      );
+    } else {
+      // Fallback via HTTP
+      fetch(`${API_BASE}/api/v1/claims/message/${ticketId}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: userText }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.agent_message) {
+            setHistory((prev) => [
+              ...prev,
+              {
+                turn: prev.length + 1,
+                speaker: "agent",
+                text: data.agent_message,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
+          if (data.extracted_data) {
+            setExtractedData(data.extracted_data);
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  // Submit verified claim
+  const handleSubmitClaim = async () => {
+    if (!ticketId || !token) return;
+    setSubmittingClaim(true);
+    setErrorBanner("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirmed: true }),
+      });
+
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server returned ${res.status}`);
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || "Failed to submit claim.");
+      }
+
+      const resData = await res.json();
+      setSubmittedMessage(resData.message || `Claim successfully submitted! Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`);
+      setConfirmed(true);
+      localStorage.removeItem("active_claim_ticket_id");
+      if (isRecording) {
+        stopVoiceRecording();
+      }
+    } catch (err: any) {
+      setErrorBanner(err.message || "An error occurred while submitting your claim.");
+    } finally {
+      setSubmittingClaim(false);
+    }
+  };
+
+  // Explicit New Intake Session
+  const handleStartNewSession = async () => {
+    if (isRecording) stopVoiceRecording();
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    localStorage.removeItem("active_claim_ticket_id");
+    setTicketId("");
+    setExtractedData({});
+    setHistory([]);
+    setConfirmed(false);
+    setSubmittedMessage("");
+
+    if (!token) return;
+    try {
+      setLoading(true);
+      setErrorBanner("");
+      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        throw new Error(`Server returned ${res.status}`);
       }
       const data = await res.json();
-      if (data.status === "verified") {
-        setConfirmed(true);
-        setConversationStatus("verified");
-        setSubmittedMessage(data.message || "Claim details verified successfully!");
-      } else {
-        setConversationStatus("verification_failed");
-        setErrorBanner(data.message || "Policy verification failed.");
-
-        if (
-          data.policy_verification?.reason === "ownership_mismatch" ||
-          data.policy_verification?.reason === "policy_not_linked"
-        ) {
-          const pnum = extractedData.policy_id || "";
-          setTimeout(() => {
-            router.push(`/claimant/link-policy?policy=${encodeURIComponent(pnum)}`);
-          }, 1500);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorBanner(`Verification failed: ${msg}`);
+      setTicketId(data.ticket_id);
+      localStorage.setItem("active_claim_ticket_id", data.ticket_id);
+      setConversationStatus("collecting");
+      setConfirmed(false);
+      setSubmittedMessage("");
+      setExtractedData(data.extracted_data || {});
+      setPartialSegments(new Map());
+      setHistory([
+        {
+          turn: 1,
+          speaker: "agent",
+          text: data.initial_message || "Hello! I'm here to assist you in filing your insurance claim. Please describe what happened, and I will capture all the details for you.",
+          global_seq: 0,
+          timestamp: Date.now(),
+        },
+      ]);
+      connectWebSocket(data.ticket_id, token);
+    } catch (err: any) {
+      setErrorBanner(`Failed to start new session: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  if (!userId) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-cyan-500"></div>
-      </div>
-    );
-  }
+  // Manual Edit Field Handler
+  const handleOpenEdit = (field: string, currentVal: any) => {
+    setEditingField(field);
+    setEditValue(currentVal != null ? String(currentVal) : "");
+  };
 
-  const completedFieldsCount = 5 - missingFields.length;
-  const progressPercent = Math.round((completedFieldsCount / 5) * 100);
-  const activePartials = Array.from(partialSegments.values()).sort((a, b) => a.sequence - b.sequence);
-  const liveClaimantText = activePartials.length > 0 ? activePartials[0].text : "";
+  const handleSaveEdit = () => {
+    if (!editingField) return;
+
+    let parsedVal: any = editValue.trim();
+    if (editingField === "estimated_claim_amount") {
+      parsedVal = parseFloat(editValue.replace(/[^0-9.]/g, "")) || null;
+    }
+
+    const updated = {
+      ...extractedData,
+      [editingField]: parsedVal,
+    };
+    setExtractedData(updated);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "manual_edit",
+          field: editingField,
+          value: parsedVal,
+        })
+      );
+    }
+
+    setEditingField(null);
+  };
+
+  const handleLogout = () => {
+    if (isRecording) stopVoiceRecording();
+    localStorage.removeItem("access_token");
+    router.push("/login");
+  };
+
+  const pendingCount = [
+    !extractedData.policy_id,
+    !extractedData.insurance_type,
+    !extractedData.event_date,
+    !extractedData.estimated_claim_amount,
+  ].filter(Boolean).length;
+
+  const currentIncidentTitle = extractedData.insurance_type
+    ? `${SUPPORTED_INSURANCE_TYPES[extractedData.insurance_type as keyof typeof SUPPORTED_INSURANCE_TYPES] || extractedData.insurance_type} Claim`
+    : "New Claim Intake";
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
-      {/* Claimant Header */}
-      <header className="border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md sticky top-0 z-30 px-6 py-4 flex items-center justify-between shadow-lg shadow-black/20">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-xl shadow-md shadow-cyan-500/20">
-            🎙️
-          </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
-              Insurance Assistant
-            </h1>
-            <p className="text-[11px] text-slate-400">Claimant Voice Intake FNOL</p>
-          </div>
+    <div className="bg-[#f7f9fb] text-[#191c1e] font-body antialiased min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
+      {/* Mobile TopAppBar */}
+      <header className="md:hidden bg-white text-[#00647c] font-body w-full top-0 sticky flex justify-between items-center px-4 py-3 border-b border-[#e0e3e5] z-40">
+        <div className="flex items-center gap-2 font-headline text-lg font-bold text-[#191c1e] tracking-tight">
+          <span className="material-symbols-outlined text-[#00647c] text-2xl">waves</span>
+          <span>InsureClaimAI</span>
         </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push("/claimant/link-policy")}
-            className="px-3 py-1.5 text-[11px] font-medium bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-700/50 rounded-xl transition flex items-center gap-1.5"
-          >
-            <span>🛡️</span>
-            <span>My Policies</span>
-          </button>
-          <div className="hidden md:flex flex-col text-right">
-            <span className="text-xs font-semibold text-slate-200">{userName}</span>
-            <span className="text-[9px] text-slate-500">Claimant Session</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="px-3.5 py-1.5 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 border border-slate-700 rounded-xl transition"
-          >
-            Logout
+        <div className="flex items-center gap-2">
+          <Link href="/link-policy" className="text-[#505f76] hover:text-[#00647c] p-1.5 rounded-md hover:bg-[#eceef0]">
+            <span className="material-symbols-outlined text-xl">settings</span>
+          </Link>
+          <button onClick={handleLogout} className="text-[#505f76] hover:text-[#ba1a1a] p-1.5 rounded-md hover:bg-[#eceef0]">
+            <span className="material-symbols-outlined text-xl">logout</span>
           </button>
         </div>
       </header>
 
-      {/* Error Banner */}
-      {errorBanner && (
-        <div className="mx-6 mt-4 flex items-start gap-3 bg-rose-950/70 border border-rose-600/50 rounded-2xl px-4 py-3.5 text-xs text-rose-200 shadow-md">
-          <span className="text-rose-400 shrink-0">⚠️</span>
-          <span className="flex-1 leading-normal">{errorBanner}</span>
-          <button
-            onClick={() => setErrorBanner("")}
-            className="text-rose-400 hover:text-rose-200 shrink-0 text-base leading-none"
-            aria-label="Dismiss error"
-          >
-            ×
-          </button>
+      {/* Desktop SideNavBar */}
+      <nav className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#f7f9fb] text-[#0891B2] font-label text-xs border-r border-[#e0e3e5] py-8 px-4 z-40">
+        <div className="px-2 mb-8">
+          <div className="flex items-center gap-2 font-headline text-xl font-bold text-[#191c1e]">
+            <span className="material-symbols-outlined text-[#00647c] text-2xl">waves</span>
+            <span>InsureClaimAI</span>
+          </div>
+          <p className="font-label text-[11px] text-[#505f76] mt-0.5">Kinetic Voice Intake</p>
         </div>
-      )}
 
-      {/* Main Grid */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
-        {/* Left Column: Dialogue Chat Interface */}
-        <section className="lg:col-span-7 flex flex-col gap-4 overflow-hidden h-[calc(100vh-140px)] min-h-[500px]">
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                  agentState === "speaking" ? "bg-cyan-400" : agentState === "thinking" ? "bg-amber-400" : "bg-emerald-400"
-                }`}></span>
-                <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                  agentState === "speaking" ? "bg-cyan-500" : agentState === "thinking" ? "bg-amber-500" : "bg-emerald-500"
-                }`}></span>
-              </span>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                {agentState === "speaking" ? "Assistant is speaking" : agentState === "thinking" ? "Assistant is thinking..." : isRecording ? "Listening..." : "Silent"}
-              </span>
+        <div className="flex flex-col gap-1 flex-1">
+          <Link
+            href="/claimant"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#00647c] font-bold bg-[#eceef0] transition-colors"
+          >
+            <span className="material-symbols-outlined fill text-[20px]" style={{ fontVariationSettings: "'FILL' 1" }}>
+              dashboard
+            </span>
+            <span>Active Intake</span>
+          </Link>
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] opacity-50 cursor-not-allowed">
+            <span className="material-symbols-outlined text-[20px]">history</span>
+            <span>Claims History</span>
+          </div>
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] opacity-50 cursor-not-allowed">
+            <span className="material-symbols-outlined text-[20px]">description</span>
+            <span>Documents</span>
+          </div>
+          <Link
+            href="/link-policy"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] hover:text-[#00647c] hover:bg-[#eceef0] transition-colors"
+          >
+            <span className="material-symbols-outlined text-[20px]">link</span>
+            <span>Link Policy</span>
+          </Link>
+        </div>
+
+        {/* User Card */}
+        <div className="mt-auto pt-6 border-t border-[#e0e3e5]">
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-8 h-8 rounded-full bg-[#d0e1fb] text-[#54647a] flex items-center justify-center font-bold text-xs shrink-0">
+                {userName.charAt(0) || "C"}
+              </div>
+              <div className="flex flex-col truncate">
+                <span className="font-label text-xs text-[#191c1e] font-semibold truncate">{userName}</span>
+                <span className="font-label text-[#505f76] text-[10px]">Claimant</span>
+              </div>
             </div>
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              className="text-[#505f76] hover:text-[#ba1a1a] p-1.5 rounded-md hover:bg-[#eceef0] transition-colors"
+            >
+              <span className="material-symbols-outlined text-lg">logout</span>
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Canvas */}
+      <main className="flex-1 md:ml-64 flex flex-col h-[calc(100vh-57px)] md:h-screen bg-white overflow-hidden">
+        {/* Canvas Header */}
+        <div className="px-4 md:px-8 py-3.5 border-b border-[#e0e3e5] flex justify-between items-center bg-white z-10 shrink-0">
+          <div>
+            <div className="flex items-center gap-2 text-[#505f76] mb-0.5">
+              <span className="font-label text-[11px] uppercase tracking-wider font-semibold">Active Intake</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isRecording ? "bg-[#0891B2] animate-pulse" : "bg-emerald-500"
+                }`}
+              ></span>
+              {agentState !== "idle" && (
+                <span className="text-[11px] text-[#0891B2] capitalize font-medium">
+                  ({agentState})
+                </span>
+              )}
+            </div>
+            <h1 className="font-headline text-lg md:text-xl font-bold text-[#191c1e]">
+              {currentIncidentTitle}
+            </h1>
           </div>
 
-          {/* Conversation Chat Log */}
-          <div className="flex-1 bg-slate-900/30 border border-slate-800/80 rounded-3xl p-5 flex flex-col overflow-hidden shadow-inner">
-            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleStartNewSession}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-[#505f76] hover:text-[#00647c] transition-colors px-3 py-1.5 rounded-lg hover:bg-[#eceef0] text-xs font-label font-medium cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-base">refresh</span>
+              <span>New Session</span>
+            </button>
+          </div>
+        </div>
+
+        {errorBanner && (
+          <div className="px-6 py-2 bg-[#ffdad6] text-[#93000a] text-xs flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-sm">warning</span>
+              <span>{errorBanner}</span>
+            </div>
+            <button onClick={() => setErrorBanner("")} className="text-[#93000a] hover:opacity-70">
+              <span className="material-symbols-outlined text-sm">close</span>
+            </button>
+          </div>
+        )}
+
+        {/* Two Column Layout */}
+        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row h-full">
+          {/* Left Column: Conversation & Voice Bar */}
+          <div className="flex-1 flex flex-col h-full relative bg-white overflow-hidden">
+            {/* Chat Area */}
+            <div
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 scroll-smooth pb-48"
+            >
               {history.map((turn, idx) => {
-                const isAgent = turn.speaker === "agent";
-                return (
-                  <div
-                    key={`hist-${idx}`}
-                    className={`flex items-start gap-3 ${isAgent ? "justify-start" : "justify-end"}`}
-                  >
-                    {isAgent && (
-                      <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sm shrink-0">
-                        🤖
+                if (turn.speaker === "agent") {
+                  return (
+                    <div key={`msg-${idx}`} className="flex gap-3 max-w-[85%]">
+                      <div className="w-8 h-8 rounded-full bg-[#eceef0] flex items-center justify-center shrink-0 border border-[#e0e3e5] text-[#00647c]">
+                        <span className="material-symbols-outlined text-base">robot_2</span>
                       </div>
-                    )}
-                    <div
-                      className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm leading-relaxed whitespace-pre-line ${
-                        isAgent
-                          ? "bg-slate-900/80 text-slate-100 border border-slate-800 rounded-tl-sm"
-                          : "bg-gradient-to-tr from-cyan-600 to-blue-600 text-white rounded-tr-sm shadow-md shadow-cyan-500/5"
-                      }`}
-                    >
-                      {turn.text}
+                      <div className="flex flex-col gap-1">
+                        <span className="font-label text-xs text-[#505f76] font-medium">InsureClaimAI</span>
+                        <div className="bg-[#F1F5F9] p-3.5 rounded-2xl rounded-tl-none border border-[#e0e3e5] shadow-sm">
+                          <p className="font-body text-sm text-[#191c1e] leading-relaxed whitespace-pre-line">
+                            {turn.text}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
+                  );
+                } else {
+                  return (
+                    <div key={`msg-${idx}`} className="flex gap-3 max-w-[85%] ml-auto justify-end">
+                      <div className="flex flex-col gap-1 items-end">
+                        <span className="font-label text-xs text-[#505f76] font-medium">You</span>
+                        <div className="bg-[#00647c] text-white p-3.5 rounded-2xl rounded-tr-none shadow-sm">
+                          <p className="font-body text-sm leading-relaxed whitespace-pre-line">
+                            {turn.text}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
               })}
 
-              {liveClaimantText && (
-                <div className="flex items-start gap-3 justify-end">
-                  <div className="max-w-[78%] rounded-2xl px-4 py-3 text-sm shadow-sm leading-relaxed bg-cyan-950/60 text-cyan-100 border border-cyan-500/25 rounded-tr-sm italic">
-                    {liveClaimantText}
-                    <span className="inline-block ml-1 w-1.5 h-3.5 bg-cyan-400 animate-pulse rounded-sm align-middle" />
-                  </div>
-                </div>
-              )}
-
-              {agentState === "thinking" && (
-                <div className="flex items-start gap-3 justify-start animate-fade-in">
-                  <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sm shrink-0">
-                    🤖
-                  </div>
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl px-4 py-3.5 text-sm flex gap-1 items-center shadow-sm">
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce"></span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.2s]"></span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.4s]"></span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Input Controls */}
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5 shadow-sm flex flex-col gap-4">
-            {(conversationStatus === "completed" || conversationStatus === "submitted") ? (
-              <div className="flex flex-col items-center justify-center py-4 text-slate-400">
-                <span className="text-2xl mb-2">✅</span>
-                <p className="text-sm font-medium text-slate-300">Claim intake is complete.</p>
-                <p className="text-xs mt-1 text-slate-500">The assistant is no longer accepting input.</p>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      id="voice-toggle-btn"
-                      onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-                      disabled={loading || confirmed}
-                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 relative ${
-                        isRecording
-                          ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 scale-105"
-                          : "bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500 hover:text-white"
-                      }`}
-                    >
-                      {isRecording && (
-                        <span className="absolute inset-0 rounded-full bg-rose-600 animate-ping opacity-25"></span>
-                      )}
-                      <span className="text-xl">{isRecording ? "⏹️" : "🎙️"}</span>
-                    </button>
-                    <div className="flex flex-col">
-                      <span className="text-xs font-semibold text-slate-200">
-                        {isRecording ? "Microphone active" : "Speak to file claim"}
-                      </span>
-                      <span className="text-[10px] text-slate-500">
-                        {isRecording ? "Click to stop recording" : "Uses voice activity detection"}
-                      </span>
+              {/* Partial live transcript */}
+              {Array.from(partialSegments.values()).map((seg) => (
+                <div key={seg.segment_id} className="flex gap-3 max-w-[85%] ml-auto justify-end opacity-85">
+                  <div className="flex flex-col gap-1 items-end">
+                    <span className="font-label text-xs text-[#0891B2] font-semibold">Speaking...</span>
+                    <div className="bg-[#00647c]/90 text-white p-3.5 rounded-2xl rounded-tr-none border border-[#0891B2]">
+                      <p className="font-body text-sm italic">{seg.text}</p>
                     </div>
                   </div>
-
-                  {(conversationStatus === "reviewing" || conversationStatus === "pending_verification") && (
-                    <button
-                      id="verify-details-btn"
-                      onClick={handleVerify}
-                      disabled={loading}
-                      className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs rounded-2xl shadow-md shadow-emerald-950/20 active:scale-95 transition"
-                    >
-                      ✓ Verify My Details
-                    </button>
-                  )}
                 </div>
+              ))}
 
-                <form onSubmit={handleTextSubmit} className="flex gap-2">
+              {/* AI Processing Indicator */}
+              {agentState === "thinking" && (
+                <div className="flex gap-3 max-w-[85%]">
+                  <div className="w-8 h-8 rounded-full bg-[#eceef0] flex items-center justify-center shrink-0 border border-[#e0e3e5]">
+                    <span className="material-symbols-outlined text-[#0EA5E9] animate-spin text-base">
+                      progress_activity
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-1 justify-center">
+                    <span className="font-label text-xs text-[#505f76] italic">InsureClaimAI is processing...</span>
+                  </div>
+                </div>
+              )}
+
+              {confirmed && (
+                <div className="p-4 bg-emerald-50 border border-emerald-500/30 rounded-xl text-emerald-800 text-xs flex items-center gap-3 shadow-sm">
+                  <span className="material-symbols-outlined text-2xl text-emerald-600">verified</span>
+                  <div>
+                    <h4 className="font-bold text-sm">Claim Successfully Submitted</h4>
+                    <p className="mt-0.5">{submittedMessage || "Your claim has been assigned to an adjuster."}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Spacer so messages are never hidden under the voice console */}
+              <div className="h-48 w-full shrink-0 pointer-events-none" aria-hidden="true" />
+            </div>
+
+            {/* Voice Input Console (Fixed Bottom) */}
+            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white/95 to-transparent pt-6 pb-4 px-4 md:px-8 flex flex-col items-center justify-end z-20">
+              {/* Waveform Visualizer */}
+              <div className="flex items-center gap-1.5 mb-2 h-7 opacity-85">
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-3 waveform-bar" : "h-2"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-6 waveform-bar delay-1" : "h-2"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-4 waveform-bar delay-2" : "h-2"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-8 waveform-bar delay-3" : "h-3"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-5 waveform-bar delay-4" : "h-2"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-7 waveform-bar delay-5" : "h-2"}`}></div>
+                <div className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "h-3 waveform-bar" : "h-2"}`}></div>
+              </div>
+
+              {/* Active Speech Preview Quote */}
+              <div className="text-center mb-3 min-h-[18px]">
+                <p className="font-body text-xs text-[#505f76] truncate max-w-md">
+                  {isRecording
+                    ? "Listening... Speak naturally to describe your claim"
+                    : textMode
+                    ? "Type your message below and press Enter"
+                    : "Tap the microphone to speak with your claims assistant"}
+                </p>
+              </div>
+
+              {/* Text Input Drawer when in Text Mode */}
+              {textMode && (
+                <form onSubmit={handleSendText} className="w-full max-w-lg flex items-center gap-2 mb-3">
                   <input
-                    id="text-input"
                     type="text"
+                    placeholder="Type incident details, dates, or estimates..."
                     value={textInput}
                     onChange={(e) => setTextInput(e.target.value)}
-                    maxLength={1000}
-                    placeholder={isRecording ? "Speak now or type here to interrupt..." : "Type your response here..."}
-                    disabled={loading || confirmed}
-                    className="flex-1 bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
+                    className="input-minimal flex-1 bg-[#f7f9fb] border border-[#bdc8ce] rounded-full px-4 py-2 text-sm text-[#191c1e] placeholder:text-[#6e797e]"
                   />
                   <button
-                    id="text-submit-btn"
                     type="submit"
-                    disabled={!textInput.trim() || loading || confirmed}
-                    className="px-5 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-2xl border border-slate-700 transition"
+                    className="w-10 h-10 rounded-full bg-[#0891B2] hover:bg-[#007f9d] text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer"
                   >
-                    Send
+                    <span className="material-symbols-outlined text-base">send</span>
                   </button>
                 </form>
-              </>
-            )}
-          </div>
-        </section>
+              )}
 
-        {/* Right Column: Structured Extracted Claim Data & Progress */}
-        <aside className="lg:col-span-5 flex flex-col gap-4 h-[calc(100vh-140px)] min-h-[500px] overflow-y-auto pr-1">
-          {/* Slim Progress Bar */}
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl px-5 py-3 shadow-sm flex flex-col gap-2">
-            <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800">
-              <div
-                className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full rounded-full transition-all duration-500"
-                style={{ width: `${progressPercent}%` }}
-              ></div>
+              {/* Voice Controls Row */}
+              <div className="flex items-center justify-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => setTextMode(!textMode)}
+                  title={textMode ? "Switch to Voice Only" : "Switch to Keyboard Input"}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer border ${
+                    textMode
+                      ? "bg-[#0891B2] text-white border-[#0891B2]"
+                      : "bg-[#f7f9fb] text-[#505f76] hover:bg-[#eceef0] border-[#bdc8ce]"
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-sm">keyboard</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  disabled={confirmed}
+                  title={isRecording ? "Mute Microphone" : "Start Speaking"}
+                  className={`w-16 h-16 rounded-full text-white flex items-center justify-center relative z-10 transition-all cursor-pointer shadow-md ${
+                    isRecording
+                      ? "bg-[#0891B2] pulse-ring scale-105"
+                      : "bg-[#0891B2] hover:bg-[#007f9d]"
+                  } disabled:opacity-50`}
+                >
+                  <span className="material-symbols-outlined fill text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>
+                    {isRecording ? "mic" : "mic_none"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isRecording) stopVoiceRecording();
+                    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+                  }}
+                  title="Stop Audio / Reset"
+                  className="w-10 h-10 rounded-full bg-[#f7f9fb] border border-[#bdc8ce] flex items-center justify-center text-[#505f76] hover:bg-[#eceef0] transition-colors cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">stop</span>
+                </button>
+              </div>
             </div>
           </div>
 
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-5.5 shadow-sm flex flex-col gap-4.5">
-            <div className="flex items-center justify-between border-b border-slate-800/60 pb-3">
-              <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                <span>📋</span> Collected Details
-              </h2>
+          {/* Right Column: Collected Details (Review & Verify) */}
+          <div className="w-full lg:w-[400px] xl:w-[460px] bg-[#f7f9fb] flex flex-col h-full border-t lg:border-t-0 lg:border-l border-[#e0e3e5] shrink-0 overflow-hidden">
+            {/* Header */}
+            <div className="p-4 md:p-5 border-b border-[#e0e3e5] bg-white sticky top-0 z-10 flex justify-between items-center shadow-sm shrink-0">
+              <div>
+                <h2 className="font-headline text-base md:text-lg font-bold text-[#191c1e]">Collected Details</h2>
+                <p className="font-label text-xs text-[#505f76]">Review and verify extracted information</p>
+              </div>
               <span
-                className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
-                  conversationStatus === "verified"
-                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                    : conversationStatus === "verification_failed"
-                    ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
-                    : conversationStatus === "reviewing" || conversationStatus === "pending_verification"
-                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
-                    : "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+                className={`font-label text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                  pendingCount === 0
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-[#d0e1fb] text-[#54647a]"
                 }`}
               >
-                {conversationStatus === "verified"
-                  ? "Verified"
-                  : conversationStatus === "verification_failed"
-                  ? "Verification Failed"
-                  : conversationStatus === "pending_verification"
-                  ? "Pending Verification"
-                  : conversationStatus === "reviewing"
-                  ? "Reviewing"
-                  : conversationStatus === "collecting"
-                  ? "Collecting Info"
-                  : conversationStatus}
+                {pendingCount === 0 ? "Ready to Submit" : `${pendingCount} Pending`}
               </span>
             </div>
 
-            <div className="space-y-3.5 text-xs">
-              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Policy ID</span>
-                <span className="font-mono font-semibold text-slate-200">
-                  {extractedData.policy_id || <span className="text-slate-600 font-normal italic">Pending...</span>}
-                </span>
+            {/* Details Cards Container */}
+            <div className="p-4 md:p-5 space-y-3.5 flex-1 overflow-y-auto">
+              {/* Detail Card: Policy ID */}
+              <div
+                className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-sm ${
+                  extractedData.policy_id ? "border-[#00647c]" : "border-[#bdc8ce]"
+                }`}
+              >
+                {extractedData.policy_id && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>}
+                <div className="flex justify-between items-start pl-1">
+                  <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                    Policy ID
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit("policy_id", extractedData.policy_id)}
+                    className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="material-symbols-outlined text-[#505f76] text-[20px]">verified_user</span>
+                  <span className="font-body text-sm text-[#191c1e] font-semibold font-mono">
+                    {extractedData.policy_id || <span className="text-[#505f76] font-normal italic">Not specified yet</span>}
+                  </span>
+                </div>
+                {extractedData.policy_id ? (
+                  <div className="text-[11px] text-emerald-700 flex items-center gap-1 mt-0.5 pl-1">
+                    <span className="material-symbols-outlined text-[14px]">check_circle</span> Verified
+                  </div>
+                ) : (
+                  <Link
+                    href="/link-policy"
+                    className="text-[11px] text-[#0891B2] font-semibold hover:underline mt-1 pl-1 flex items-center gap-1"
+                  >
+                    <span>Link your policy now</span>
+                    <span className="material-symbols-outlined text-[12px]">arrow_forward</span>
+                  </Link>
+                )}
               </div>
-              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Insurance Category</span>
-                <span className="font-semibold text-cyan-300">
-                  {extractedData.insurance_type
-                    ? SUPPORTED_INSURANCE_TYPES[extractedData.insurance_type as keyof typeof SUPPORTED_INSURANCE_TYPES] || extractedData.insurance_type
-                    : <span className="text-slate-600 font-normal italic">Unclassified</span>}
-                </span>
+
+              {/* Detail Card: Incident Category */}
+              <div
+                className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-sm ${
+                  extractedData.insurance_type ? "border-[#00647c]" : "border-[#bdc8ce]"
+                }`}
+              >
+                {extractedData.insurance_type && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>}
+                <div className="flex justify-between items-start pl-1">
+                  <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                    Incident Category
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit("insurance_type", extractedData.insurance_type)}
+                    className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="material-symbols-outlined text-[#00647c] text-[20px]">category</span>
+                  <span className="font-body text-sm text-[#191c1e] font-semibold capitalize">
+                    {extractedData.insurance_type ? (
+                      SUPPORTED_INSURANCE_TYPES[extractedData.insurance_type as keyof typeof SUPPORTED_INSURANCE_TYPES] ||
+                      extractedData.insurance_type
+                    ) : (
+                      <span className="text-[#505f76] font-normal italic">Analyzing incident...</span>
+                    )}
+                  </span>
+                </div>
               </div>
-              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Incident Date</span>
-                <span className="font-medium text-slate-200">
-                  {extractedData.event_date || <span className="text-slate-600 font-normal italic text-slate-500">Not detected</span>}
-                </span>
+
+              {/* Detail Card: Date of Incident */}
+              <div
+                className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-sm ${
+                  extractedData.event_date ? "border-[#00647c]" : "border-[#bdc8ce]"
+                }`}
+              >
+                {extractedData.event_date && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>}
+                <div className="flex justify-between items-start pl-1">
+                  <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                    Date of Incident
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit("event_date", extractedData.event_date)}
+                    className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="material-symbols-outlined text-[#00647c] text-[20px]">calendar_today</span>
+                  <span className="font-body text-sm text-[#191c1e] font-semibold">
+                    {extractedData.event_date || <span className="text-[#505f76] font-normal italic">Waiting for date...</span>}
+                  </span>
+                </div>
               </div>
-              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex items-center justify-between">
-                <span className="text-slate-400 font-medium">Claim Estimate</span>
-                <span className="font-bold text-emerald-400">
-                  {extractedData.estimated_claim_amount != null
-                    ? `₹${Number(extractedData.estimated_claim_amount).toLocaleString("en-IN")}`
-                    : <span className="text-slate-600 font-normal italic">Calculating...</span>}
-                </span>
+
+              {/* Detail Card: Estimated Amount */}
+              <div
+                className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-sm ${
+                  extractedData.estimated_claim_amount != null ? "border-[#00647c]" : "border-[#bdc8ce]"
+                }`}
+              >
+                {extractedData.estimated_claim_amount != null && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>}
+                <div className="flex justify-between items-start pl-1">
+                  <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                    Estimated Cost
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit("estimated_claim_amount", extractedData.estimated_claim_amount)}
+                    className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="material-symbols-outlined text-[#00647c] text-[20px]">payments</span>
+                  <span className="font-body text-sm text-[#191c1e] font-semibold">
+                    {extractedData.estimated_claim_amount != null ? (
+                      `₹${extractedData.estimated_claim_amount.toLocaleString()}`
+                    ) : (
+                      <span className="text-[#505f76] font-normal italic">Discussing damage cost...</span>
+                    )}
+                  </span>
+                </div>
               </div>
-              <div className="p-3 rounded-2xl bg-slate-950/40 border border-slate-800/60 flex flex-col gap-1.5">
-                <span className="text-slate-400 font-medium">Incident Description</span>
-                <p className="text-slate-300 leading-relaxed text-[11px]">
-                  {extractedData.event_description || <span className="text-slate-600 italic">Please describe the accident or incident details.</span>}
-                </p>
+
+              {/* Detail Card: Description Summary */}
+              <div className="bg-white border border-[#bdc8ce] rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+                <div className="flex justify-between items-start">
+                  <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+                    Description Summary
+                  </span>
+                  <button
+                    onClick={() => handleOpenEdit("event_description", extractedData.event_description)}
+                    className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                  </button>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="material-symbols-outlined text-[#505f76] text-[18px] mt-0.5">subject</span>
+                  <p className="font-body text-xs text-[#191c1e] leading-relaxed">
+                    {extractedData.event_description || (
+                      <span className="text-[#505f76] italic">
+                        Voice summaries will update automatically as you converse with the AI assistant.
+                      </span>
+                    )}
+                  </p>
+                </div>
               </div>
+            </div>
+
+            {/* Action Footer */}
+            <div className="p-4 border-t border-[#e0e3e5] bg-white shrink-0 shadow-sm">
+              <button
+                type="button"
+                onClick={handleSubmitClaim}
+                disabled={submittingClaim || confirmed}
+                className="w-full bg-[#00647c] hover:bg-[#007f9d] text-white font-label text-xs font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+              >
+                {submittingClaim ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                    <span>Submitting Claim...</span>
+                  </>
+                ) : confirmed ? (
+                  <>
+                    <span className="material-symbols-outlined text-base">check</span>
+                    <span>Claim Submitted</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-base">send</span>
+                    <span>
+                      Submit Claim {pendingCount > 0 ? `(${pendingCount} Items Incomplete)` : ""}
+                    </span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
-
-          {conversationStatus === "verified" && (
-            <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-3xl p-5 text-emerald-100 flex flex-col gap-2 shadow-lg shadow-emerald-950/20 animate-scale-up">
-              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-400">
-                Verified ✅
-              </div>
-              <p className="text-xs text-emerald-300 leading-relaxed mt-1">
-                {submittedMessage || "Your claim details have been verified. Ticket reference: " + ticketId}
-              </p>
-            </div>
-          )}
-          {conversationStatus === "verification_failed" && (
-            <div className="bg-rose-950/30 border border-rose-500/30 rounded-3xl p-5 text-rose-100 flex flex-col gap-2 shadow-lg shadow-rose-950/20 animate-scale-up">
-              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-rose-400">
-                Verification Failed ⚠️
-              </div>
-              <p className="text-xs text-rose-300 leading-relaxed mt-1">
-                {errorBanner || "Policy verification could not be completed. You can provide updated details or a corrected policy number."}
-              </p>
-            </div>
-          )}
-        </aside>
+        </div>
       </main>
+
+      {/* Edit Field Modal */}
+      {editingField && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-[#e0e3e5] rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="font-headline text-lg font-bold text-[#191c1e] mb-1">
+              Edit {editingField.replace(/_/g, " ").toUpperCase()}
+            </h3>
+            <p className="font-body text-xs text-[#505f76] mb-4">
+              Update the value manually or let the voice assistant extract it during conversation.
+            </p>
+
+            {editingField === "insurance_type" ? (
+              <select
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 text-sm text-[#191c1e] mb-4"
+              >
+                <option value="">Select Insurance Type</option>
+                {Object.entries(SUPPORTED_INSURANCE_TYPES).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            ) : editingField === "event_date" ? (
+              <input
+                type="date"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 text-sm text-[#191c1e] mb-4"
+              />
+            ) : editingField === "event_description" ? (
+              <textarea
+                rows={4}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 text-sm text-[#191c1e] mb-4 resize-none"
+              />
+            ) : (
+              <input
+                type="text"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 text-sm text-[#191c1e] mb-4"
+              />
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingField(null)}
+                className="px-4 py-2 rounded-lg bg-[#f7f9fb] border border-[#bdc8ce] text-[#505f76] text-xs font-semibold hover:text-[#191c1e] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                className="px-4 py-2 rounded-lg bg-[#0891B2] hover:bg-[#007f9d] text-white text-xs font-semibold shadow-sm cursor-pointer"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -8,6 +8,8 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -62,62 +64,169 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans p-4 selection:bg-cyan-500 selection:text-white">
-      <div className="max-w-md w-full bg-slate-900/60 border border-slate-800 rounded-3xl p-8 backdrop-blur-md shadow-2xl flex flex-col gap-6">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-3xl mx-auto shadow-lg shadow-cyan-500/20">
-          🔑
-        </div>
-        <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-white">Welcome Back</h1>
-          <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-            Please log in to manage your insurance claims and access your dashboard.
+    <div className="bg-[#FFFFFF] font-body text-[#191c1e] antialiased min-h-screen flex selection:bg-[#b7eaff] selection:text-[#001f28]">
+      {/* Left Side: Authentication Form */}
+      <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 py-12 lg:flex-none lg:w-1/2 xl:w-[45%] 2xl:w-2/5 z-10 bg-[#FFFFFF] relative">
+        <div className="mx-auto w-full max-w-sm lg:w-[380px]">
+          {/* Brand Identity */}
+          <div className="flex items-center gap-3 mb-12">
+            <div className="w-10 h-10 rounded-lg bg-[#F1F5F9] border border-[#bdc8ce] flex items-center justify-center text-[#0891B2]">
+              <span className="material-symbols-outlined fill text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>
+                graphic_eq
+              </span>
+            </div>
+            <span className="font-headline text-2xl font-bold text-[#00647c] tracking-tight">InsureClaimAI</span>
+          </div>
+
+          {/* Header */}
+          <div className="mb-8">
+            <h1 className="font-headline text-3xl font-bold text-[#191c1e] mb-2">Welcome back</h1>
+            <p className="font-body text-sm text-[#505f76]">
+              Sign in to continue to your dashboard and manage your audio flows.
+            </p>
+          </div>
+
+          {error && (
+            <div className="mb-6 p-3.5 bg-[#ffdad6] border border-[#ba1a1a]/30 rounded-lg text-xs text-[#93000a] flex items-start gap-2">
+              <span className="material-symbols-outlined text-base text-[#ba1a1a]">error</span>
+              <span className="leading-snug">{error}</span>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* Email Input */}
+            <div>
+              <label className="block font-label text-xs font-medium text-[#505f76] mb-1.5" htmlFor="email">
+                Email address
+              </label>
+              <div className="relative">
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  placeholder="name@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input-minimal block w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 text-sm text-[#191c1e] placeholder:text-[#6e797e] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Password Input */}
+            <div>
+              <label className="block font-label text-xs font-medium text-[#505f76] mb-1.5" htmlFor="password">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input-minimal block w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 pr-10 text-sm text-[#191c1e] placeholder:text-[#6e797e] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#505f76] hover:text-[#191c1e] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-lg">
+                    {showPassword ? "visibility" : "visibility_off"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Actions Row */}
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="remember-me"
+                  name="remember-me"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#bdc8ce] text-[#0891B2] focus:ring-[#0891B2] cursor-pointer"
+                />
+                <span className="font-body text-xs text-[#505f76]">Remember me</span>
+              </label>
+              <div className="text-xs">
+                <Link
+                  href="/forgot-password"
+                  className="font-label text-[#0891B2] hover:text-[#00647c] transition-colors"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            </div>
+
+            {/* Submit Button */}
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-lg bg-[#0891B2] hover:bg-[#007f9d] text-white font-label text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#0891B2] transition-all active:scale-[0.99] disabled:opacity-50 cursor-pointer shadow-sm"
+              >
+                {loading ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                    <span>Signing in...</span>
+                  </>
+                ) : (
+                  "Sign in"
+                )}
+              </button>
+            </div>
+          </form>
+
+          {/* Footer Link */}
+          <p className="mt-8 text-center font-body text-xs text-[#505f76]">
+            Don&apos;t have an account?{" "}
+            <Link href="/signup" className="font-label font-semibold text-[#0891B2] hover:text-[#00647c] transition-colors ml-1">
+              Create Account
+            </Link>
           </p>
         </div>
+      </div>
 
-        {error && (
-          <div className="p-3.5 bg-rose-950/70 border border-rose-600/50 rounded-2xl text-xs text-rose-200 leading-normal flex items-start gap-2 animate-pulse">
-            <span>⚠️</span>
-            <span>{error}</span>
-          </div>
-        )}
+      {/* Right Side: Value Proposition & Graphic */}
+      <div className="hidden lg:flex flex-1 relative bg-[#FFFFFF] overflow-hidden flex-col items-center justify-center border-l border-[#e0e3e5]">
+        {/* Animated Background Wave Graphic */}
+        <div className="absolute inset-0 pointer-events-none opacity-25">
+          <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave" preserveAspectRatio="none" viewBox="0 0 1200 400">
+            <path className="text-[#0EA5E9]" d="M0,250 C200,150 400,350 600,250 C800,150 1000,350 1200,250 C1400,150 1600,350 1800,250 C2000,150 2200,350 2400,250 L2400,400 L0,400 Z" fill="currentColor"></path>
+          </svg>
+          <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave-slow opacity-60" preserveAspectRatio="none" viewBox="0 0 1200 400">
+            <path className="text-[#0891B2]" d="M0,300 C300,200 600,400 900,300 C1200,200 1500,400 1800,300 C2100,200 2400,400 2700,300 L2700,400 L0,400 Z" fill="currentColor"></path>
+          </svg>
+        </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-slate-400 px-1">Email Address</label>
-            <input
-              type="email"
-              placeholder="e.g. john@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-slate-400 px-1">Password</label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="bg-slate-950/50 border border-slate-800/80 rounded-2xl px-4.5 py-3 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition duration-300"
-            />
+        {/* Content Overlay */}
+        <div className="relative z-10 max-w-lg px-12 text-center flex flex-col items-center">
+          {/* Graphic Element Indicator */}
+          <div className="mb-10 relative flex items-center justify-center w-24 h-24">
+            <div className="absolute inset-0 rounded-full border-2 border-[#0891B2] opacity-30 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite]"></div>
+            <div className="absolute inset-2 rounded-full border-2 border-[#0891B2] opacity-50 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite_0.5s]"></div>
+            <div className="w-14 h-14 rounded-full bg-[#0891B2] flex items-center justify-center text-white shadow-[0_0_40px_rgba(8,145,178,0.4)]">
+              <span className="material-symbols-outlined fill text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>
+                mic
+              </span>
+            </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full mt-2 p-3.5 rounded-2xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs shadow-md shadow-cyan-950/20 active:scale-95 transition disabled:opacity-50"
-          >
-            {loading ? "Logging in..." : "Log In"}
-          </button>
-        </form>
-
-        <div className="text-center text-xs text-slate-500">
-          Don't have an account?{" "}
-          <Link href="/signup" className="text-cyan-400 hover:text-cyan-300 font-semibold transition">
-            Sign up here
-          </Link>
+          <h2 className="font-headline text-3xl font-bold text-[#00647c] mb-4 tracking-tight">
+            Clarity in every<br />conversation.
+          </h2>
+          <p className="font-body text-sm text-[#505f76] leading-relaxed">
+            Experience the next generation of voice-centric AI. We strip away the noise so you can focus entirely on the signal.
+          </p>
         </div>
       </div>
     </div>

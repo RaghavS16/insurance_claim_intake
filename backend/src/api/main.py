@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal, dispose_engine
-from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User
+from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP
 from src.api.voice_ws import router as voice_router
 from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
@@ -203,6 +203,11 @@ def _init_db_and_seeds():
                     conn.commit()
                 except Exception:
                     pass
+
+            if "password_reset_otps" not in tables:
+                logger.info("Database auto-migration: creating password_reset_otps table")
+                PasswordResetOTP.__table__.create(bind=conn, checkfirst=True)
+                conn.commit()
 
         # Only seed demo sample policies and test users in development and test environments
         if settings.ENVIRONMENT in ("development", "test"):

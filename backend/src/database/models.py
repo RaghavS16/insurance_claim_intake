@@ -133,6 +133,20 @@ class Claim(Base):
                          onupdate=lambda: datetime.now(timezone.utc))
 
 
+class PasswordResetOTP(Base):
+    """One-time password record for forgot-password email verification."""
+    __tablename__ = "password_reset_otps"
+
+    id = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = _UUID(ForeignKey("users.id"), nullable=False)
+    otp_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    attempts = Column(Integer, default=0)
+    verified = Column(Boolean, default=False)
+    consumed = Column(Boolean, default=False)  # True once used to reset password
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class ConversationTurn(Base):
     """Chronological conversation turns for voice and text claims."""
     __tablename__ = "conversation_turns"

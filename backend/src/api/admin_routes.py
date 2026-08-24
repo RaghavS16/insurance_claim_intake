@@ -51,6 +51,31 @@ class UpdateAdjusterRequest(BaseModel):
     is_active: Optional[bool] = Field(None, description="Active status of adjuster")
 
 
+class CreatePolicyRequest(BaseModel):
+    policy_number: str = Field(..., min_length=2, max_length=64, description="Unique policy identifier")
+    policy_type: str = Field(..., description="Canonical policy type")
+    coverage_amount: float = Field(..., gt=0, description="Maximum coverage amount")
+    deductible: float = Field(0.0, ge=0, description="Deductible amount")
+    effective_date: str = Field(..., description="Start date YYYY-MM-DD")
+    expiry_date: str = Field(..., description="End date YYYY-MM-DD")
+    policyholder_name: Optional[str] = Field(None, max_length=255, description="Full name of policyholder")
+    policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
+    policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
+    is_active: bool = Field(True, description="Policy active status")
+
+
+class UpdatePolicyRequest(BaseModel):
+    policy_type: Optional[str] = Field(None, description="Canonical policy type")
+    coverage_amount: Optional[float] = Field(None, gt=0, description="Maximum coverage amount")
+    deductible: Optional[float] = Field(None, ge=0, description="Deductible amount")
+    effective_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD")
+    expiry_date: Optional[str] = Field(None, description="End date YYYY-MM-DD")
+    policyholder_name: Optional[str] = Field(None, max_length=255, description="Full name of policyholder")
+    policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
+    policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
+    is_active: Optional[bool] = Field(None, description="Policy active status")
+
+
 # ---------------------------------------------------------------------------
 # Helper: resolve admin user
 # ---------------------------------------------------------------------------
@@ -74,10 +99,25 @@ def _resolve_admin(request: Request, db: Session) -> User:
     return current_user
 
 
+def _find_policy(db: Session, identifier: str) -> Optional[Policy]:
+    """Find policy safely by UUID id or policy_number without throwing Postgres UUID casting error."""
+    clean_id = identifier.strip()
+    try:
+        val_uuid = uuid.UUID(clean_id)
+        pol = db.query(Policy).filter(Policy.id == str(val_uuid)).first()
+        if pol:
+            return pol
+    except (ValueError, AttributeError):
+        pass
+
+    return db.query(Policy).filter(Policy.policy_number == clean_id.upper()).first()
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.post("/policies/import")
+@router.post("/policies/import-csv")
 async def import_policies_csv(
     request: Request,
     file: UploadFile = File(...),
@@ -568,4 +608,226 @@ def list_all_policies(
         "total": total,
         "page": page,
         "page_size": page_size,
+    }
+
+
+@router.post("/policies")
+def create_policy(
+    payload: CreatePolicyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Create a single new policy record with validation."""
+    _resolve_admin(request, db)
+
+    policy_num = payload.policy_number.strip().upper()
+    existing = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Policy '{policy_num}' already exists.",
+        )
+
+    policy_type = payload.policy_type.strip().lower()
+    if policy_type not in CANONICAL_POLICY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid policy_type '{policy_type}'. Must be one of {sorted(CANONICAL_POLICY_TYPES)}",
+        )
+
+    try:
+        eff_date = datetime.strptime(payload.effective_date.strip(), "%Y-%m-%d").date()
+        exp_date = datetime.strptime(payload.expiry_date.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Effective date and expiry date must be in YYYY-MM-DD format.",
+        )
+
+    holder_dob = None
+    if payload.policyholder_dob:
+        try:
+            holder_dob = datetime.strptime(payload.policyholder_dob.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Policyholder date of birth must be in YYYY-MM-DD format.",
+            )
+
+    phone_last4 = payload.policyholder_phone_last4
+    if phone_last4 and len(phone_last4) > 4:
+        phone_last4 = phone_last4[-4:]
+
+    new_policy = Policy(
+        id=str(uuid.uuid4()),
+        policy_number=policy_num,
+        customer_id=None,
+        policy_type=policy_type,
+        coverage_amount=payload.coverage_amount,
+        deductible=payload.deductible,
+        effective_date=eff_date,
+        expiry_date=exp_date,
+        is_active=payload.is_active,
+        policyholder_name=payload.policyholder_name.strip() if payload.policyholder_name else None,
+        policyholder_dob=holder_dob,
+        policyholder_phone_last4=phone_last4,
+        link_attempts=0,
+    )
+
+    db.add(new_policy)
+    try:
+        db.commit()
+        db.refresh(new_policy)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create policy")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create policy in database.",
+        )
+
+    return {
+        "id": str(new_policy.id),
+        "policy_number": new_policy.policy_number,
+        "policy_type": new_policy.policy_type,
+        "coverage_amount": float(new_policy.coverage_amount),
+        "deductible": float(new_policy.deductible),
+        "effective_date": str(new_policy.effective_date),
+        "expiry_date": str(new_policy.expiry_date),
+        "is_active": new_policy.is_active,
+        "policyholder_name": new_policy.policyholder_name,
+        "policyholder_phone_last4": new_policy.policyholder_phone_last4,
+        "message": "Policy created successfully.",
+    }
+
+
+@router.put("/policies/{policy_id_or_number}")
+def update_policy(
+    policy_id_or_number: str,
+    payload: UpdatePolicyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Update existing policy details safely."""
+    _resolve_admin(request, db)
+
+    policy = _find_policy(db, policy_id_or_number)
+    if not policy:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy '{policy_id_or_number}' not found.",
+        )
+
+    if payload.policy_type is not None:
+        ptype = payload.policy_type.strip().lower()
+        if ptype not in CANONICAL_POLICY_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid policy_type '{ptype}'. Must be one of {sorted(CANONICAL_POLICY_TYPES)}",
+            )
+        policy.policy_type = ptype  # type: ignore[assignment]
+
+    if payload.coverage_amount is not None:
+        policy.coverage_amount = payload.coverage_amount  # type: ignore[assignment]
+
+    if payload.deductible is not None:
+        policy.deductible = payload.deductible  # type: ignore[assignment]
+
+    if payload.effective_date is not None:
+        try:
+            policy.effective_date = datetime.strptime(payload.effective_date.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Effective date must be in YYYY-MM-DD format.",
+            )
+
+    if payload.expiry_date is not None:
+        try:
+            policy.expiry_date = datetime.strptime(payload.expiry_date.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Expiry date must be in YYYY-MM-DD format.",
+            )
+
+    if payload.policyholder_name is not None:
+        policy.policyholder_name = payload.policyholder_name.strip() or None  # type: ignore[assignment]
+
+    if payload.policyholder_dob is not None:
+        if payload.policyholder_dob.strip():
+            try:
+                policy.policyholder_dob = datetime.strptime(payload.policyholder_dob.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Policyholder date of birth must be in YYYY-MM-DD format.",
+                )
+        else:
+            policy.policyholder_dob = None  # type: ignore[assignment]
+
+    if payload.policyholder_phone_last4 is not None:
+        p4 = payload.policyholder_phone_last4.strip()
+        policy.policyholder_phone_last4 = p4[-4:] if p4 else None  # type: ignore[assignment]
+
+    if payload.is_active is not None:
+        policy.is_active = payload.is_active  # type: ignore[assignment]
+
+    try:
+        db.commit()
+        db.refresh(policy)
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to update policy {policy_id_or_number}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update policy in database.",
+        )
+
+    return {
+        "id": str(policy.id),
+        "policy_number": policy.policy_number,
+        "policy_type": policy.policy_type,
+        "coverage_amount": float(policy.coverage_amount),
+        "deductible": float(policy.deductible),
+        "effective_date": str(policy.effective_date),
+        "expiry_date": str(policy.expiry_date),
+        "is_active": policy.is_active,
+        "policyholder_name": policy.policyholder_name,
+        "policyholder_phone_last4": policy.policyholder_phone_last4,
+        "message": "Policy updated successfully.",
+    }
+
+
+@router.delete("/policies/{policy_id_or_number}")
+def delete_policy(
+    policy_id_or_number: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Delete a policy record safely by ID or policy number."""
+    _resolve_admin(request, db)
+
+    policy = _find_policy(db, policy_id_or_number)
+    if not policy:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy '{policy_id_or_number}' not found.",
+        )
+
+    pol_num = policy.policy_number
+    try:
+        db.delete(policy)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(f"Failed to delete policy {policy_id_or_number}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete policy.",
+        )
+
+    return {
+        "policy_number": pol_num,
+        "message": f"Policy '{pol_num}' deleted successfully.",
     }

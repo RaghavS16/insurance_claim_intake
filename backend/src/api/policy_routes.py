@@ -26,6 +26,7 @@ MAX_LINK_ATTEMPTS = 5
 # ---------------------------------------------------------------------------
 class LinkPolicyRequest(BaseModel):
     policy_number: str = Field(..., min_length=3, max_length=20, description="Policy number e.g. MOT-5521")
+    policyholder_name: str = Field(..., min_length=2, max_length=255, description="Full name of policyholder (Mandatory)")
     date_of_birth: str = Field(..., description="Date of birth in YYYY-MM-DD format")
     phone_last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of phone number")
 
@@ -75,6 +76,7 @@ def link_policy(
 ):
     """
     Verify policyholder PII and link an existing policy to the claimant's account.
+    Requires Policyholder Name, Date of Birth, and Phone Last 4 digits.
     Enforces maximum attempt rate-limiting and logs all outcomes to the audit table.
     """
     current_user = _resolve_user(request, db)
@@ -111,11 +113,19 @@ def link_policy(
             detail="This policy is already linked to another account.",
         )
 
-    # Validate PII: Date of Birth and Last 4 digits of phone number
+    # Validate PII: Policyholder Name, Date of Birth, and Last 4 digits of phone number
     dob_match = str(policy.policyholder_dob) == payload.date_of_birth.strip()
     phone_match = str(policy.policyholder_phone_last4) == payload.phone_last4.strip()
 
-    if not (dob_match and phone_match):
+    req_name = payload.policyholder_name.strip().lower()
+    if policy.policyholder_name:
+        pol_name = policy.policyholder_name.strip().lower()
+        name_match = (req_name == pol_name) or (req_name in pol_name) or (pol_name in req_name)
+    else:
+        policy.policyholder_name = payload.policyholder_name.strip()
+        name_match = True
+
+    if not (dob_match and phone_match and name_match):
         policy.link_attempts = int(getattr(policy, "link_attempts", 0) or 0) + 1  # type: ignore[assignment]
         db.commit()
         _audit(db, current_user.id, policy_number, "pii_mismatch", ip)
@@ -138,6 +148,7 @@ def link_policy(
         "already_linked": False,
         "policy_type": policy.policy_type,
         "coverage_amount": cov_amt,
+        "policyholder_name": policy.policyholder_name,
         "expiry_date": str(policy.expiry_date),
         "message": "Policy successfully linked to your account.",
     }
