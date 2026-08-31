@@ -846,7 +846,7 @@ class TestInterruptionAndOverlap:
     async def test_barge_in_preemption(self):
         """Verify that claimant speech cancels conversation worker tasks on the backend."""
         session = VoiceSession(ticket_id="CLAIM-PREEMPT-001")
-        session_context = {"active_turn_task": None}
+        session_context: dict[str, Any] = {"active_turn_task": None}
 
         # Setup mock long-running task to cancel
         async def mock_turn_processing():

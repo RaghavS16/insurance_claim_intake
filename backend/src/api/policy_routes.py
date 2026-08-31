@@ -122,7 +122,7 @@ def link_policy(
         pol_name = policy.policyholder_name.strip().lower()
         name_match = (req_name == pol_name) or (req_name in pol_name) or (pol_name in req_name)
     else:
-        policy.policyholder_name = payload.policyholder_name.strip()
+        policy.policyholder_name = payload.policyholder_name.strip()  # type: ignore[assignment]
         name_match = True
 
     if not (dob_match and phone_match and name_match):
