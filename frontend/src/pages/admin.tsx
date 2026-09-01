@@ -24,7 +24,7 @@ interface PolicyItem {
   is_active: boolean;
   policyholder_name?: string;
   policyholder_dob?: string;
-  policyholder_phone_last4?: string;
+  policyholder_phone?: string;
   is_linked: boolean;
   customer_id?: string;
   linked_at?: string;
@@ -47,9 +47,11 @@ export default function AdminPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Policies State
   const [policies, setPolicies] = useState<PolicyItem[]>([]);
   const [policySearch, setPolicySearch] = useState("");
+  const [policyFilterType, setPolicyFilterType] = useState("all");
+  const [policySortBy, setPolicySortBy] = useState("id");
+  const [policySortOrder, setPolicySortOrder] = useState("asc");
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [importingCsv, setImportingCsv] = useState(false);
@@ -60,14 +62,13 @@ export default function AdminPage() {
   const [showAddPolicyModal, setShowAddPolicyModal] = useState(false);
   const [newPolicyNum, setNewPolicyNum] = useState("");
   const [newPolicyType, setNewPolicyType] = useState("motor");
-  const [newPolicyCov, setNewPolicyCov] = useState("500000");
-  const [newPolicyDed, setNewPolicyDed] = useState("5000");
-  const [newPolicyEff, setNewPolicyEff] = useState(new Date().toISOString().split("T")[0]);
-  const [newPolicyExp, setNewPolicyExp] = useState(new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split("T")[0]);
+  const [newPolicyCov, setNewPolicyCov] = useState("100000");
+  const [newPolicyDed, setNewPolicyDed] = useState("0");
+  const [newPolicyEff, setNewPolicyEff] = useState("");
+  const [newPolicyExp, setNewPolicyExp] = useState("");
   const [newPolicyHolder, setNewPolicyHolder] = useState("");
-  const [newPolicyDob, setNewPolicyDob] = useState("1990-01-01");
-  const [newPolicyPhone4, setNewPolicyPhone4] = useState("");
-  const [newPolicyActive, setNewPolicyActive] = useState(true);
+  const [newPolicyDob, setNewPolicyDob] = useState("");
+  const [newPolicyPhone, setNewPolicyPhone] = useState("");
   const [creatingPolicy, setCreatingPolicy] = useState(false);
   const [createPolicyError, setCreatePolicyError] = useState("");
 
@@ -80,14 +81,16 @@ export default function AdminPage() {
   const [editPolicyExp, setEditPolicyExp] = useState("");
   const [editPolicyHolder, setEditPolicyHolder] = useState("");
   const [editPolicyDob, setEditPolicyDob] = useState("");
-  const [editPolicyPhone4, setEditPolicyPhone4] = useState("");
-  const [editPolicyActive, setEditPolicyActive] = useState(true);
+  const [editPolicyPhone, setEditPolicyPhone] = useState("");
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [editPolicyError, setEditPolicyError] = useState("");
 
   // Adjusters State
   const [adjusters, setAdjusters] = useState<AdjusterItem[]>([]);
   const [adjusterSearch, setAdjusterSearch] = useState("");
+  const [adjusterFilterSpec, setAdjusterFilterSpec] = useState("all");
+  const [adjusterSortBy, setAdjusterSortBy] = useState("name");
+  const [adjusterSortOrder, setAdjusterSortOrder] = useState("asc");
   const [loadingAdjusters, setLoadingAdjusters] = useState(false);
   const [newAdjusterName, setNewAdjusterName] = useState("");
   const [newAdjusterEmail, setNewAdjusterEmail] = useState("");
@@ -262,8 +265,7 @@ export default function AdminPage() {
           expiry_date: newPolicyExp,
           policyholder_name: newPolicyHolder.trim() || undefined,
           policyholder_dob: newPolicyDob.trim() || undefined,
-          policyholder_phone_last4: newPolicyPhone4.trim() ? newPolicyPhone4.trim().slice(-4) : undefined,
-          is_active: newPolicyActive,
+          policyholder_phone: newPolicyPhone.trim() || undefined,
         }),
       });
 
@@ -275,7 +277,7 @@ export default function AdminPage() {
       setShowAddPolicyModal(false);
       setNewPolicyNum("");
       setNewPolicyHolder("");
-      setNewPolicyPhone4("");
+      setNewPolicyPhone("");
       fetchPolicies(token);
     } catch (err: any) {
       setCreatePolicyError(err.message || "Failed to create policy.");
@@ -294,8 +296,7 @@ export default function AdminPage() {
     setEditPolicyExp(p.expiry_date || "");
     setEditPolicyHolder(p.policyholder_name || "");
     setEditPolicyDob(p.policyholder_dob || "");
-    setEditPolicyPhone4(p.policyholder_phone_last4 || "");
-    setEditPolicyActive(p.is_active);
+    setEditPolicyPhone(p.policyholder_phone || "");
     setEditPolicyError("");
   };
 
@@ -324,8 +325,7 @@ export default function AdminPage() {
           expiry_date: editPolicyExp || undefined,
           policyholder_name: editPolicyHolder.trim() || undefined,
           policyholder_dob: editPolicyDob.trim() || undefined,
-          policyholder_phone_last4: editPolicyPhone4.trim() ? editPolicyPhone4.trim().slice(-4) : undefined,
-          is_active: editPolicyActive,
+          policyholder_phone: editPolicyPhone.trim() || undefined,
         }),
       });
 
@@ -489,45 +489,43 @@ export default function AdminPage() {
     }
   };
 
-  // Delete Policy
-  const handleDeletePolicy = async (policyNumber: string) => {
-    if (!confirm(`Are you sure you want to remove policy ${policyNumber}?`)) return;
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
+  // Delete Policy - removed
 
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies/${policyNumber}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        fetchPolicies(token);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        alert(d.detail || "Could not delete policy.");
-      }
-    } catch (err: any) {
-      alert(err.message || "Failed to delete policy.");
-    }
-  };
-
-  // Filtered lists
   const filteredPolicies = policies.filter((p) => {
     const q = policySearch.toLowerCase();
-    return (
+    const typeMatch = policyFilterType === "all" || p.policy_type === policyFilterType;
+    const searchMatch = (
       p.policy_number?.toLowerCase().includes(q) ||
       p.policyholder_name?.toLowerCase().includes(q) ||
       p.policy_type?.toLowerCase().includes(q)
     );
+    return typeMatch && searchMatch;
+  }).sort((a, b) => {
+    let cmp = 0;
+    if (policySortBy === "id") cmp = (a.policy_number || "").localeCompare(b.policy_number || "");
+    else if (policySortBy === "type") cmp = (a.policy_type || "").localeCompare(b.policy_type || "");
+    else if (policySortBy === "holder") cmp = (a.policyholder_name || "").localeCompare(b.policyholder_name || "");
+    else if (policySortBy === "date") cmp = (a.effective_date || "").localeCompare(b.effective_date || "");
+    else if (policySortBy === "coverage") cmp = (a.coverage_amount || 0) - (b.coverage_amount || 0);
+    return policySortOrder === "asc" ? cmp : -cmp;
   });
 
   const filteredAdjusters = adjusters.filter((a) => {
     const q = adjusterSearch.toLowerCase();
-    return (
+    const specMatch = adjusterFilterSpec === "all" || a.specialization === adjusterFilterSpec;
+    const searchMatch = (
       a.name?.toLowerCase().includes(q) ||
       a.email?.toLowerCase().includes(q) ||
       a.specialization?.toLowerCase().includes(q)
     );
+    return specMatch && searchMatch;
+  }).sort((a, b) => {
+    let cmp = 0;
+    if (adjusterSortBy === "name") cmp = (a.name || "").localeCompare(b.name || "");
+    else if (adjusterSortBy === "email") cmp = (a.email || "").localeCompare(b.email || "");
+    else if (adjusterSortBy === "specialization") cmp = (a.specialization || "").localeCompare(b.specialization || "");
+    else if (adjusterSortBy === "claims") cmp = (a.claims_assigned || 0) - (b.claims_assigned || 0);
+    return adjusterSortOrder === "asc" ? cmp : -cmp;
   });
 
   return (
@@ -558,11 +556,10 @@ export default function AdminPage() {
         <nav className="flex-1 flex flex-col gap-1">
           <button
             onClick={() => setActiveTab("policies")}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${
-              activeTab === "policies"
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${activeTab === "policies"
                 ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
                 : "text-[#505f76] hover:bg-[#eceef0]"
-            }`}
+              }`}
           >
             <span
               className="material-symbols-outlined text-[20px]"
@@ -575,11 +572,10 @@ export default function AdminPage() {
 
           <button
             onClick={() => setActiveTab("adjusters")}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${
-              activeTab === "adjusters"
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${activeTab === "adjusters"
                 ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
                 : "text-[#505f76] hover:bg-[#eceef0]"
-            }`}
+              }`}
           >
             <span
               className="material-symbols-outlined text-[20px]"
@@ -694,7 +690,7 @@ export default function AdminPage() {
                     <div className="mt-4 p-3 bg-emerald-50 border border-emerald-300 rounded-lg text-emerald-800 text-xs flex items-center gap-2">
                       <span className="material-symbols-outlined text-sm text-emerald-600">check_circle</span>
                       <span>
-                        Successfully imported {importResult.imported_count || importResult.rows_processed || 0} policies!
+                        Successfully imported {importResult.total_processed || importResult.imported || 0} policies!
                       </span>
                     </div>
                   )}
@@ -708,7 +704,7 @@ export default function AdminPage() {
 
                   <div className="mt-4 pt-4 border-t border-[#e6e8ea] w-full flex justify-end">
                     <a
-                      href="data:text/csv;charset=utf-8,policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,is_active,policyholder_name,policyholder_dob,policyholder_phone%0APOL-8492-AX,motor,250000,1000,2023-01-01,2026-12-31,true,Sarah Jenkins,1990-05-15,5550192834%0APOL-3321-HM,home,400000,2000,2023-03-01,2027-03-01,true,Michael Chang,1985-08-20,5558471029"
+                      href="data:text/csv;charset=utf-8,policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,policyholder_name,policyholder_dob,policyholder_phone%0APOL-8492-AX,motor,250000,1000,2023-01-01,2026-12-31,Sarah Jenkins,1990-05-15,5550192834%0APOL-3321-HM,home,400000,2000,2023-03-01,2027-03-01,Michael Chang,1985-08-20,5558471029"
                       download="policy_template.csv"
                       className="text-[#0891B2] hover:underline font-label text-xs flex items-center gap-1 z-20"
                     >
@@ -785,6 +781,37 @@ export default function AdminPage() {
                         className="input-minimal w-full pl-9 pr-4 py-1.5 bg-white border border-[#e0e3e5] rounded-full font-body text-xs text-[#191c1e]"
                       />
                     </div>
+                    <select
+                      value={policyFilterType}
+                      onChange={(e) => setPolicyFilterType(e.target.value)}
+                      className="input-minimal w-full sm:w-auto bg-white border border-[#e0e3e5] rounded-full px-4 py-1.5 font-body text-xs text-[#191c1e] cursor-pointer"
+                    >
+                      <option value="all">All Types</option>
+                      {SPECIALIZATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={policySortBy}
+                      onChange={(e) => setPolicySortBy(e.target.value)}
+                      className="input-minimal w-full sm:w-auto bg-white border border-[#e0e3e5] rounded-full px-4 py-1.5 font-body text-xs text-[#191c1e] cursor-pointer"
+                    >
+                      <option value="id">Sort: ID</option>
+                      <option value="type">Sort: Type</option>
+                      <option value="holder">Sort: Holder</option>
+                      <option value="date">Sort: Effective</option>
+                      <option value="coverage">Sort: Coverage</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setPolicySortOrder(policySortOrder === "asc" ? "desc" : "asc")}
+                      className="w-8 h-8 flex items-center justify-center rounded-full border border-[#e0e3e5] text-[#505f76] hover:bg-[#f2f4f6] cursor-pointer shrink-0"
+                      title="Toggle Sort Order"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">
+                        {policySortOrder === "asc" ? "arrow_upward" : "arrow_downward"}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setShowAddPolicyModal(true)}
@@ -803,8 +830,10 @@ export default function AdminPage() {
                         <th className="py-3 px-4">Policy ID</th>
                         <th className="py-3 px-4">Type</th>
                         <th className="py-3 px-4">Holder</th>
+                        <th className="py-3 px-4">Holder DOB</th>
                         <th className="py-3 px-4">Phone</th>
                         <th className="py-3 px-4">Coverage</th>
+                        <th className="py-3 px-4">Effective</th>
                         <th className="py-3 px-4">Expiry</th>
                         <th className="py-3 px-4">Status</th>
                         <th className="py-3 px-4 text-center">Actions</th>
@@ -813,13 +842,13 @@ export default function AdminPage() {
                     <tbody className="divide-y divide-[#f2f4f6] font-body text-xs">
                       {loadingPolicies ? (
                         <tr>
-                          <td colSpan={8} className="py-8 text-center text-[#505f76] animate-pulse">
+                          <td colSpan={10} className="py-8 text-center text-[#505f76] animate-pulse">
                             Loading policies...
                           </td>
                         </tr>
                       ) : filteredPolicies.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="py-8 text-center text-[#505f76]">
+                          <td colSpan={10} className="py-8 text-center text-[#505f76]">
                             No policies found matching your search.
                           </td>
                         </tr>
@@ -829,18 +858,19 @@ export default function AdminPage() {
                             <td className="py-3.5 px-4 font-mono font-bold text-[#00647c]">{p.policy_number}</td>
                             <td className="py-3.5 px-4 text-[#505f76] capitalize">{p.policy_type?.replace("_", " ")}</td>
                             <td className="py-3.5 px-4 font-medium text-[#191c1e]">{p.policyholder_name || "—"}</td>
+                            <td className="py-3.5 px-4 text-[#505f76]">{p.policyholder_dob || "—"}</td>
                             <td className="py-3.5 px-4 text-[#505f76] font-mono">
-                              {p.policyholder_phone_last4 ? `•••• ${p.policyholder_phone_last4}` : "—"}
+                              {p.policyholder_phone || "—"}
                             </td>
                             <td className="py-3.5 px-4 font-medium text-[#191c1e]">₹{p.coverage_amount?.toLocaleString()}</td>
+                            <td className="py-3.5 px-4 text-[#505f76]">{p.effective_date}</td>
                             <td className="py-3.5 px-4 text-[#505f76]">{p.expiry_date}</td>
                             <td className="py-3.5 px-4">
                               <span
-                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                  p.is_active
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${p.is_active
                                     ? "bg-[#d0e1fb] text-[#54647a]"
                                     : "bg-[#ffdad6] text-[#93000a]"
-                                }`}
+                                  }`}
                               >
                                 {p.is_active ? "Active" : "Inactive"}
                               </span>
@@ -853,13 +883,6 @@ export default function AdminPage() {
                                   className="text-[#00647c] hover:text-[#007f9d] p-1 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
                                 >
                                   <span className="material-symbols-outlined text-[16px]">edit</span>
-                                </button>
-                                <button
-                                  onClick={() => handleDeletePolicy(p.policy_number)}
-                                  title="Delete Policy"
-                                  className="text-[#505f76] hover:text-[#ba1a1a] p-1 rounded hover:bg-[#eceef0] transition-colors cursor-pointer"
-                                >
-                                  <span className="material-symbols-outlined text-[16px]">delete</span>
                                 </button>
                               </div>
                             </td>
@@ -1009,17 +1032,49 @@ export default function AdminPage() {
                       </p>
                     </div>
 
-                    <div className="relative w-full sm:w-56">
-                      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#505f76] text-[18px]">
-                        search
-                      </span>
-                      <input
-                        type="text"
-                        placeholder="Search roster..."
-                        value={adjusterSearch}
-                        onChange={(e) => setAdjusterSearch(e.target.value)}
-                        className="input-minimal w-full pl-9 pr-4 py-1.5 bg-[#f7f9fb] border border-[#e0e3e5] rounded-full font-body text-xs text-[#191c1e]"
-                      />
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <div className="relative w-full sm:w-56">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#505f76] text-[18px]">
+                          search
+                        </span>
+                        <input
+                          type="text"
+                          placeholder="Search roster..."
+                          value={adjusterSearch}
+                          onChange={(e) => setAdjusterSearch(e.target.value)}
+                          className="input-minimal w-full pl-9 pr-4 py-1.5 bg-[#f7f9fb] border border-[#e0e3e5] rounded-full font-body text-xs text-[#191c1e]"
+                        />
+                      </div>
+                      <select
+                        value={adjusterFilterSpec}
+                        onChange={(e) => setAdjusterFilterSpec(e.target.value)}
+                        className="input-minimal w-full sm:w-auto bg-[#f7f9fb] border border-[#e0e3e5] rounded-full px-4 py-1.5 font-body text-xs text-[#191c1e] cursor-pointer"
+                      >
+                        <option value="all">All Specs</option>
+                        {SPECIALIZATION_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={adjusterSortBy}
+                        onChange={(e) => setAdjusterSortBy(e.target.value)}
+                        className="input-minimal w-full sm:w-auto bg-[#f7f9fb] border border-[#e0e3e5] rounded-full px-4 py-1.5 font-body text-xs text-[#191c1e] cursor-pointer"
+                      >
+                        <option value="name">Sort: Name</option>
+                        <option value="email">Sort: Email</option>
+                        <option value="specialization">Sort: Spec</option>
+                        <option value="claims">Sort: Claims</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setAdjusterSortOrder(adjusterSortOrder === "asc" ? "desc" : "asc")}
+                        className="w-8 h-8 flex items-center justify-center rounded-full border border-[#e0e3e5] text-[#505f76] hover:bg-[#eceef0] cursor-pointer shrink-0"
+                        title="Toggle Sort Order"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">
+                          {adjusterSortOrder === "asc" ? "arrow_upward" : "arrow_downward"}
+                        </span>
+                      </button>
                     </div>
                   </div>
 
@@ -1330,13 +1385,13 @@ export default function AdminPage() {
                   />
                 </div>
                 <div>
-                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Phone (Last 4)</label>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Mobile Number</label>
                   <input
                     type="text"
-                    maxLength={4}
-                    placeholder="1234"
-                    value={newPolicyPhone4}
-                    onChange={(e) => setNewPolicyPhone4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    maxLength={15}
+                    placeholder="e.g. 5551234567"
+                    value={newPolicyPhone}
+                    onChange={(e) => setNewPolicyPhone(e.target.value.replace(/\D/g, ""))}
                     className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs font-mono text-[#191c1e]"
                   />
                 </div>
@@ -1399,19 +1454,6 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="newPolicyActiveCheck"
-                  checked={newPolicyActive}
-                  onChange={(e) => setNewPolicyActive(e.target.checked)}
-                  className="rounded text-[#00647c] focus:ring-[#00647c]"
-                />
-                <label htmlFor="newPolicyActiveCheck" className="font-body text-xs text-[#191c1e] cursor-pointer">
-                  Policy is Active
-                </label>
-              </div>
-
               <div className="flex justify-end gap-2 pt-3 border-t border-[#e0e3e5]">
                 <button
                   type="button"
@@ -1463,13 +1505,13 @@ export default function AdminPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="font-label text-xs text-[#505f76] block mb-1">Policyholder Phone (Last 4)</label>
+                  <label className="font-label text-xs text-[#505f76] block mb-1">Mobile Number</label>
                   <input
                     type="text"
-                    maxLength={4}
-                    placeholder="1234"
-                    value={editPolicyPhone4}
-                    onChange={(e) => setEditPolicyPhone4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    maxLength={15}
+                    placeholder="e.g. 5551234567"
+                    value={editPolicyPhone}
+                    onChange={(e) => setEditPolicyPhone(e.target.value.replace(/\D/g, ""))}
                     className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs font-mono text-[#191c1e]"
                   />
                 </div>
@@ -1539,19 +1581,6 @@ export default function AdminPage() {
                     className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
                   />
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="editPolicyActiveCheck"
-                  checked={editPolicyActive}
-                  onChange={(e) => setEditPolicyActive(e.target.checked)}
-                  className="rounded text-[#00647c] focus:ring-[#00647c]"
-                />
-                <label htmlFor="editPolicyActiveCheck" className="font-body text-xs text-[#191c1e] cursor-pointer">
-                  Policy is Active
-                </label>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-[#e0e3e5]">

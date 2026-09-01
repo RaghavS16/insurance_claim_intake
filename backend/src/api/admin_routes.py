@@ -60,8 +60,7 @@ class CreatePolicyRequest(BaseModel):
     expiry_date: str = Field(..., description="End date YYYY-MM-DD")
     policyholder_name: Optional[str] = Field(None, max_length=255, description="Full name of policyholder")
     policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
-    policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
-    is_active: bool = Field(True, description="Policy active status")
+    policyholder_phone: Optional[str] = Field(None, max_length=20, description="Full phone number")
 
 
 class UpdatePolicyRequest(BaseModel):
@@ -72,8 +71,7 @@ class UpdatePolicyRequest(BaseModel):
     expiry_date: Optional[str] = Field(None, description="End date YYYY-MM-DD")
     policyholder_name: Optional[str] = Field(None, max_length=255, description="Full name of policyholder")
     policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
-    policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
-    is_active: Optional[bool] = Field(None, description="Policy active status")
+    policyholder_phone: Optional[str] = Field(None, max_length=20, description="Full phone number")
 
 
 # ---------------------------------------------------------------------------
@@ -202,11 +200,10 @@ async def import_policies_csv(
                 errors.append({"row": row_idx, "policy_number": policy_num, "error": "Invalid policyholder_dob format (YYYY-MM-DD required)"})
                 continue
 
-        phone_last4 = row.get("policyholder_phone_last4") or None
-        if phone_last4 and len(phone_last4) > 4:
-            phone_last4 = phone_last4[-4:]
-
-        is_active_val = row.get("is_active", "true").lower() in ("true", "1", "yes", "t")
+        phone = row.get("policyholder_phone") or None
+        clean_phone = None
+        if phone:
+            clean_phone = "".join(filter(str.isdigit, phone))
 
         existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num).first()
 
@@ -217,13 +214,12 @@ async def import_policies_csv(
             existing_policy.deductible = deductible  # type: ignore[assignment]
             existing_policy.effective_date = eff_date  # type: ignore[assignment]
             existing_policy.expiry_date = exp_date  # type: ignore[assignment]
-            existing_policy.is_active = is_active_val  # type: ignore[assignment]
             if holder_name is not None:
                 existing_policy.policyholder_name = holder_name  # type: ignore[assignment]
             if holder_dob is not None:
                 existing_policy.policyholder_dob = holder_dob  # type: ignore[assignment]
-            if phone_last4 is not None:
-                existing_policy.policyholder_phone_last4 = phone_last4  # type: ignore[assignment]
+            if clean_phone is not None:
+                existing_policy.policyholder_phone = clean_phone  # type: ignore[assignment]
             updated_count += 1
         else:
             # Create new unlinked policy
@@ -236,10 +232,9 @@ async def import_policies_csv(
                 deductible=deductible,
                 effective_date=eff_date,
                 expiry_date=exp_date,
-                is_active=is_active_val,
                 policyholder_name=holder_name,
                 policyholder_dob=holder_dob,
-                policyholder_phone_last4=phone_last4,
+                policyholder_phone=clean_phone,
                 link_attempts=0,
             )
             db.add(new_policy)
@@ -349,7 +344,7 @@ def list_adjusters(
     adjusters = db.query(Adjuster).order_by(Adjuster.name.asc()).all()
     return [
         {
-            "id": str(a.id),
+            "id": a.id,
             "name": a.name,
             "email": a.email,
             "specialization": a.specialization,
@@ -377,7 +372,7 @@ def get_adjuster(
         )
 
     return {
-        "id": str(adjuster.id),
+        "id": adjuster.id,
         "name": adjuster.name,
         "email": adjuster.email,
         "specialization": adjuster.specialization,
@@ -459,7 +454,7 @@ def update_adjuster(
         )
 
     return {
-        "id": str(adjuster.id),
+        "id": adjuster.id,
         "name": adjuster.name,
         "email": adjuster.email,
         "specialization": adjuster.specialization,
@@ -508,7 +503,7 @@ def reset_adjuster_password(
         )
 
     return {
-        "id": str(adjuster.id),
+        "id": adjuster.id,
         "email": adjuster.email,
         "temporary_password": temp_password,
         "message": "Password reset successfully. Provide the new temporary password to the adjuster.",
@@ -587,7 +582,7 @@ def list_all_policies(
         ded_val = float(getattr(p, "deductible", 0) or 0)
         linked_at_val = getattr(p, "linked_at", None)
         items.append({
-            "id": str(p.id),
+            "id": p.id,
             "policy_number": p.policy_number,
             "policy_type": p.policy_type,
             "coverage_amount": cov_val,
@@ -596,9 +591,10 @@ def list_all_policies(
             "expiry_date": str(p.expiry_date),
             "is_active": p.is_active,
             "policyholder_name": p.policyholder_name,
-            "policyholder_phone_last4": p.policyholder_phone_last4,
+            "policyholder_dob": str(p.policyholder_dob) if p.policyholder_dob else None,
+            "policyholder_phone": p.policyholder_phone,
             "is_linked": p.customer_id is not None,
-            "customer_id": str(p.customer_id) if p.customer_id else None,
+            "customer_id": p.customer_id if p.customer_id else None,
             "linked_at": linked_at_val.isoformat() if linked_at_val else None,
             "link_attempts": p.link_attempts,
         })
@@ -654,9 +650,9 @@ def create_policy(
                 detail="Policyholder date of birth must be in YYYY-MM-DD format.",
             )
 
-    phone_last4 = payload.policyholder_phone_last4
-    if phone_last4 and len(phone_last4) > 4:
-        phone_last4 = phone_last4[-4:]
+    phone = None
+    if payload.policyholder_phone:
+        phone = "".join(filter(str.isdigit, payload.policyholder_phone))
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
@@ -667,10 +663,9 @@ def create_policy(
         deductible=payload.deductible,
         effective_date=eff_date,
         expiry_date=exp_date,
-        is_active=payload.is_active,
         policyholder_name=payload.policyholder_name.strip() if payload.policyholder_name else None,
         policyholder_dob=holder_dob,
-        policyholder_phone_last4=phone_last4,
+        policyholder_phone=phone,
         link_attempts=0,
     )
 
@@ -687,16 +682,16 @@ def create_policy(
         )
 
     return {
-        "id": str(new_policy.id),
+        "id": new_policy.id,
         "policy_number": new_policy.policy_number,
         "policy_type": new_policy.policy_type,
-        "coverage_amount": float(new_policy.coverage_amount),
-        "deductible": float(new_policy.deductible),
+        "coverage_amount": new_policy.coverage_amount,
+        "deductible": new_policy.deductible,
         "effective_date": str(new_policy.effective_date),
         "expiry_date": str(new_policy.expiry_date),
         "is_active": new_policy.is_active,
         "policyholder_name": new_policy.policyholder_name,
-        "policyholder_phone_last4": new_policy.policyholder_phone_last4,
+        "policyholder_phone": new_policy.policyholder_phone,
         "message": "Policy created successfully.",
     }
 
@@ -755,7 +750,9 @@ def update_policy(
         policy.policyholder_name = payload.policyholder_name.strip() or None  # type: ignore[assignment]
 
     if payload.policyholder_dob is not None:
-        if payload.policyholder_dob.strip():
+        if payload.policyholder_dob.strip() == "":
+            policy.policyholder_dob = None  # type: ignore[assignment]
+        else:
             try:
                 policy.policyholder_dob = datetime.strptime(payload.policyholder_dob.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
             except ValueError:
@@ -763,15 +760,13 @@ def update_policy(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Policyholder date of birth must be in YYYY-MM-DD format.",
                 )
+
+    if payload.policyholder_phone is not None:
+        p = payload.policyholder_phone.strip()
+        if p:
+            policy.policyholder_phone = "".join(filter(str.isdigit, p))  # type: ignore[assignment]
         else:
-            policy.policyholder_dob = None  # type: ignore[assignment]
-
-    if payload.policyholder_phone_last4 is not None:
-        p4 = payload.policyholder_phone_last4.strip()
-        policy.policyholder_phone_last4 = p4[-4:] if p4 else None  # type: ignore[assignment]
-
-    if payload.is_active is not None:
-        policy.is_active = payload.is_active  # type: ignore[assignment]
+            policy.policyholder_phone = None  # type: ignore[assignment]
 
     try:
         db.commit()
@@ -785,49 +780,15 @@ def update_policy(
         )
 
     return {
-        "id": str(policy.id),
+        "id": policy.id,
         "policy_number": policy.policy_number,
         "policy_type": policy.policy_type,
-        "coverage_amount": float(policy.coverage_amount),
-        "deductible": float(policy.deductible),
+        "coverage_amount": policy.coverage_amount,
+        "deductible": policy.deductible,
         "effective_date": str(policy.effective_date),
         "expiry_date": str(policy.expiry_date),
         "is_active": policy.is_active,
         "policyholder_name": policy.policyholder_name,
-        "policyholder_phone_last4": policy.policyholder_phone_last4,
+        "policyholder_phone": policy.policyholder_phone,
         "message": "Policy updated successfully.",
-    }
-
-
-@router.delete("/policies/{policy_id_or_number}")
-def delete_policy(
-    policy_id_or_number: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Delete a policy record safely by ID or policy number."""
-    _resolve_admin(request, db)
-
-    policy = _find_policy(db, policy_id_or_number)
-    if not policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Policy '{policy_id_or_number}' not found.",
-        )
-
-    pol_num = policy.policy_number
-    try:
-        db.delete(policy)
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception(f"Failed to delete policy {policy_id_or_number}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete policy.",
-        )
-
-    return {
-        "policy_number": pol_num,
-        "message": f"Policy '{pol_num}' deleted successfully.",
     }

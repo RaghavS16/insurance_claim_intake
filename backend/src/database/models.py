@@ -69,11 +69,15 @@ class Policy(Base):
     deductible: Mapped[float] = mapped_column(Numeric, nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    @property
+    def is_active(self) -> bool:
+        return self.expiry_date >= date.today()
+    
     policyholder_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     policyholder_dob: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    policyholder_phone_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
-    linked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    policyholder_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    linked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     link_attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 

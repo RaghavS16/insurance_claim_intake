@@ -34,10 +34,9 @@ CREATE TABLE IF NOT EXISTS policies (
     deductible              NUMERIC NOT NULL,
     effective_date          DATE NOT NULL,
     expiry_date             DATE NOT NULL,
-    is_active               BOOLEAN NOT NULL DEFAULT TRUE,
     policyholder_name       VARCHAR,
     policyholder_dob        DATE,
-    policyholder_phone_last4 VARCHAR(4),
+    policyholder_phone      VARCHAR,
     linked_at               TIMESTAMPTZ,
     link_attempts           INTEGER NOT NULL DEFAULT 0,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()

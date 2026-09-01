@@ -115,7 +115,10 @@ def link_policy(
 
     # Validate PII: Policyholder Name, Date of Birth, and Last 4 digits of phone number
     dob_match = str(policy.policyholder_dob) == payload.date_of_birth.strip()
-    phone_match = str(policy.policyholder_phone_last4) == payload.phone_last4.strip()
+    
+    stored_phone = policy.policyholder_phone
+    stored_last4 = stored_phone[-4:] if stored_phone else "None"
+    phone_match = stored_last4 == payload.phone_last4.strip()
 
     req_name = payload.policyholder_name.strip().lower()
     if policy.policyholder_name:
