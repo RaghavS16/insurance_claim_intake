@@ -34,9 +34,11 @@ CREATE TABLE IF NOT EXISTS policies (
     deductible              NUMERIC NOT NULL,
     effective_date          DATE NOT NULL,
     expiry_date             DATE NOT NULL,
+    is_active               BOOLEAN NOT NULL DEFAULT TRUE,
     policyholder_name       VARCHAR,
     policyholder_dob        DATE,
     policyholder_phone      VARCHAR,
+    policyholder_phone_last4 VARCHAR(4),
     linked_at               TIMESTAMPTZ,
     link_attempts           INTEGER NOT NULL DEFAULT 0,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -122,4 +124,19 @@ CREATE TABLE IF NOT EXISTS password_reset_otps (
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_otps_user_id
     ON password_reset_otps(user_id, created_at DESC);
+
+-- -------------------------
+-- Revoked Tokens
+-- -------------------------
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_jti       VARCHAR UNIQUE NOT NULL,
+    user_id         UUID REFERENCES users(id),
+    expires_at      TIMESTAMPTZ NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti
+    ON revoked_tokens(token_jti);
+
 

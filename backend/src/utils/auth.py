@@ -14,7 +14,15 @@ import jwt
 
 from src.config import settings
 
+import threading
+import time
+import uuid
+
 ALGORITHM = "HS256"
+
+# In-memory blacklist with expiration tracking
+_revoked_tokens_lock = threading.Lock()
+_revoked_tokens: Dict[str, float] = {}  # jti or token_hash -> expiry_timestamp
 
 
 class TokenError(Enum):
@@ -22,6 +30,7 @@ class TokenError(Enum):
     EXPIRED = "token_expired"
     INVALID = "token_invalid"
     MALFORMED = "token_malformed"
+    REVOKED = "token_revoked"
 
 
 def get_password_hash(password: str) -> str:
@@ -43,29 +52,78 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    """Create a new JWT access token with configurable expiry."""
+    """Create a new JWT access token with unique jti and configurable expiry."""
     to_encode = data.copy()
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({
+        "jti": str(uuid.uuid4()),
         "exp": int(expire.timestamp()),
-        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "iat": int(now.timestamp()),
     })
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 
+def revoke_token(token: str) -> bool:
+    """
+    Revoke a JWT token by adding its jti (or token) to the blacklist.
+    """
+    try:
+        # Decode without verification in case it is near expiration
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        jti = unverified.get("jti") or token
+        exp = unverified.get("exp", time.time() + 3600)
+    except Exception:
+        jti = token
+        exp = time.time() + 3600
+
+    now = time.time()
+    with _revoked_tokens_lock:
+        # Clean expired tokens
+        expired_keys = [k for k, v in _revoked_tokens.items() if v <= now]
+        for k in expired_keys:
+            _revoked_tokens.pop(k, None)
+
+        _revoked_tokens[jti] = exp
+    return True
+
+
+def is_token_revoked(token: str) -> bool:
+    """Check if token or its jti has been blacklisted."""
+    try:
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        jti = unverified.get("jti")
+    except Exception:
+        jti = None
+
+    now = time.time()
+    with _revoked_tokens_lock:
+        if jti and jti in _revoked_tokens:
+            if _revoked_tokens[jti] > now:
+                return True
+        if token in _revoked_tokens:
+            if _revoked_tokens[token] > now:
+                return True
+    return False
+
+
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
     """
     Decode and verify a JWT access token.
-
-    Returns the payload dict on success, None on any failure.
-    Logs structured error type for monitoring.
+    Ensures signature is valid, token is not expired, and not in the blacklist.
     """
+    if is_token_revoked(token):
+        return None
+
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        jti = payload.get("jti")
+        if jti and is_token_revoked(token):
+            return None
         return payload
     except jwt.ExpiredSignatureError:
         return None
@@ -73,3 +131,4 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return None
     except Exception:
         return None
+

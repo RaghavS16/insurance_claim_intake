@@ -82,6 +82,13 @@ AFFIRMATION_WORDS = {"yes", "yeah", "yep", "yup", "correct", "confirm", "sure", 
 
 REJECTION_PHRASES = ("that's wrong", "thats wrong", "not right", "not correct", "hold on")
 REJECTION_WORDS = {"no", "nope", "incorrect", "wrong", "mistake"}
+HUMAN_ESCALATION_MARKERS = (
+    "speak to human", "talk to human", "talk to a person", "speak to a person",
+    "real person", "human agent", "talk to an agent", "speak to an agent",
+    "representative", "customer care", "customer service", "operator",
+    "transfer me", "connect me to", "i want to speak to someone",
+    "this is frustrating", "i am frustrated", "lawyer", "human please",
+)
 
 FILLER_OR_GREETING_WORDS = {
     "YOU", "HELLO", "HI", "HEY", "GOOD", "MORNING", "AFTERNOON", "EVENING",
@@ -403,7 +410,8 @@ def _detect_utterance_intent(text: str) -> str:
     except Exception as exc:
         logger.error("LLM intent classification failed: %s", exc, exc_info=True)
 
-    # Fallback to broad marker matches if LLM failed
+    if any(m in lowered for m in HUMAN_ESCALATION_MARKERS):
+        return "escalation"
     if any(m in lowered for m in REPEAT_MARKERS):
         return "repeat"
     if any(m in lowered for m in CORRECTION_MARKERS):
@@ -479,6 +487,20 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
         state["message"] = next_q
         state["next_question_field"] = ""
         _audit(state, f"Short-circuited turn processor due to status '{current_status}' and intent '{intent}' after completion.")
+        return state
+
+    # Human escalation requested
+    if intent == "escalation":
+        state["escalate_to_human"] = True
+        state["escalation_reason"] = "user_requested"
+        state["conversation_status"] = "escalated"
+        state["_skip_extraction"] = True
+        state["_skip_all"] = True
+        msg = "I understand. I am transferring your claim to a human claims specialist who will assist you directly. A representative will be with you shortly."
+        state["next_question"] = msg
+        state["message"] = msg
+        state["next_question_field"] = "escalation"
+        _audit(state, "Claimant requested escalation to a human representative.")
         return state
 
     # Gratitude/greeting/closing intents must be detected and handled BEFORE claim_extractor ever runs, regardless of conversation_status
@@ -657,10 +679,45 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
         else:
             field_status[f] = "provided"
 
+    # Infinite loop protection: Track consecutive queries on the same target field
+    retries = dict(state.get("consecutive_field_retries") or {})
+    current_target = state.get("next_question_field")
+    if current_target and current_target in missing:
+        retries[current_target] = retries.get(current_target, 0) + 1
+        if retries[current_target] >= 3:
+            # Loop breaker: auto-defer field after 3 unfulfilled attempts
+            unknown_list = list(state.get("unknown_fields") or [])
+            if current_target not in unknown_list:
+                unknown_list.append(current_target)
+            state["unknown_fields"] = unknown_list
+            field_status[current_target] = "deferred"
+            data[current_target] = UNKNOWN_SENTINEL
+            state["deferral_message"] = f"We can provide the {FIELD_HUMAN_NAMES.get(current_target, current_target)} later."
+            if current_target in missing:
+                missing.remove(current_target)
+            retries[current_target] = 0
+            _audit(state, f"Auto-deferred field '{current_target}' after 3 attempts to prevent infinite loop.")
+    elif current_target and current_target not in missing:
+        retries[current_target] = 0
+
+    state["consecutive_field_retries"] = retries
+
     provided_count = len([f for f in REQUIRED_FIELDS if f not in missing])
     state["extraction_confidence"] = round(provided_count / len(REQUIRED_FIELDS), 2)
     state["missing_fields"] = missing
     state["field_status"] = field_status
+
+    # Hard turn ceiling: escalate to human if 25 turns reached without completion
+    if state.get("turn_number", 0) >= 25 and missing:
+        state["escalate_to_human"] = True
+        state["escalation_reason"] = "max_turns_exceeded"
+        state["conversation_status"] = "escalated"
+        msg = "I've recorded all the information provided so far. I will now connect you with a claims specialist to finalize your claim."
+        state["next_question"] = msg
+        state["message"] = msg
+        state["_skip_all"] = True
+        _audit(state, "Max conversational turns reached (25). Escalating to human adjuster.")
+        return state
 
     if state.get("confirmed"):
         state["awaiting_confirmation"] = False

@@ -29,10 +29,11 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal, dispose_engine
-from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP
+from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP, RevokedToken
 from src.api.voice_ws import router as voice_router
 from src.utils.logger import app_logger
-from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
+from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
+from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
 
 # Route modules
 from src.api import auth_routes, claim_routes, policy_routes, admin_routes
@@ -61,6 +62,11 @@ def get_current_user(
 
     uid = None
     if token:
+        if is_token_revoked(token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated: Token has been revoked."
+            )
         payload = verify_token(token)
         if payload:
             uid = payload.get("sub")
@@ -209,6 +215,18 @@ def _init_db_and_seeds():
                 PasswordResetOTP.__table__.create(bind=conn, checkfirst=True)
                 conn.commit()
 
+            if "revoked_tokens" not in tables:
+                logger.info("Database auto-migration: creating revoked_tokens table")
+                RevokedToken.__table__.create(bind=conn, checkfirst=True)
+                conn.commit()
+
+            if "policies" in tables:
+                try:
+                    conn.execute(text("UPDATE policies SET is_active = 1 WHERE is_active IS NULL"))
+                    conn.commit()
+                except Exception:
+                    pass
+
         # Only seed demo sample policies and test users in development and test environments
         if settings.ENVIRONMENT in ("development", "test"):
             db = SessionLocal()
@@ -294,6 +312,7 @@ def _init_db_and_seeds():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle manager."""
+    settings.validate_startup()
     _init_db_and_seeds()
     yield
     # Graceful shutdown: dispose connection pool
@@ -310,8 +329,9 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------------------------
-# CORS Configuration
+# Tracing & CORS Middleware
 # ---------------------------------------------------------------------------
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,

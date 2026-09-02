@@ -15,6 +15,9 @@ from src.database.session import get_db
 from src.database.models import Policy, PolicyLinkAudit, User
 from src.utils.logger import app_logger
 
+from src.utils.rate_limiter import enforce_rate_limit
+from src.utils.logger import app_logger
+
 logger = app_logger
 router = APIRouter(prefix="/api/v1/policies", tags=["Policies"])
 
@@ -26,7 +29,7 @@ MAX_LINK_ATTEMPTS = 5
 # ---------------------------------------------------------------------------
 class LinkPolicyRequest(BaseModel):
     policy_number: str = Field(..., min_length=3, max_length=20, description="Policy number e.g. MOT-5521")
-    policyholder_name: str = Field(..., min_length=2, max_length=255, description="Full name of policyholder (Mandatory)")
+    policyholder_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Full name of policyholder (Optional)")
     date_of_birth: str = Field(..., description="Date of birth in YYYY-MM-DD format")
     phone_last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of phone number")
 
@@ -76,9 +79,10 @@ def link_policy(
 ):
     """
     Verify policyholder PII and link an existing policy to the claimant's account.
-    Requires Policyholder Name, Date of Birth, and Phone Last 4 digits.
+    Requires Date of Birth and Phone Last 4 digits.
     Enforces maximum attempt rate-limiting and logs all outcomes to the audit table.
     """
+    enforce_rate_limit(request, action="link_policy", max_requests=10, window_seconds=60)
     current_user = _resolve_user(request, db)
     ip = request.client.host if request.client else "unknown"
     policy_number = payload.policy_number.strip().upper()
@@ -113,20 +117,19 @@ def link_policy(
             detail="This policy is already linked to another account.",
         )
 
-    # Validate PII: Policyholder Name, Date of Birth, and Last 4 digits of phone number
+    # Validate PII: Date of Birth and Last 4 digits of phone number
     dob_match = str(policy.policyholder_dob) == payload.date_of_birth.strip()
     
-    stored_phone = policy.policyholder_phone
-    stored_last4 = stored_phone[-4:] if stored_phone else "None"
-    phone_match = stored_last4 == payload.phone_last4.strip()
+    stored_phone = policy.policyholder_phone_last4 or (policy.policyholder_phone[-4:] if policy.policyholder_phone else None)
+    phone_match = stored_phone == payload.phone_last4.strip() if stored_phone else False
 
-    req_name = payload.policyholder_name.strip().lower()
-    if policy.policyholder_name:
+    name_match = True
+    if payload.policyholder_name and policy.policyholder_name:
+        req_name = payload.policyholder_name.strip().lower()
         pol_name = policy.policyholder_name.strip().lower()
         name_match = (req_name == pol_name) or (req_name in pol_name) or (pol_name in req_name)
-    else:
+    elif payload.policyholder_name and not policy.policyholder_name:
         policy.policyholder_name = payload.policyholder_name.strip()  # type: ignore[assignment]
-        name_match = True
 
     if not (dob_match and phone_match and name_match):
         policy.link_attempts = int(getattr(policy, "link_attempts", 0) or 0) + 1  # type: ignore[assignment]

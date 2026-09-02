@@ -77,3 +77,12 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> 
         logger.exception("Failed to send OTP email to %s", to_email)
         logger.info("OTP for %s (SMTP send failed, fallback log): %s", to_email, otp)
         return False
+
+
+async def send_otp_email_async(to_email: str, otp: str, full_name: Optional[str] = None) -> bool:
+    """
+    Asynchronously dispatch OTP email via background threadpool to avoid blocking event loop.
+    """
+    import asyncio
+    return await asyncio.to_thread(send_otp_email, to_email, otp, full_name)
+

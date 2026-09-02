@@ -46,6 +46,10 @@ class VoiceSessionRequest(BaseModel):
     policy_number: Optional[str] = Field(None, description="Preselected policy number")
 
 
+class TextTurnRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000, description="User text turn message")
+
+
 class UpdateClaimRequest(BaseModel):
     policy_id: Optional[str] = None
     insurance_type: Optional[str] = None
@@ -170,6 +174,48 @@ async def intake_claim(
         "confirmed": result.get("confirmed", False),
         "conversation_status": result.get("conversation_status"),
         "message": result.get("next_question") or result.get("message", ""),
+    }
+
+
+@router.post("/{ticket_id}/text-turn")
+async def claim_text_turn(
+    ticket_id: str,
+    payload: TextTurnRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Process a typed text turn for an active claim session."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    turn_num = prior_turns + 1
+
+    try:
+        result = await process_claimant_turn(db, claim, payload.text, "text", turn_num)
+    except Exception as exc:
+        logger.exception("claim_text_turn: processing failed")
+        raise HTTPException(
+            status_code=503,
+            detail=f"The claim processing pipeline encountered an error. ({type(exc).__name__})",
+        )
+
+    agent_msg = result.get("next_question") or result.get("message", "")
+    return {
+        "ticket_id": ticket_id,
+        "extracted_data": result.get("extracted_data", {}),
+        "missing_fields": result.get("missing_fields", []),
+        "field_status": result.get("field_status", {}),
+        "awaiting_confirmation": result.get("awaiting_confirmation", False),
+        "confirmed": result.get("confirmed", False),
+        "conversation_status": result.get("conversation_status"),
+        "agent_message": agent_msg,
+        "message": agent_msg,
+        "escalate_to_human": result.get("escalate_to_human", False),
+        "escalation_reason": result.get("escalation_reason", ""),
     }
 
 

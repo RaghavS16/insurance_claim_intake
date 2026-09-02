@@ -27,7 +27,7 @@ class ClaimState(TypedDict, total=False):
     extraction_confidence: float
 
     # ---- Conversational Turn Management ----
-    conversation_status: str             # "not_started" | "collecting" | "reviewing" | "pending_verification" | "verified" | "verification_failed"
+    conversation_status: str             # "not_started" | "collecting" | "reviewing" | "pending_verification" | "verified" | "verification_failed" | "escalated"
     turn_number: int                     # Monotonically increasing turn count
     conversation_history: List[Dict[str, Any]]  # [{turn, speaker, text}]
     next_question: str                   # Natural question or confirmation prompt to be spoken via TTS / displayed
@@ -40,6 +40,10 @@ class ClaimState(TypedDict, total=False):
     _greeting_prefix: Optional[str]
     _gratitude_prefix: Optional[str]
     summary_already_shown: Optional[bool] # Track if confirmation summary has been displayed
+    escalate_to_human: bool              # Flagged when human supervisor escalation triggered
+    escalation_reason: Optional[str]     # "user_requested" | "high_confusion" | "policy_exception"
+    retry_count: int                     # Total extraction failure retries
+    consecutive_field_retries: Dict[str, int] # Retries per specific field to break loops
 
 
     # ---- Phase 2 Extensibility Interfaces ----

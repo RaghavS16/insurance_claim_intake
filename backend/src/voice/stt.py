@@ -196,6 +196,15 @@ def transcribe_pcm16(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
     return text
 
 
+async def transcribe_pcm16_async(pcm_bytes: bytes, sample_rate: int = 16000) -> str:
+    """
+    Asynchronously transcribe audio chunk via threadpool executor to keep event loop free.
+    """
+    import asyncio
+    return await asyncio.to_thread(transcribe_pcm16, pcm_bytes, sample_rate)
+
+
+
 # ---------------------------------------------------------------------------
 # ASRProvider abstraction — makes the ASR backend replaceable
 # ---------------------------------------------------------------------------

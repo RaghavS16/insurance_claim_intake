@@ -617,6 +617,8 @@ async def _send_loop(
 
 @router.websocket("/ws/claims/{ticket_id}/voice")
 @router.websocket("/api/v1/claims/ws/{ticket_id}")
+@router.websocket("/api/v1/ws/voice/{ticket_id}")
+@router.websocket("/ws/voice/{ticket_id}")
 async def voice_conversation(
     websocket: WebSocket,
     ticket_id: str,
@@ -668,16 +670,16 @@ async def voice_conversation(
 
         # Check authorization / ownership (Claimants only view their own claims; Adjusters can view all)
         if user and user.role == "CLAIMANT":
-            if claim.claimant_id and str(claim.claimant_id) != user_id:
+            owner_id = str(claim.claimant_id) if claim.claimant_id else (str(claim.customer_id) if claim.customer_id else None)
+            if owner_id and owner_id != str(user_id):
                 await websocket.accept()
                 await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
                 await websocket.close(code=4403)
                 return
-            if claim.customer_id and claim.customer_id != user_id:
-                await websocket.accept()
-                await websocket.send_json({"type": "error", "detail": "Access denied: You do not own this claim."})
-                await websocket.close(code=4403)
-                return
+            elif not owner_id:
+                claim.claimant_id = user.id
+                claim.customer_id = str(user_id)
+                db.commit()
         elif not user and settings.ENVIRONMENT == "test":
             if claim.customer_id and claim.customer_id != user_id:
                 await websocket.accept()

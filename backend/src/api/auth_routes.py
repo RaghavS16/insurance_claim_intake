@@ -7,16 +7,17 @@ Extracted from the monolithic main.py for clean architectural separation.
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db
-from src.database.models import User, PasswordResetOTP
-from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token
+from src.database.models import User, PasswordResetOTP, RevokedToken
+from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
 from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, send_otp_email
+from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -58,8 +59,9 @@ class ResetPasswordRequest(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.post("/signup")
-def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
+def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_db)):
     """Register a new claimant account with validated input."""
+    enforce_rate_limit(request, action="signup", max_requests=10, window_seconds=60)
     # Validate and sanitize inputs
     try:
         clean_name = validate_full_name(payload.full_name)
@@ -108,8 +110,9 @@ def signup(payload: SignUpRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """Authenticate a user and return a JWT access token."""
+    enforce_rate_limit(request, action="login", max_requests=10, window_seconds=60)
     try:
         clean_email = validate_email(payload.email)
     except ValueError:
@@ -149,11 +152,12 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 # Forgot Password: Step 1 — Request OTP
 # ---------------------------------------------------------------------------
 @router.post("/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """
     Issue an email OTP for password reset. Always returns a generic success
     message regardless of whether the email exists, to avoid account enumeration.
     """
+    enforce_rate_limit(request, action="forgot_password", max_requests=10, window_seconds=60)
     try:
         clean_email = validate_email(payload.email)
     except ValueError:
@@ -208,7 +212,8 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
 # Forgot Password: Step 2 — Verify OTP, issue short-lived reset token
 # ---------------------------------------------------------------------------
 @router.post("/verify-otp")
-def verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)):
+def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="verify_otp", max_requests=10, window_seconds=60)
     try:
         clean_email = validate_email(payload.email)
     except ValueError:
@@ -265,7 +270,8 @@ def verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)):
 # Forgot Password: Step 3 — Reset password using verified token
 # ---------------------------------------------------------------------------
 @router.post("/reset-password")
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password(payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="reset_password", max_requests=10, window_seconds=60)
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
 
@@ -296,6 +302,9 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
 
     user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]
     record.consumed = True  # type: ignore[assignment]
+    # Revoke the reset token so it cannot be used again
+    revoke_token(payload.reset_token)
+
     try:
         db.commit()
     except Exception:
@@ -307,10 +316,28 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
 
 
 @router.post("/logout")
-def logout():
+def logout(request: Request, db: Session = Depends(get_db)):
     """
-    Logout endpoint. In a stateless JWT architecture, actual token revocation
-    requires a server-side token blacklist (Redis). For now, the client must
-    discard the token. This endpoint exists for API completeness.
+    Logout endpoint. Immediately revokes the JWT access token server-side.
     """
-    return {"message": "Logged out successfully. Please discard your access token."}
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        revoke_token(token)
+        # Optionally persist revoked token to DB if valid payload exists
+        try:
+            payload = verify_token(token)
+            jti = payload.get("jti") if payload else token
+            exp_ts = payload.get("exp") if payload else None
+            exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
+            revoked = RevokedToken(
+                token_jti=jti or token,
+                user_id=payload.get("sub") if payload else None,
+                expires_at=exp_dt,
+            )
+            db.add(revoked)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {"message": "Logged out successfully. Token has been revoked."}

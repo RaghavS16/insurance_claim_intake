@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # Voice Pipeline
     PIPER_BIN: str = Field("piper", description="Path or command for Piper TTS executable")
-    PIPER_VOICE_MODEL: Optional[str] = Field("en_US-lessac-medium.onnx", description="Piper ONNX voice model path")
+    PIPER_VOICE_MODEL: Optional[str] = Field("piper/en_US-ryan-medium.onnx", description="Piper ONNX voice model path")
     STT_MODEL_SIZE: str = Field("small", description="faster-whisper model size")
     VAD_AGGRESSIVENESS: int = Field(1, ge=0, le=3, description="WebRTC VAD aggressiveness mode (0-3)")
     # Silence duration (ms) after which speech endpoint is declared and ASR finalizes.
@@ -127,6 +127,29 @@ class Settings(BaseSettings):
                 )
         return self
 
+    def validate_startup(self) -> None:
+        """
+        Explicit startup assertion checks to fail fast if vital configurations are invalid.
+        """
+        # 1. Environment & Secrets
+        if self.ENVIRONMENT in ("production", "staging"):
+            if len(self.SECRET_KEY) < 32:
+                raise RuntimeError(
+                    f"Startup validation failed: SECRET_KEY must be at least 32 characters in {self.ENVIRONMENT} environment."
+                )
+            if "sqlite" in self.DATABASE_URL.lower():
+                raise RuntimeError(
+                    f"Startup validation failed: SQLite is not supported for {self.ENVIRONMENT} environment. Use PostgreSQL."
+                )
+
+        # 2. Upload directory
+        upload_path = Path(self.UPLOAD_DIR)
+        try:
+            upload_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise RuntimeError(f"Startup validation failed: Cannot create UPLOAD_DIR at '{upload_path}': {e}")
+
 
 # Global settings singleton
 settings = Settings()
+
