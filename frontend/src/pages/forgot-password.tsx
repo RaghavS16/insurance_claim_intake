@@ -151,41 +151,38 @@ export default function ForgotPasswordPage() {
           </div>
         </div>
 
-        {/* Right Side: Branded Visual (Hidden on Mobile) */}
-        <div className="hidden lg:flex lg:w-1/2 bg-[#f2f4f6] relative items-center justify-center overflow-hidden border-l border-[#e0e3e5]">
-          {/* Atmospheric Background Effect */}
-          <div className="absolute inset-0 z-0 bg-gradient-to-br from-[#f2f4f6] via-[#f7f9fb] to-[#b7eaff]/20"></div>
+        {/* Right Side: Value Proposition & Graphic (Hidden on Mobile) */}
+        <div className="hidden lg:flex lg:w-1/2 relative bg-[#FFFFFF] overflow-hidden flex-col items-center justify-center p-16 border-l border-[#e0e3e5]">
+          {/* Animated Background Wave Graphic */}
+          <div className="absolute inset-0 pointer-events-none opacity-25">
+            <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave" preserveAspectRatio="none" viewBox="0 0 1200 400">
+              <path className="text-[#0EA5E9]" d="M0,250 C200,150 400,350 600,250 C800,150 1000,350 1200,250 C1400,150 1600,350 1800,250 C2000,150 2200,350 2400,250 L2400,400 L0,400 Z" fill="currentColor"></path>
+            </svg>
+            <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave-slow opacity-60" preserveAspectRatio="none" viewBox="0 0 1200 400">
+              <path className="text-[#0891B2]" d="M0,300 C300,200 600,400 900,300 C1200,200 1500,400 1800,300 C2100,200 2400,400 2700,300 L2700,400 L0,400 Z" fill="currentColor"></path>
+            </svg>
+          </div>
 
-          {/* Central Visual Concept */}
-          <div className="relative z-10 flex flex-col items-center justify-center max-w-sm text-center space-y-6 px-8">
-            {/* Stylized Audio Wave / AI Indicator */}
-            <div className="relative w-32 h-32 flex items-center justify-center">
-              <div className="absolute inset-0 bg-[#0891b2]/10 rounded-full animate-ping" style={{ animationDuration: "3s" }}></div>
-              <div className="absolute inset-4 bg-[#0891b2]/20 rounded-full animate-pulse" style={{ animationDuration: "2s" }}></div>
-              <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center z-10 border border-[#bdc8ce]/40">
-                <span className="material-symbols-outlined fill text-[#0891b2] text-4xl" style={{ fontVariationSettings: "'FILL' 1" }}>
-                  graphic_eq
+          {/* Content Overlay */}
+          <div className="relative z-10 max-w-lg px-12 text-center flex flex-col items-center">
+            {/* Graphic Element Indicator */}
+            <div className="mb-10 relative flex items-center justify-center w-24 h-24">
+              <div className="absolute inset-0 rounded-full border-2 border-[#0891B2] opacity-30 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite]"></div>
+              <div className="absolute inset-2 rounded-full border-2 border-[#0891B2] opacity-50 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite_0.5s]"></div>
+              <div className="w-14 h-14 rounded-full bg-[#0891B2] flex items-center justify-center text-white shadow-[0_0_40px_rgba(8,145,178,0.4)]">
+                <span className="material-symbols-outlined fill text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>
+                  mic
                 </span>
               </div>
             </div>
 
-            {/* Tagline */}
-            <div className="space-y-3">
-              <h2 className="font-headline text-2xl font-bold text-[#191c1e]">Clarity in every conversation.</h2>
-              <p className="font-body text-sm text-[#505f76] leading-relaxed">
-                Securely regain access to your high-performance claim intelligence platform.
-              </p>
-            </div>
+            <h2 className="font-headline text-3xl font-bold text-[#00647c] mb-4 tracking-tight">
+              Clarity in every<br />conversation.
+            </h2>
+            <p className="font-body text-sm text-[#505f76] leading-relaxed">
+              Securely regain access to your high-performance claim intelligence platform.
+            </p>
           </div>
-
-          {/* Subtle Grid Overlay */}
-          <div
-            className="absolute inset-0 pointer-events-none opacity-40"
-            style={{
-              backgroundImage: "linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(to bottom, rgba(0,0,0,0.03) 1px, transparent 1px)",
-              backgroundSize: "40px 40px",
-            }}
-          ></div>
         </div>
       </div>
     </div>

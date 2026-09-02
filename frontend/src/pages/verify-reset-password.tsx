@@ -403,32 +403,37 @@ export default function VerifyResetPasswordPage() {
           </div>
         </div>
 
-        {/* Right Side: Branded Visual */}
-        <div className="hidden md:flex md:w-1/2 bg-[#eceef0] relative overflow-hidden flex-col justify-center items-center p-12 border-l border-[#e0e3e5]">
-          {/* Tonal layering overlay */}
-          <div className="absolute inset-0 bg-[#00647c]/5 backdrop-blur-[2px]"></div>
-
-          {/* Central Iconography Island */}
-          <div className="relative z-10 bg-white/90 backdrop-blur-xl p-8 rounded-full shadow-lg border border-[#bdc8ce]/40 flex items-center justify-center animate-pulse">
-            <span className="material-symbols-outlined text-[#00647c] text-[64px]" style={{ fontVariationSettings: "'FILL' 0", fontWeight: 300 }}>
-              graphic_eq
-            </span>
+        {/* Right Side: Value Proposition & Graphic */}
+        <div className="hidden md:flex md:w-1/2 relative bg-[#FFFFFF] overflow-hidden flex-col items-center justify-center p-16 border-l border-[#e0e3e5]">
+          {/* Animated Background Wave Graphic */}
+          <div className="absolute inset-0 pointer-events-none opacity-25">
+            <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave" preserveAspectRatio="none" viewBox="0 0 1200 400">
+              <path className="text-[#0EA5E9]" d="M0,250 C200,150 400,350 600,250 C800,150 1000,350 1200,250 C1400,150 1600,350 1800,250 C2000,150 2200,350 2400,250 L2400,400 L0,400 Z" fill="currentColor"></path>
+            </svg>
+            <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave-slow opacity-60" preserveAspectRatio="none" viewBox="0 0 1200 400">
+              <path className="text-[#0891B2]" d="M0,300 C300,200 600,400 900,300 C1200,200 1500,400 1800,300 C2100,200 2400,400 2700,300 L2700,400 L0,400 Z" fill="currentColor"></path>
+            </svg>
           </div>
 
-          <div className="relative z-10 mt-8 text-center px-8">
-            <h2 className="font-headline text-2xl font-bold text-[#191c1e] mb-2">Voice-Powered Security</h2>
-            <p className="font-body text-sm text-[#505f76] max-w-md mx-auto leading-relaxed">
+          {/* Content Overlay */}
+          <div className="relative z-10 max-w-lg px-12 text-center flex flex-col items-center">
+            {/* Graphic Element Indicator */}
+            <div className="mb-10 relative flex items-center justify-center w-24 h-24">
+              <div className="absolute inset-0 rounded-full border-2 border-[#0891B2] opacity-30 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite]"></div>
+              <div className="absolute inset-2 rounded-full border-2 border-[#0891B2] opacity-50 animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite_0.5s]"></div>
+              <div className="w-14 h-14 rounded-full bg-[#0891B2] flex items-center justify-center text-white shadow-[0_0_40px_rgba(8,145,178,0.4)]">
+                <span className="material-symbols-outlined fill text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>
+                  mic
+                </span>
+              </div>
+            </div>
+
+            <h2 className="font-headline text-3xl font-bold text-[#00647c] mb-4 tracking-tight">
+              Voice-Powered<br />Security
+            </h2>
+            <p className="font-body text-sm text-[#505f76] leading-relaxed">
               Our systems utilize advanced verification to ensure your claims data remains confidential, secure, and accessible only to you.
             </p>
-          </div>
-
-          {/* Decorative structural elements */}
-          <div className="absolute top-0 right-0 p-8 pointer-events-none">
-            <div className="flex gap-1.5 opacity-25">
-              <div className="w-1.5 h-12 bg-[#00647c] rounded-full"></div>
-              <div className="w-1.5 h-8 bg-[#00647c] rounded-full mt-2"></div>
-              <div className="w-1.5 h-16 bg-[#00647c] rounded-full -mt-2"></div>
-            </div>
           </div>
         </div>
       </div>
