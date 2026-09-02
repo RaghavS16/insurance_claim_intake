@@ -557,8 +557,8 @@ export default function AdminPage() {
           <button
             onClick={() => setActiveTab("policies")}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${activeTab === "policies"
-                ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
-                : "text-[#505f76] hover:bg-[#eceef0]"
+              ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
+              : "text-[#505f76] hover:bg-[#eceef0]"
               }`}
           >
             <span
@@ -573,8 +573,8 @@ export default function AdminPage() {
           <button
             onClick={() => setActiveTab("adjusters")}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-label font-medium transition-colors cursor-pointer ${activeTab === "adjusters"
-                ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
-                : "text-[#505f76] hover:bg-[#eceef0]"
+              ? "bg-[#eceef0] text-[#00647c] font-bold border-l-2 border-[#00647c]"
+              : "text-[#505f76] hover:bg-[#eceef0]"
               }`}
           >
             <span
@@ -868,8 +868,8 @@ export default function AdminPage() {
                             <td className="py-3.5 px-4">
                               <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${p.is_active
-                                    ? "bg-[#d0e1fb] text-[#54647a]"
-                                    : "bg-[#ffdad6] text-[#93000a]"
+                                  ? "bg-[#d0e1fb] text-[#54647a]"
+                                  : "bg-[#ffdad6] text-[#93000a]"
                                   }`}
                               >
                                 {p.is_active ? "Active" : "Inactive"}

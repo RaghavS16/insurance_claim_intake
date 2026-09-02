@@ -147,7 +147,7 @@ export default function SignupPage() {
                 id="phone"
                 name="phone"
                 type="tel"
-                placeholder="(555) 000-0000"
+                placeholder="+91 9876543210"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 className="input-minimal bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 font-body text-sm text-[#191c1e] placeholder:text-[#6e797e]"
@@ -239,9 +239,19 @@ export default function SignupPage() {
       </div>
 
       {/* Right Side: Branding Area */}
-      <div className="hidden lg:flex lg:w-1/2 bg-wave-pattern relative overflow-hidden flex-col justify-center items-center p-16 border-l border-[#e0e3e5]">
+      <div className="hidden lg:flex lg:w-1/2 relative bg-[#FFFFFF] overflow-hidden flex-col justify-center items-center p-16 border-l border-[#e0e3e5]">
+        {/* Animated Background Wave Graphic */}
+        <div className="absolute inset-0 pointer-events-none opacity-25">
+          <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave" preserveAspectRatio="none" viewBox="0 0 1200 400">
+            <path className="text-[#0EA5E9]" d="M0,250 C200,150 400,350 600,250 C800,150 1000,350 1200,250 C1400,150 1600,350 1800,250 C2000,150 2200,350 2400,250 L2400,400 L0,400 Z" fill="currentColor"></path>
+          </svg>
+          <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave-slow opacity-60" preserveAspectRatio="none" viewBox="0 0 1200 400">
+            <path className="text-[#0891B2]" d="M0,300 C300,200 600,400 900,300 C1200,200 1500,400 1800,300 C2100,200 2400,400 2700,300 L2700,400 L0,400 Z" fill="currentColor"></path>
+          </svg>
+        </div>
+
         {/* Top Branding Logo */}
-        <div className="absolute top-12 left-12 flex items-center gap-2 opacity-80">
+        <div className="absolute top-12 left-12 flex items-center gap-2 opacity-80 z-10">
           <span className="material-symbols-outlined fill text-[#0891B2] text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>
             graphic_eq
           </span>
@@ -269,10 +279,6 @@ export default function SignupPage() {
             Our voice-centric AI interface recedes to the background, allowing your claims data and seamless conversation to take center stage. Fast, secure, and quietly intelligent.
           </p>
         </div>
-
-        {/* Decorative Elements */}
-        <div className="absolute -bottom-20 -right-20 w-96 h-96 bg-white rounded-full blur-3xl opacity-50"></div>
-        <div className="absolute -top-20 -left-20 w-72 h-72 bg-white rounded-full blur-3xl opacity-60"></div>
       </div>
     </div>
   );

@@ -161,7 +161,7 @@ export default function LinkPolicyPage() {
             <span className="material-symbols-outlined text-[20px] group-hover:text-[#00647c] transition-colors">
               dashboard
             </span>
-            <span className="font-label text-xs font-medium">Dashboard</span>
+            <span className="font-label text-xs font-medium">Active Intake</span>
           </Link>
           <div
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] opacity-50 cursor-not-allowed"

@@ -66,7 +66,7 @@ export default function LoginPage() {
   return (
     <div className="bg-[#FFFFFF] font-body text-[#191c1e] antialiased min-h-screen flex selection:bg-[#b7eaff] selection:text-[#001f28]">
       {/* Left Side: Authentication Form */}
-      <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 py-12 lg:flex-none lg:w-1/2 xl:w-[45%] 2xl:w-2/5 z-10 bg-[#FFFFFF] relative">
+      <div className="w-full lg:w-1/2 flex flex-col justify-center px-6 sm:px-12 lg:px-16 py-12 bg-[#FFFFFF] z-10 relative">
         <div className="mx-auto w-full max-w-sm lg:w-[380px]">
           {/* Brand Identity */}
           <div className="flex items-center gap-3 mb-12">
@@ -197,7 +197,7 @@ export default function LoginPage() {
       </div>
 
       {/* Right Side: Value Proposition & Graphic */}
-      <div className="hidden lg:flex flex-1 relative bg-[#FFFFFF] overflow-hidden flex-col items-center justify-center border-l border-[#e0e3e5]">
+      <div className="hidden lg:flex lg:w-1/2 relative bg-[#FFFFFF] overflow-hidden flex-col items-center justify-center p-16 border-l border-[#e0e3e5]">
         {/* Animated Background Wave Graphic */}
         <div className="absolute inset-0 pointer-events-none opacity-25">
           <svg className="absolute w-[200%] h-full bottom-0 left-0 animate-wave" preserveAspectRatio="none" viewBox="0 0 1200 400">
