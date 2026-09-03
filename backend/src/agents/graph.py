@@ -4,6 +4,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents import nodes
 from src.agents.state import ClaimState
+from src.agents.turn_guard import conversation_turn_processor
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ def build_intake_graph():
 def _build_conversation_graph():
     """One semantic interpretation per user turn, followed by validation and response planning."""
     graph = StateGraph(ClaimState)  # type: ignore
-    graph.add_node("conversation_turn_processor", nodes.conversation_turn_processor)
+    graph.add_node("conversation_turn_processor", conversation_turn_processor)
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("next_question_generator", nodes.next_question_generator)
