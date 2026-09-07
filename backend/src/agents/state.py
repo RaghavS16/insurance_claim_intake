@@ -24,11 +24,12 @@ class ClaimState(TypedDict, total=False):
     turn_number: int
     conversation_history: List[Dict[str, Any]]
     next_question: str
-    next_question_field: str
+    next_question_field: Optional[str]
     last_user_utterance: str
     last_intent: str
     unknown_fields: List[str]
     current_field_hint: Optional[str]
+    clarification_request: Optional[str]
 
     _skip_extraction: bool
     _skip_all: bool

@@ -11,23 +11,20 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeVar
 
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
+from src.agents.llm_factory import get_configured_llm
 from src.agents.state import ClaimState
 from src.config import settings
 from src.utils.logger import app_logger
 
 logger = app_logger
-llm = ChatOllama(
-    base_url=settings.OLLAMA_BASE_URL,
-    model=settings.OLLAMA_MODEL,
-    temperature=0,
-    timeout=30,
-)
+llm = get_configured_llm()
+
+T = TypeVar("T", bound=BaseModel)
 
 REQUIRED_FIELDS = list(COMMON_REQUIRED_FIELDS)
 UNKNOWN_SENTINEL = "UNKNOWN"
@@ -38,6 +35,12 @@ FIELD_HUMAN_NAMES = {
     "event_description": "what happened",
     "estimated_claim_amount": "estimated loss or damage amount",
 }
+
+IntentType = Literal[
+    "claim_detail", "correction", "confirmation", "rejection",
+    "question", "repeat", "defer", "filler", "greeting",
+    "gratitude", "closing", "escalation", "unclear"
+]
 
 
 class FieldChange(BaseModel):
@@ -54,28 +57,29 @@ class FieldChange(BaseModel):
 
 class ExtractionPatch(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    intent: Literal[
-        "claim_detail", "correction", "confirmation", "rejection",
-        "question", "repeat", "defer", "filler", "greeting",
-        "gratitude", "closing", "escalation", "unclear"
-    ]
+    intent: IntentType
     changes: List[FieldChange] = Field(default_factory=list)
     needs_clarification: bool = False
     clarification: str = ""
+    spoken_reply: Optional[str] = Field(
+        default=None,
+        description="A natural, helpful conversational response to speak back to the user (1-2 clear, concise sentences)."
+    )
 
 
 class ConversationIntent(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    intent: ExtractionPatch.model_fields["intent"].annotation
+    intent: IntentType
     target_field: Optional[str] = None
 
 
-EXTRACTION_SYSTEM = """You are the semantic extraction engine for a voice-first insurance claim intake assistant.
+EXTRACTION_SYSTEM = """You are the semantic extraction and conversational voice engine for an insurance claim intake assistant.
 Interpret the claimant's COMPLETE utterance in the context supplied below.
 Do not guess, autocomplete, or manufacture facts.
 
-Produce a PATCH, not a snapshot of the claim. Include ONLY fields whose meaning is supported by the current utterance.
-An empty changes array is correct for filler, greetings, thanks, acknowledgements, repeat requests, questions, or unrelated speech.
+Produce a PATCH and a SPOKEN_REPLY:
+1. changes: Include ONLY fields whose meaning is supported by the current utterance. An empty changes array is correct for filler, greetings, thanks, repeat requests, questions, or unrelated speech.
+2. spoken_reply: A natural, concise spoken response to the claimant (1-2 sentences). Acknowledge what they said and naturally ask for the next piece of missing information or confirm details.
 
 Operations:
 - set: provide a previously missing field.
@@ -87,15 +91,14 @@ Operations:
 Important:
 - A new sentence does NOT automatically replace an existing value.
 - Do not copy old values into changes unless the claimant is changing them.
-- Resolve natural conversational references using the recent dialogue, e.g. "that was Monday" can correct the date if the preceding turn establishes that the user is correcting the date.
+- Resolve natural conversational references using the recent dialogue.
 - Extract multiple fields when one utterance naturally provides multiple facts.
-- Preserve uncertainty. If the claimant says "maybe", "I think", or otherwise expresses uncertainty, use a lower confidence and request clarification rather than presenting a guess as fact.
-- For event_description, prefer the claimant's actual incident facts. Do not turn filler, apologies, greetings, thanks, or meta conversation into incident facts.
-- For insurance_type, choose only one of the supported canonical values when the conversation supports it: {insurance_types}.
-- For estimated_claim_amount, extract the amount the claimant means as the loss/claim estimate, not an unrelated number such as a phone number or policy number.
-- For event_date, return the date meaning expressed by the claimant. Relative dates are resolved by the application using the supplied reference date.
+- For event_description, prefer actual incident facts.
+- For insurance_type, choose only: {insurance_types}.
+- For estimated_claim_amount, extract the numerical loss/claim estimate.
+- For event_date, return the date meaning expressed by the claimant.
 
-Return only data matching the supplied schema.
+Return data matching the supplied schema.
 """
 
 QUESTION_SYSTEM = """You are the conversational voice agent for an insurance claim intake assistant.
@@ -134,8 +137,10 @@ def _text_from_response(resp: Any) -> str:
     return str(content).strip()
 
 
-def _invoke_structured(model: Any, prompt: str, schema: type[BaseModel]) -> Optional[BaseModel]:
+def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
     """Prefer schema-constrained generation; fall back to strict JSON parsing."""
+    model_name = getattr(model, "model_name", getattr(model, "model", "llm"))
+    logger.info("Invoking LLM extraction with model=%s (provider=%s)", model_name, settings.LLM_PROVIDER)
     try:
         structured = model.with_structured_output(schema)
         result = structured.invoke(prompt)
@@ -302,7 +307,7 @@ def _fallback_patch(state: ClaimState) -> ExtractionPatch:
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
-    raw = str(state.get("claim_text", "")).strip()
+    raw = (state.get("claim_text") or "").strip()
     state["last_user_utterance"] = raw
     state["turn_number"] = state.get("turn_number", 0) + 1
     state.setdefault("conversation_history", [])
@@ -372,6 +377,9 @@ Claimant's latest utterance:
     if patch.needs_clarification and patch.clarification:
         state["current_field_hint"] = state.get("current_field_hint") or state.get("next_question_field")
         state["clarification_request"] = patch.clarification
+
+    if getattr(patch, "spoken_reply", None) and patch.spoken_reply.strip():
+        state["spoken_response"] = patch.spoken_reply.strip()
 
     valid_changes: List[Dict[str, Any]] = []
     for raw_change in patch.changes:
@@ -499,6 +507,11 @@ def next_question_generator(state: ClaimState) -> ClaimState:
         state["next_question_field"] = target
     else:
         state["next_question_field"] = "confirmation"
+
+    if state.get("spoken_response") and state["spoken_response"].strip():
+        state["next_question"] = state["spoken_response"].strip()
+        state["message"] = state["next_question"]
+        return state
 
     fallback = "Could you tell me a little more about what happened?" if not state.get("extracted_data") else "What else can you tell me about the incident?"
     generated = _generate_dynamic_response(state)
