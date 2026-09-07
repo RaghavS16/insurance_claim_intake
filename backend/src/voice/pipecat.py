@@ -22,13 +22,11 @@ from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.settings import TTSSettings
-from pipecat.services.stt_service import TTSService
+from pipecat.services.tts_service import TTSService
 from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.serializers.base_serializer import FrameSerializer
 from pipecat.transports.base_transport import BaseTransport
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport
-from pydantic import BaseModel
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 from src.agents.turn_processor import process_claimant_turn
 from src.database.models import Claim
@@ -51,17 +49,11 @@ class PCM16WebSocketSerializer(FrameSerializer):
     async def deserialize(self, data: str | bytes) -> Frame | None:
         if isinstance(data, bytes):
             return InputAudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
-        try:
-            message = json.loads(data)
-        except (TypeError, json.JSONDecodeError):
-            return None
-        if isinstance(message, dict):
-            return None
         return None
 
 
 class WebRTCVADAnalyzer(VADAnalyzer):
-    """Pipecat VAD adapter backed by the WebRTC VAD implementation."""
+    """Pipecat VAD adapter backed by WebRTC VAD."""
 
     def __init__(self, aggressiveness: int = 1, *, sample_rate: int = 16000):
         params = VADParams(confidence=0.5, start_secs=0.1, stop_secs=0.6, min_volume=0.0)
@@ -146,48 +138,36 @@ class ClaimAgentProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-
-        if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            await self._handle_final_transcript(frame.text.strip())
-        elif isinstance(frame, InterimTranscriptionFrame):
+        if isinstance(frame, InterimTranscriptionFrame):
             await self.push_frame(frame, direction)
             return
-
-        if not isinstance(frame, TranscriptionFrame):
-            await self.push_frame(frame, direction)
+        if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+            await self._handle_final_transcript(frame.text.strip())
+            return
+        await self.push_frame(frame, direction)
 
     async def _handle_final_transcript(self, text: str):
         self._turn_number += 1
         result = await process_claimant_turn(
-            self._db,
-            self._claim,
-            text,
-            self._input_mode,
-            self._turn_number,
+            self._db, self._claim, text, self._input_mode, self._turn_number
         )
-
         extracted = result.get("extracted_data", {}) or {}
-        await self.push_frame(
-            OutputTransportMessageFrame(
-                message={
-                    "type": "state_update",
-                    "extracted_data": extracted,
-                    "missing_fields": result.get("missing_fields", []),
-                    "field_status": result.get("field_status", {}),
-                    "awaiting_confirmation": result.get("awaiting_confirmation", False),
-                    "confirmed": result.get("confirmed", False),
-                    "conversation_status": result.get("conversation_status"),
-                }
-            )
-        )
-
+        await self.push_frame(OutputTransportMessageFrame(message={
+            "type": "state_update",
+            "extracted_data": extracted,
+            "missing_fields": result.get("missing_fields", []),
+            "field_status": result.get("field_status", {}),
+            "awaiting_confirmation": result.get("awaiting_confirmation", False),
+            "confirmed": result.get("confirmed", False),
+            "conversation_status": result.get("conversation_status"),
+        }))
         agent_text = result.get("next_question") or result.get("message", "")
         if agent_text:
-            await self.push_frame(
-                OutputTransportMessageFrame(
-                    message={"type": "transcript", "speaker": "agent", "text": agent_text}
-                )
-            )
+            await self.push_frame(OutputTransportMessageFrame(message={
+                "type": "transcript",
+                "speaker": "agent",
+                "text": agent_text,
+            }))
             await self.push_frame(TextFrame(text=agent_text))
 
 
@@ -207,7 +187,6 @@ def build_voice_pipeline(
     )
     agent = ClaimAgentProcessor(claim)
     tts = PiperHTTPService(base_url=piper_url, voice=piper_voice)
-
     pipeline = Pipeline([
         transport.input(),
         vad,
@@ -216,14 +195,11 @@ def build_voice_pipeline(
         tts,
         transport.output(),
     ])
-    return PipelineWorker(
-        pipeline,
-        processor_unusable_policy=ProcessorUnusablePolicy.END,
-    )
+    return PipelineWorker(pipeline, processor_unusable_policy=ProcessorUnusablePolicy.END)
 
 
 def websocket_transport(websocket) -> FastAPIWebsocketTransport:
-    """Create the legacy-compatible WebSocket transport."""
+    """Create the Pipecat WebSocket transport."""
     params = FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
