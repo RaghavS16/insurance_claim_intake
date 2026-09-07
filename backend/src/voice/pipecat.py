@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
+import wave
 from typing import Any
 
 import aiohttp
 import webrtcvad
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
+from pipecat.audio.utils import pcm_to_wav
 from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
@@ -38,11 +41,11 @@ logger = app_logger
 
 
 class PCM16WebSocketSerializer(FrameSerializer):
-    """Serialize raw mono PCM16 audio and application JSON events."""
+    """Serialize PCM16 input and browser-playable WAV output."""
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
-            return frame.audio
+            return pcm_to_wav(frame.audio, frame.sample_rate, frame.num_channels)
         if isinstance(frame, OutputTransportMessageFrame):
             return json.dumps(frame.message)
         return None
@@ -105,20 +108,17 @@ class PiperHTTPService(TTSService):
                 if response.status != 200:
                     yield ErrorFrame(error=f"Piper HTTP server returned {response.status}")
                     return
-                wav = await response.read()
-                if wav.startswith(b"RIFF") and len(wav) > 44:
-                    wav = wav[44:]
-                async for frame in self._stream_audio_frames_from_iterator(self._one_chunk(wav), context_id=context_id):
-                    yield frame
+                wav_bytes = await response.read()
+                with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+                    audio = wav_file.readframes(wav_file.getnframes())
+                    sample_rate = wav_file.getframerate()
+                    channels = wav_file.getnchannels()
+                yield OutputAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=channels)
         except Exception as exc:
             logger.exception("Piper HTTP synthesis failed")
             yield ErrorFrame(error=f"Piper HTTP synthesis failed: {type(exc).__name__}")
         finally:
             yield TTSStoppedFrame(context_id=context_id)
-
-    @staticmethod
-    async def _one_chunk(audio: bytes):
-        yield audio
 
 
 class ClaimAgentProcessor(FrameProcessor):
