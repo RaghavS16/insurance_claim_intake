@@ -12,6 +12,7 @@ from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
     InterimTranscriptionFrame,
+    InterruptionFrame,
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
     TextFrame,
@@ -37,7 +38,7 @@ logger = app_logger
 
 
 class PCM16WebSocketSerializer(FrameSerializer):
-    """Serialize raw mono PCM16 audio and JSON control messages."""
+    """Serialize raw mono PCM16 audio and application JSON events."""
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
@@ -72,7 +73,7 @@ class PiperHTTPSettings(TTSSettings):
 
 
 class PiperHTTPService(TTSService):
-    """Small Pipecat TTS adapter for a separately running Piper HTTP server."""
+    """Pipecat TTS adapter for a separately running Piper HTTP server."""
 
     Settings = PiperHTTPSettings
 
@@ -107,9 +108,7 @@ class PiperHTTPService(TTSService):
                 wav = await response.read()
                 if wav.startswith(b"RIFF") and len(wav) > 44:
                     wav = wav[44:]
-                async for frame in self._stream_audio_frames_from_iterator(
-                    self._one_chunk(wav), context_id=context_id
-                ):
+                async for frame in self._stream_audio_frames_from_iterator(self._one_chunk(wav), context_id=context_id):
                     yield frame
         except Exception as exc:
             logger.exception("Piper HTTP synthesis failed")
@@ -123,7 +122,7 @@ class PiperHTTPService(TTSService):
 
 
 class ClaimAgentProcessor(FrameProcessor):
-    """Bridge Pipecat transcription frames to the existing insurance agent."""
+    """Bridge Pipecat transcription and interruption frames to claim logic."""
 
     def __init__(self, claim: Claim, *, input_mode: str = "voice"):
         super().__init__()
@@ -131,6 +130,7 @@ class ClaimAgentProcessor(FrameProcessor):
         self._input_mode = input_mode
         self._db = SessionLocal()
         self._turn_number = 0
+        self._segment_number = 0
 
     async def cleanup(self):
         self._db.close()
@@ -138,7 +138,16 @@ class ClaimAgentProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+        if isinstance(frame, InterruptionFrame):
+            await self.push_frame(OutputTransportMessageFrame(message={"type": "barge_in"}), direction)
+            await self.push_frame(frame, direction)
+            return
         if isinstance(frame, InterimTranscriptionFrame):
+            self._segment_number += 1
+            await self.push_frame(OutputTransportMessageFrame(message={
+                "type": "transcript", "speaker": "claimant", "text": frame.text,
+                "is_final": False, "segment_id": f"claimant-{self._segment_number}",
+            }), direction)
             await self.push_frame(frame, direction)
             return
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
@@ -147,14 +156,16 @@ class ClaimAgentProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _handle_final_transcript(self, text: str):
+        segment_id = f"claimant-{self._segment_number or 1}"
+        await self.push_frame(OutputTransportMessageFrame(message={
+            "type": "transcript", "speaker": "claimant", "text": text,
+            "is_final": True, "segment_id": segment_id,
+        }))
         self._turn_number += 1
-        result = await process_claimant_turn(
-            self._db, self._claim, text, self._input_mode, self._turn_number
-        )
-        extracted = result.get("extracted_data", {}) or {}
+        result = await process_claimant_turn(self._db, self._claim, text, self._input_mode, self._turn_number)
         await self.push_frame(OutputTransportMessageFrame(message={
             "type": "state_update",
-            "extracted_data": extracted,
+            "extracted_data": result.get("extracted_data", {}) or {},
             "missing_fields": result.get("missing_fields", []),
             "field_status": result.get("field_status", {}),
             "awaiting_confirmation": result.get("awaiting_confirmation", False),
@@ -164,46 +175,27 @@ class ClaimAgentProcessor(FrameProcessor):
         agent_text = result.get("next_question") or result.get("message", "")
         if agent_text:
             await self.push_frame(OutputTransportMessageFrame(message={
-                "type": "transcript",
-                "speaker": "agent",
-                "text": agent_text,
+                "type": "transcript", "speaker": "agent", "text": agent_text,
+                "is_final": True, "segment_id": f"agent-{self._turn_number}",
             }))
             await self.push_frame(TextFrame(text=agent_text))
 
 
-def build_voice_pipeline(
-    transport: BaseTransport,
-    claim: Claim,
-    *,
-    stt_model: str = "small",
-    vad_aggressiveness: int = 1,
-    piper_url: str,
-    piper_voice: str | None = None,
-) -> PipelineWorker:
+def build_voice_pipeline(transport: BaseTransport, claim: Claim, *, stt_model: str = "small", vad_aggressiveness: int = 1, piper_url: str, piper_voice: str | None = None) -> PipelineWorker:
     """Build the Pipecat worker used by the insurance voice endpoint."""
     vad = VADProcessor(vad_analyzer=WebRTCVADAnalyzer(vad_aggressiveness))
-    stt = WhisperSTTService(
-        settings=WhisperSTTService.Settings(model=stt_model, language="en")
-    )
+    stt = WhisperSTTService(settings=WhisperSTTService.Settings(model=stt_model, language="en"))
     agent = ClaimAgentProcessor(claim)
     tts = PiperHTTPService(base_url=piper_url, voice=piper_voice)
-    pipeline = Pipeline([
-        transport.input(),
-        vad,
-        stt,
-        agent,
-        tts,
-        transport.output(),
-    ])
+    pipeline = Pipeline([transport.input(), vad, stt, agent, tts, transport.output()])
     return PipelineWorker(pipeline, processor_unusable_policy=ProcessorUnusablePolicy.END)
 
 
 def websocket_transport(websocket) -> FastAPIWebsocketTransport:
     """Create the Pipecat WebSocket transport."""
-    params = FastAPIWebsocketParams(
+    return FastAPIWebsocketTransport(websocket, FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         serializer=PCM16WebSocketSerializer(),
         add_wav_header=False,
-    )
-    return FastAPIWebsocketTransport(websocket, params)
+    ))
