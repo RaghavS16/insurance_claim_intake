@@ -54,8 +54,9 @@ export default function ClaimantPage() {
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
-  const audioQueueRef = useRef<HTMLAudioElement[]>([]);
-  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const playbackContextRef = useRef<AudioContext | null>(null);
+  const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const audioBlobQueueRef = useRef<Blob[]>([]);
   const isPlayingRef = useRef<boolean>(false);
   const isRecordingRef = useRef<boolean>(false);
   isRecordingRef.current = isRecording;
@@ -83,55 +84,66 @@ export default function ClaimantPage() {
     scrollToBottom(true);
   }, [history.length, partialSegments.size, scrollToBottom]);
 
-  // Audio queue playback
-  const enqueueAudio = useCallback((blob: Blob) => {
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audioQueueRef.current.push(audio);
+  const getPlaybackContext = useCallback(() => {
+    if (!playbackContextRef.current || playbackContextRef.current.state === "closed") {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      playbackContextRef.current = new AudioCtx();
+    }
+    if (playbackContextRef.current.state === "suspended") {
+      playbackContextRef.current.resume().catch(() => {});
+    }
+    return playbackContextRef.current;
+  }, []);
 
-    const playNext = () => {
-      if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
-      const next = audioQueueRef.current.shift();
-      if (!next) return;
+  // Web Audio queue playback
+  const enqueueAudio = useCallback((blob: Blob) => {
+    audioBlobQueueRef.current.push(blob);
+
+    const playNext = async () => {
+      if (isPlayingRef.current || audioBlobQueueRef.current.length === 0) return;
+      const nextBlob = audioBlobQueueRef.current.shift();
+      if (!nextBlob) return;
 
       isPlayingRef.current = true;
-      activeAudioRef.current = next;
+      try {
+        const ctx = getPlaybackContext();
+        const arrayBuffer = await nextBlob.arrayBuffer();
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        activeSourceRef.current = source;
 
-      next.onplay = () => {
         setAgentState("speaking");
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "tts_started" }));
         }
-      };
 
-      const onStopPlayback = () => {
-        URL.revokeObjectURL(url);
+        source.onended = () => {
+          isPlayingRef.current = false;
+          if (activeSourceRef.current === source) {
+            activeSourceRef.current = null;
+          }
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
+          }
+          if (audioBlobQueueRef.current.length === 0) {
+            setAgentState(isRecordingRef.current ? "listening" : "idle");
+          }
+          playNext();
+        };
+
+        source.start(0);
+      } catch (err) {
+        console.warn("Web Audio playback error:", err);
         isPlayingRef.current = false;
-        if (activeAudioRef.current === next) {
-          activeAudioRef.current = null;
-        }
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
-        }
-        if (audioQueueRef.current.length === 0) {
-          setAgentState(isRecordingRef.current ? "listening" : "idle");
-        }
+        activeSourceRef.current = null;
         playNext();
-      };
-
-      next.onended = onStopPlayback;
-      next.onpause = onStopPlayback;
-
-      next.play().catch((e) => {
-        console.warn("Audio autoplay prevented:", e);
-        isPlayingRef.current = false;
-        activeAudioRef.current = null;
-        playNext();
-      });
+      }
     };
 
     playNext();
-  }, []);
+  }, [getPlaybackContext]);
 
   // WebSocket message handler
   const handleWsMessage = useCallback((event: MessageEvent) => {
@@ -144,14 +156,16 @@ export default function ClaimantPage() {
       }
 
       if (msg.type === "barge_in") {
-        if (activeAudioRef.current) {
-          activeAudioRef.current.pause();
-          activeAudioRef.current = null;
+        if (activeSourceRef.current) {
+          try {
+            activeSourceRef.current.stop();
+          } catch {}
+          activeSourceRef.current = null;
         }
         if ("speechSynthesis" in window) {
           window.speechSynthesis.cancel();
         }
-        audioQueueRef.current = [];
+        audioBlobQueueRef.current = [];
         isPlayingRef.current = false;
         setPartialSegments(new Map());
       } else if (msg.type === "agent_state") {

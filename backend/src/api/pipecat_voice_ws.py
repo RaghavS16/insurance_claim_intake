@@ -67,7 +67,10 @@ async def pipecat_voice(websocket: WebSocket, ticket_id: str):
         transport,
         claim,
         stt_model=settings.STT_MODEL_SIZE,
+        stt_device=settings.STT_DEVICE,
+        stt_compute_type=settings.STT_COMPUTE_TYPE,
         vad_aggressiveness=settings.VAD_AGGRESSIVENESS,
+        piper_model_path=settings.PIPER_MODEL_PATH,
         piper_url=settings.PIPER_HTTP_URL,
         piper_voice=settings.PIPER_VOICE,
     )
@@ -76,10 +79,8 @@ async def pipecat_voice(websocket: WebSocket, ticket_id: str):
     await runner.add_workers(worker)
     try:
         await runner.run()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         pass
-    except asyncio.CancelledError:
-        raise
     except Exception:
         from src.utils.logger import app_logger
         app_logger.exception("Pipecat voice session failed for %s", ticket_id)
