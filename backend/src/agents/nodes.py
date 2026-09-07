@@ -1,102 +1,122 @@
+"""Conversational claim-intake nodes.
+
+The LLM owns semantic interpretation. Application code owns validation,
+normalisation, provenance and state merging. A turn produces a *patch* rather
+than a replacement claim object, so unrelated speech can never erase facts
+already collected.
 """
-Phase 1: Voice-First Conversational Claim Intake Graph Nodes.
-"""
+from __future__ import annotations
+
 import json
 import logging
-import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from langchain_ollama import ChatOllama
+from pydantic import BaseModel, ConfigDict, Field
 
-from src.config import settings
+from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
 from src.agents.state import ClaimState
-from src.agents.constants import SUPPORTED_INSURANCE_TYPES, INSURANCE_TYPE_KEYS
+from src.config import settings
 from src.utils.logger import app_logger
 
 logger = app_logger
-
 llm = ChatOllama(
     base_url=settings.OLLAMA_BASE_URL,
     model=settings.OLLAMA_MODEL,
     temperature=0,
-    timeout=10,
+    timeout=30,
 )
 
-REQUIRED_FIELDS = ["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"]
-
-INITIAL_PROMPT = "Please tell me what happened. Describe the incident in your own words, and I'll collect the details I need."
-
+REQUIRED_FIELDS = list(COMMON_REQUIRED_FIELDS)
+UNKNOWN_SENTINEL = "UNKNOWN"
 FIELD_HUMAN_NAMES = {
     "policy_id": "policy number",
     "event_date": "incident date",
     "insurance_type": "insurance type",
-    "event_description": "incident description",
-    "estimated_claim_amount": "estimated loss or damage cost",
-}
-
-FIELD_NATURAL_QUESTIONS = {
-    "policy_id": "Could you provide your policy number?",
-    "event_date": "When did the incident happen?",
-    "insurance_type": "What type of insurance policy is this for (Health, Senior Health, Home, Travel, Motor, or Cyber)?",
-    "event_description": "Could you describe, in your own words, what happened and how it affected you?",
-    "estimated_claim_amount": "About how much do you estimate the cost or loss will be?",
+    "event_description": "what happened",
+    "estimated_claim_amount": "estimated loss or damage amount",
 }
 
 
+class FieldChange(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    field: Literal[
+        "policy_id", "event_date", "insurance_type",
+        "event_description", "estimated_claim_amount"
+    ]
+    operation: Literal["set", "replace", "append", "remove", "ignore"]
+    value: Any = None
+    evidence: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
-UNKNOWN_SENTINEL = "UNKNOWN"
 
-REPEAT_MARKERS = (
-    "repeat that", "say that again", "come again", "what was that", "pardon",
-    "repeat", "what?", "sorry?", "i didn't hear", "didn't catch that", "say again",
-    "can you repeat", "could you repeat",
-)
+class ExtractionPatch(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    intent: Literal[
+        "claim_detail", "correction", "confirmation", "rejection",
+        "question", "repeat", "defer", "filler", "greeting",
+        "gratitude", "closing", "escalation", "unclear"
+    ]
+    changes: List[FieldChange] = Field(default_factory=list)
+    needs_clarification: bool = False
+    clarification: str = ""
 
-DONT_KNOW_MARKERS = (
-    "i don't know", "i dont know", "not sure", "no idea", "i'll check",
-    "dont know", "i do not know", "i don't have", "dont have", "can't say",
-    "cant say", "no estimate", "unsure",
-)
 
-DEFER_MARKERS = (
-    "i'll provide it later", "later", "not right now", "i'll get back to you",
-    "skip", "pass", "leave it for now", "we can skip", "provide later",
-)
+class ConversationIntent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    intent: ExtractionPatch.model_fields["intent"].annotation
+    target_field: Optional[str] = None
 
-CORRECTION_MARKERS = (
-    "actually", "sorry, i meant", "i meant to say", "no wait", "correction",
-    "let me correct", "scratch that", "i said that wrong", "mistake", "change that to",
-    "change the", "make the", "the amount is actually", "the date should be",
-    "my policy is actually", "no, the", "no, make", "no, it",
-)
 
-AFFIRMATION_PHRASES = (
-    "looks good", "that's correct", "that is correct", "everything is correct",
-    "all good", "sounds good", "everything looks good", "thats right", "that's right",
-    "it is correct",
-)
+EXTRACTION_SYSTEM = """You are the semantic extraction engine for a voice-first insurance claim intake assistant.
+Interpret the claimant's COMPLETE utterance in the context supplied below.
+Do not guess, autocomplete, or manufacture facts.
 
-AFFIRMATION_WORDS = {"yes", "yeah", "yep", "yup", "correct", "confirm", "sure", "ok", "okay", "proceed", "submit", "perfect"}
+Produce a PATCH, not a snapshot of the claim. Include ONLY fields whose meaning is supported by the current utterance.
+An empty changes array is correct for filler, greetings, thanks, acknowledgements, repeat requests, questions, or unrelated speech.
 
-REJECTION_PHRASES = ("that's wrong", "thats wrong", "not right", "not correct", "hold on")
-REJECTION_WORDS = {"no", "nope", "incorrect", "wrong", "mistake"}
-HUMAN_ESCALATION_MARKERS = (
-    "speak to human", "talk to human", "talk to a person", "speak to a person",
-    "real person", "human agent", "talk to an agent", "speak to an agent",
-    "representative", "customer care", "customer service", "operator",
-    "transfer me", "connect me to", "i want to speak to someone",
-    "this is frustrating", "i am frustrated", "lawyer", "human please",
-)
+Operations:
+- set: provide a previously missing field.
+- replace: explicitly correct/change an existing value.
+- append: add genuinely new incident-description information without deleting prior description.
+- remove: explicitly withdraw a previously supplied fact.
+- ignore: mention a field but do not change its stored value.
 
-FILLER_OR_GREETING_WORDS = {
-    "YOU", "HELLO", "HI", "HEY", "GOOD", "MORNING", "AFTERNOON", "EVENING",
-    "UH", "UM", "AH", "ER", "HMM", "YEAH", "YES", "NO", "OKAY", "OK",
-    "SURE", "THANKS", "THANK", "PLEASE", "RIGHT", "WELL", "LIKE", "SO",
-    "MY", "THE", "IS", "IT", "ITS", "WAS", "FOR", "AND", "A", "AN",
-    "NUMBER", "POLICY", "OF", "IN", "AT", "ON", "WITH"
-}
+Important:
+- A new sentence does NOT automatically replace an existing value.
+- Do not copy old values into changes unless the claimant is changing them.
+- Resolve natural conversational references using the recent dialogue, e.g. "that was Monday" can correct the date if the preceding turn establishes that the user is correcting the date.
+- Extract multiple fields when one utterance naturally provides multiple facts.
+- Preserve uncertainty. If the claimant says "maybe", "I think", or otherwise expresses uncertainty, use a lower confidence and request clarification rather than presenting a guess as fact.
+- For event_description, prefer the claimant's actual incident facts. Do not turn filler, apologies, greetings, thanks, or meta conversation into incident facts.
+- For insurance_type, choose only one of the supported canonical values when the conversation supports it: {insurance_types}.
+- For estimated_claim_amount, extract the amount the claimant means as the loss/claim estimate, not an unrelated number such as a phone number or policy number.
+- For event_date, return the date meaning expressed by the claimant. Relative dates are resolved by the application using the supplied reference date.
+
+Return only data matching the supplied schema.
+"""
+
+QUESTION_SYSTEM = """You are the conversational voice agent for an insurance claim intake assistant.
+Generate ONE natural next response to the claimant.
+
+Your response must:
+- sound like a helpful human claims intake specialist, not a form;
+- acknowledge useful information when appropriate;
+- ask for the most useful missing detail next;
+- ask ONE focused question unless the claimant's latest message naturally requires clarification;
+- use the recent conversation so the question feels like a continuation;
+- never invent or repeat a fact that is not in the verified extracted data;
+- never ask for a field that is already known unless clarification/correction is required;
+- avoid rigid labels such as "Field 1" or "provide the following";
+- avoid repeatedly using the same acknowledgement;
+- if the claimant supplied several facts, respond to what they said before moving on;
+- if they are unsure, be reassuring and ask for what they can reasonably provide;
+- if no claim details have been supplied yet, invite them to describe what happened naturally.
+
+Output spoken text only, with no JSON, markdown, analysis, or quotation marks.
+"""
 
 
 def _now_iso() -> str:
@@ -107,808 +127,399 @@ def _audit(state: ClaimState, message: str) -> None:
     state.setdefault("audit_log", []).append(f"[{_now_iso()}] {message}")
 
 
-def _sanitize_claim_text(text: str) -> str:
-    if not text:
-        return ""
-    clean = text.replace("\x00", "").strip()
-    clean = clean.replace("{", "{{").replace("}", "}}")
-    return clean[:5000]
+def _text_from_response(resp: Any) -> str:
+    content = getattr(resp, "content", resp)
+    if isinstance(content, list):
+        return " ".join(str(x) for x in content).strip()
+    return str(content).strip()
 
 
-def _is_meaningful_claim_utterance(text: str) -> bool:
-    """
-    Quality gate: check if text contains meaningful words rather than
-    single filler words, noise bursts, or greetings.
-    """
-    if not text or len(text.strip()) < 2:
-        return False
-    tokens = [t.strip(".,!?:;\"'").upper() for t in text.split() if t.strip(".,!?:;\"'")]
-    if not tokens:
-        return False
-    has_non_filler = any(t not in FILLER_OR_GREETING_WORDS for t in tokens)
-    has_digits = any(re.search(r"\d", t) for t in tokens)
-    return has_non_filler or has_digits
+def _invoke_structured(model: Any, prompt: str, schema: type[BaseModel]) -> Optional[BaseModel]:
+    """Prefer schema-constrained generation; fall back to strict JSON parsing."""
+    try:
+        structured = model.with_structured_output(schema)
+        result = structured.invoke(prompt)
+        if isinstance(result, schema):
+            return result
+        if isinstance(result, dict):
+            return schema.model_validate(result)
+    except Exception as exc:
+        logger.warning("Structured LLM call failed; trying JSON mode: %s", exc)
+
+    try:
+        json_model = model.bind(format=schema.model_json_schema())
+        raw = _text_from_response(json_model.invoke(prompt))
+        return schema.model_validate(json.loads(raw))
+    except Exception as exc:
+        logger.error("JSON extraction fallback failed: %s", exc, exc_info=True)
+        return None
 
 
-def _coerce_amount(raw: Any) -> Optional[float]:
-    """Safely coerce any numeric or currency representation to a float amount."""
+def _history_text(state: ClaimState, limit: int = 8) -> str:
+    history = state.get("conversation_history", [])[-limit:]
+    if not history:
+        return "No previous turns."
+    return "\n".join(f"{h.get('speaker', 'unknown')}: {h.get('text', '')}" for h in history)
+
+
+def _safe_date(raw: Any, reference: date) -> Optional[str]:
     if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+    if text in {"today", "this day"}:
+        return reference.isoformat()
+    if text in {"yesterday", "the day before"}:
+        return (reference - timedelta(days=1)).isoformat()
+    if text in {"tomorrow", "the next day"}:
+        return (reference + timedelta(days=1)).isoformat()
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y", "%B %d %Y", "%b %d %Y"):
+        try:
+            return datetime.strptime(text.replace(",", ""), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _safe_amount(raw: Any) -> Optional[float]:
+    if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
         return float(raw) if raw >= 0 else None
-    if isinstance(raw, str):
-        clean_str = raw.lower().replace("k", "000")
-        match = re.search(r"(\d+(?:[,\s]\d+)*(?:\.\d+)?)", clean_str)
-        if match:
-            cleaned = match.group(1).replace(",", "").replace(" ", "")
-            try:
-                val = float(cleaned)
-                return val if val >= 0 else None
-            except ValueError:
-                pass
-        cleaned = re.sub(r"[^\d.]", "", raw)
-        try:
-            val = float(cleaned) if cleaned else None
-            return val if val is not None and val >= 0 else None
-        except ValueError:
-            return None
-    return None
-
-
-def _normalize_date(raw_date: str) -> Optional[str]:
-    """Parse and normalize date strings into ISO format YYYY-MM-DD."""
-    if not raw_date:
+    text = str(raw).strip().lower().replace(",", "")
+    if not text:
         return None
-    lowered = raw_date.strip().lower()
-    if "today" in lowered:
-        return date.today().isoformat()
-    if "yesterday" in lowered:
-        return (date.today() - timedelta(days=1)).isoformat()
-
-    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw_date)
-    if m_iso:
-        return m_iso.group(1)
-
-    m_dmy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", raw_date)
-    if m_dmy:
-        day, month, year = int(m_dmy.group(1)), int(m_dmy.group(2)), int(m_dmy.group(3))
-        try:
-            return date(year, month, day).isoformat()
-        except ValueError:
-            pass
-
-    return None
-
-
-def _infer_insurance_type(text: str) -> Optional[str]:
-    """
-    Infer one of the six supported insurance types strictly:
-    - health, senior_health, home, travel, motor, cyber
-    """
-    lowered = text.lower()
-
-    # 1. Cyber
-    if any(w in lowered for w in ("hack", "hacked", "cyber", "ransomware", "phishing", "data breach", "malware", "virus", "server compromised", "online fraud", "identity theft")):
-        return "cyber"
-
-    # 2. Travel
-    if any(w in lowered for w in ("luggage", "travel", "travelling", "traveling", "flight", "trip", "vacation", "airline", "baggage", "passport", "hotel", "airport", "tour", "abroad", "lost bag", "flight delayed")):
-        return "travel"
-
-    # 3. Senior Health vs Health
-    health_cues = ("hospital", "hospitalized", "hospitalisation", "hospitalization", "surgery", "medical", "doctor", "illness", "treatment", "clinic", "health", "injury", "icu", "mediclaim", "admitted", "disease", "fracture")
-    senior_cues = ("father", "mother", "parents", "parent", "senior", "elderly", "grandfather", "grandmother", "pensioner", "aged", "old age", "senior citizen", "grandma", "grandpa", "dad", "mom")
-
-    if any(w in lowered for w in ("senior health", "senior citizen health", "senior citizen medical")):
-        return "senior_health"
-
-    if any(h in lowered for h in health_cues):
-        if any(s in lowered for s in senior_cues):
-            return "senior_health"
-        return "health"
-
-    # 4. Motor
-    if any(w in lowered for w in ("car", "motor", "vehicle", "bike", "truck", "scooter", "driving", "bumper", "windshield", "collision", "hit from behind", "accident on road", "traffic accident", "fender", "dent")):
-        return "motor"
-
-    # 5. Home
-    if any(w in lowered for w in ("home", "house", "apartment", "roof", "leak", "flood", "residence", "plumbing", "fire in house", "property damage", "burglary", "pipe burst", "kitchen fire")):
-        return "home"
-
-    for t in ("senior_health", "health", "home", "travel", "motor", "cyber"):
-        if t in lowered or t.replace("_", " ") in lowered:
-            return t
-
-    return None
-
-
-def _identify_field_from_utterance(text: str, fallback_field: Optional[str] = None) -> Optional[str]:
-    """Identify which claim field a user is referring to in a correction or deferral."""
-    lowered = text.lower()
-    if any(w in lowered for w in ("amount", "cost", "rupees", "rs", "price", "estimate", "quote", "bill")):
-        return "estimated_claim_amount"
-    if any(w in lowered for w in ("policy", "policy number", "policy id", "policy #")):
-        return "policy_id"
-    if any(w in lowered for w in ("date", "incident date", "happened on", "occurred on", "yesterday", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")):
-        return "event_date"
-    if any(w in lowered for w in ("insurance type", "claim type", "health", "senior health", "home", "travel", "motor", "cyber")):
-        return "insurance_type"
-    if any(w in lowered for w in ("damage", "description", "details", "hit", "crash", "collision", "bumper", "hospital", "luggage", "hacked", "fire", "accident")):
-        return "event_description"
-    return fallback_field
-
-
-def _rule_based_fallback_extraction(claim_text: str, target_field: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Deterministic rule-based extraction for fast, zero-dependency processing.
-    """
-    result: Dict[str, Any] = {}
-    clean = claim_text.strip()
-
-    # 1. Policy ID
-    m_explicit = re.search(
-        r"\b(?:policy\s*number\s*(?:is|:)?|policy\s*id\s*(?:is|:)?|policy\s*#\s*(?:is|:)?|policy\s*(?:is|:)?)\s*[:#-]?\s*([A-Za-z0-9\-_]{3,20})\b",
-        clean,
-        re.IGNORECASE,
-    )
-    if m_explicit and m_explicit.group(1).upper() not in FILLER_OR_GREETING_WORDS:
-        result["policy_id"] = m_explicit.group(1).strip("-#_ ").upper()
-    else:
-        m_code = re.search(r"\b((?=[A-Za-z0-9\-_]*[A-Za-z])(?=[A-Za-z0-9\-_]*\d)[A-Za-z0-9\-_]{4,15})\b", clean)
-        if m_code and m_code.group(1).upper() not in FILLER_OR_GREETING_WORDS:
-            result["policy_id"] = m_code.group(1).upper()
-
-    # 2. Estimated Claim Amount
-    if target_field == "estimated_claim_amount":
-        amt = _coerce_amount(clean)
-        if amt is not None and amt > 0:
-            result["estimated_claim_amount"] = amt
-    else:
-        m_amt = re.search(
-            r"(?:cost|repair|damage|claimed|loss|estimate|amount|total|bill|worth|value|around|about|₹|rs\.?)\s*(?:is|of|around|about)?\s*[:]?\s*(\d+(?:[,\s]\d+)*(?:\.\d+)?)",
-            clean,
-            re.IGNORECASE,
-        )
-        if m_amt:
-            amt = _coerce_amount(m_amt.group(1))
-            if amt is not None and amt > 0:
-                result["estimated_claim_amount"] = amt
-        else:
-            m_currency = re.search(r"(\d+(?:[,\s]\d+)*(?:\.\d+)?)\s*(?:rupees|rs\.?|inr|usd|\$)", clean, re.IGNORECASE)
-            if m_currency:
-                amt = _coerce_amount(m_currency.group(1))
-                if amt is not None and amt > 0:
-                    result["estimated_claim_amount"] = amt
-
-    # 3. Insurance Type
-    inferred_type = _infer_insurance_type(clean)
-    if inferred_type:
-        result["insurance_type"] = inferred_type
-
-    # 4. Event Date
-    norm_date = _normalize_date(clean)
-    if norm_date:
-        result["event_date"] = norm_date
-
-    # 5. Event Description
-    if target_field == "event_description" and len(clean) >= 3:
-        if clean.upper() not in FILLER_OR_GREETING_WORDS:
-            result["event_description"] = clean
-    elif any(w in clean.lower() for w in ("damage", "damaged", "hit", "accident", "crash", "broken", "leak", "flood", "dent", "loss", "scratch", "destroyed", "bumper", "hospital", "luggage", "hacked", "fire", "stolen", "surgery", "injured")):
-        if clean.upper() not in FILLER_OR_GREETING_WORDS:
-            result["event_description"] = clean
-
-    return result
-
-
-EXTRACTION_PROMPT = """Extract structured insurance claim information from the user utterance.
-Our supported insurance types are ONLY: health, senior_health, home, travel, motor, cyber.
-Return ONLY valid JSON matching this schema:
-{{
-  "policy_id": "string or null",
-  "event_date": "YYYY-MM-DD or null",
-  "insurance_type": "health|senior_health|home|travel|motor|cyber or null",
-  "event_description": "string or null",
-  "estimated_claim_amount": number or null
-}}
-
-Rules:
-1. insurance_type MUST be one of: health, senior_health, home, travel, motor, cyber. Do NOT use auto, car, or business.
-2. estimated_claim_amount must be a numeric value (not a string).
-3. event_date must be in ISO format YYYY-MM-DD. Convert 'yesterday' or 'today' relative to current context.
-4. Do NOT extract generic words (e.g. 'YOU', 'HELLO', 'YES', 'OKAY') as policy IDs.
-
-Current context question: "{target_field}"
-User utterance: "{claim_text}"
-"""
-
-
-# ---------------------------------------------------------------------------
-# Node 1: Intent & Turn Preprocessor
-# ---------------------------------------------------------------------------
-INTENT_PROMPT = """Classify the user's conversational intent for an insurance claim intake chatbot.
-You must return a JSON object with a single key "intent", whose value is exactly one of the following labels:
-- "gratitude": Expressing thanks (e.g., "thank you", "thanks", "much appreciated").
-- "greeting": Saying hello (e.g., "hello", "hi", "hey there", "good morning").
-- "closing": Saying goodbye or ending the chat (e.g., "bye", "goodbye", "I'm done", "that's all").
-- "acknowledgement": Acknowledging/understanding (e.g., "ok", "okay", "got it", "understood").
-- "confusion": Expressing confusion or asking for help (e.g., "what do you mean?", "I don't understand", "what is this?").
-- "correction": Correcting a field or detail (e.g., "actually it was on the 5th", "no, change that to 5000").
-- "affirmation": Affirming, confirming, or saying yes (e.g., "yes", "yeah", "yup", "that is correct", "looks good").
-- "rejection": Rejecting, saying no, or denying (e.g., "no", "nope", "that's wrong", "not correct").
-- "defer": Expressing they don't know the information or want to provide it later (e.g., "I don't know", "skip that", "later").
-- "repeat": Asking to repeat the question (e.g., "repeat that", "what did you say?", "pardon").
-- "normal_claim_input": Providing details about the claim, policy number, date, amount, description of damage, or other new details (e.g., "my policy number is 12345", "it happened yesterday", "the repair costs 500").
-
-Input Utterance: "{text}"
-
-Return ONLY valid JSON matching this schema:
-{{
-  "intent": "gratitude|greeting|closing|acknowledgement|confusion|correction|affirmation|rejection|defer|repeat|normal_claim_input"
-}}
-"""
-
-
-def _detect_utterance_intent(text: str) -> str:
-    """Classify user utterance into conversational control intents."""
-    lowered = text.lower().strip()
-    if not lowered:
-        return "empty"
-
-    # 1. Repeat check
-    if lowered in REPEAT_MARKERS or lowered in ("repeat", "repeat that", "say that again", "what did you say", "what was that"):
-        return "repeat"
-
-    # 2. Defer check (using direct/phrase matching for dont know / defer)
-    if any(m in lowered for m in DONT_KNOW_MARKERS) or any(m in lowered for m in DEFER_MARKERS):
-        return "defer"
-
-    # 3. Correction check
-    if any(m in lowered for m in CORRECTION_MARKERS):
-        return "correction"
-
-    # 4. Gratitude check
-    if lowered in ("thank you", "thanks", "thank you so much", "thanks a lot", "thank you very much"):
-        return "gratitude"
-
-    # 5. Greeting check
-    if lowered in ("hello", "hi", "hey", "good morning", "good afternoon", "good evening"):
-        return "greeting"
-
-    # 6. Closing check
-    if lowered in ("bye", "goodbye", "talk later", "talk to you later", "i'm done", "im done", "that is all", "that's all"):
-        return "closing"
-
-    # 7. Rejection / Affirmation checks (short phrases / single words)
-    words = set(re.findall(r"\b\w+\b", lowered))
-
-    if len(words) <= 3:
-        # Check rejection BEFORE affirmation so "incorrect" is rejected
-        if any(p == lowered for p in REJECTION_PHRASES) or bool(words & REJECTION_WORDS):
-            return "rejection"
-
-        if any(p == lowered for p in AFFIRMATION_PHRASES) or bool(words & AFFIRMATION_WORDS):
-            return "affirmation"
-
-    # Ambiguous or complex utterances -> route to the LLM for structured output
+    multiplier = 1000 if re.search(r"\b\d+(?:\.\d+)?\s*k\b", text) else 1
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return None
     try:
-        sanitized = _sanitize_claim_text(text)
-        resp = llm.invoke(INTENT_PROMPT.format(text=sanitized))
-        raw_content = getattr(resp, "content", resp)
-        content = " ".join(str(c) for c in raw_content) if isinstance(raw_content, list) else str(raw_content)
-        m_json = re.search(r"\{.*\}", content, re.DOTALL)
-        if m_json:
-            parsed = json.loads(m_json.group(0))
-            intent = parsed.get("intent")
-            valid_intents = {
-                "gratitude", "greeting", "closing", "acknowledgement",
-                "confusion", "correction", "affirmation", "rejection",
-                "defer", "repeat", "normal_claim_input"
-            }
-            if intent in valid_intents:
-                return intent
-    except Exception as exc:
-        logger.error("LLM intent classification failed: %s", exc, exc_info=True)
+        value = float(match.group()) * multiplier
+        return value if value >= 0 else None
+    except ValueError:
+        return None
 
-    if any(m in lowered for m in HUMAN_ESCALATION_MARKERS):
-        return "escalation"
-    if any(m in lowered for m in REPEAT_MARKERS):
-        return "repeat"
-    if any(m in lowered for m in CORRECTION_MARKERS):
-        return "correction"
-    if any(m in lowered for m in DONT_KNOW_MARKERS) or any(m in lowered for m in DEFER_MARKERS):
-        return "defer"
-    if any(p in lowered for p in REJECTION_PHRASES) or bool(words & REJECTION_WORDS):
-        return "rejection"
-    if any(p in lowered for p in AFFIRMATION_PHRASES) or bool(words & AFFIRMATION_WORDS):
-        return "affirmation"
-    
-    # Precise fallback checks to avoid substring matches on words like 'hit'
-    if any(m in lowered for m in ("thank you", "appreciate it")) or "thanks" in words:
-        return "gratitude"
-    if any(m in lowered for m in ("good morning", "good afternoon", "good evening")) or bool(words & {"hello", "hi", "hey"}):
-        return "greeting"
-    if any(m in lowered for m in ("talk later", "im done", "i'm done")) or bool(words & {"goodbye", "bye"}):
-        return "closing"
 
-    return "normal_claim_input"
+def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldChange]:
+    value = change.value
+    if change.operation in {"ignore"}:
+        return change
+    if change.confidence < 0.55:
+        return None
+
+    if change.field == "policy_id":
+        if change.operation == "remove":
+            return change
+        if not isinstance(value, str) or len(value.strip()) < 3:
+            return None
+        value = value.strip()
+        if not any(ch.isalnum() for ch in value):
+            return None
+        return change.model_copy(update={"value": value.upper()})
+
+    if change.field == "event_date":
+        if change.operation == "remove":
+            return change
+        normalized = _safe_date(value, date.today())
+        return change.model_copy(update={"value": normalized}) if normalized else None
+
+    if change.field == "insurance_type":
+        if change.operation == "remove":
+            return change
+        normalized = str(value).strip().lower() if value is not None else ""
+        return change.model_copy(update={"value": normalized}) if normalized in INSURANCE_TYPE_KEYS else None
+
+    if change.field == "estimated_claim_amount":
+        if change.operation == "remove":
+            return change
+        amount = _safe_amount(value)
+        return change.model_copy(update={"value": amount}) if amount is not None and amount >= 0 else None
+
+    if change.field == "event_description":
+        if change.operation == "remove":
+            return change
+        if not isinstance(value, str):
+            return None
+        value = " ".join(value.split()).strip()
+        if len(value) < 3:
+            return None
+        return change.model_copy(update={"value": value})
+
+    return None
+
+
+def _merge_change(state: ClaimState, change: FieldChange, turn: int) -> Optional[str]:
+    data = state.setdefault("extracted_data", {})
+    metadata = state.setdefault("field_metadata", {})
+    status = state.setdefault("field_status", {})
+    field = change.field
+    old = data.get(field)
+
+    if change.operation == "ignore":
+        return None
+    if change.operation == "remove":
+        if field in data:
+            data.pop(field, None)
+            status[field] = "missing"
+            metadata[field] = {"status": "removed", "source_turn": turn, "evidence": change.evidence, "confidence": change.confidence}
+            return f"Removed '{field}' on explicit claimant request."
+        return None
+
+    # Never let an ordinary utterance overwrite an already known scalar.
+    # A replacement must be semantically identified as a correction.
+    if field != "event_description" and old not in (None, "", UNKNOWN_SENTINEL):
+        if change.operation != "replace":
+            _audit(state, f"Preserved existing '{field}' and ignored non-correction conflict.")
+            return None
+
+    if field == "event_description" and change.operation == "append":
+        if old and old != UNKNOWN_SENTINEL:
+            if str(change.value).casefold() in str(old).casefold():
+                return None
+            value = f"{str(old).rstrip('.')} {str(change.value).lstrip()}".strip()
+        else:
+            value = str(change.value)
+    else:
+        value = change.value
+
+    data[field] = value
+    status[field] = "corrected" if change.operation == "replace" and old not in (None, "", UNKNOWN_SENTINEL) else "provided"
+    metadata[field] = {
+        "status": status[field],
+        "source_turn": turn,
+        "evidence": change.evidence,
+        "confidence": change.confidence,
+        "updated_at": _now_iso(),
+    }
+    return f"{'Corrected' if status[field] == 'corrected' else 'Extracted'} '{field}' from turn {turn}."
+
+
+def _fallback_patch(state: ClaimState) -> ExtractionPatch:
+    """Safe failure mode: preserve state rather than guessing from text."""
+    return ExtractionPatch(intent="unclear", changes=[], needs_clarification=False)
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
-    """
-    Evaluates conversational intent and updates conversation state machine.
-    """
-    raw_text = state.get("claim_text", "").strip()
-    state["last_user_utterance"] = raw_text
+    raw = str(state.get("claim_text", "")).strip()
+    state["last_user_utterance"] = raw
     state["turn_number"] = state.get("turn_number", 0) + 1
     state.setdefault("conversation_history", [])
     state.setdefault("extracted_data", {})
     state.setdefault("field_status", {})
+    state.setdefault("field_metadata", {})
     state.setdefault("unknown_fields", [])
-    state["_skip_extraction"] = False
+    state["recently_extracted_fields"] = []
+    state["extraction_changes"] = []
     state["deferral_message"] = None
+    state["_skip_extraction"] = False
     state["_skip_all"] = False
 
-    if not raw_text:
+    if not raw:
+        state["last_intent"] = "filler"
         state["_skip_extraction"] = True
         return state
 
-    state["conversation_history"].append({
-        "turn": state["turn_number"],
-        "speaker": "user",
-        "text": raw_text,
-    })
+    turn = state["turn_number"]
+    state["conversation_history"].append({"turn": turn, "speaker": "user", "text": raw})
 
-    intent = _detect_utterance_intent(raw_text)
-    target_field = state.get("next_question_field")
-    awaiting_conf = state.get("awaiting_confirmation", False)
-    current_status = state.get("conversation_status", "collecting")
+    prompt = f"""{EXTRACTION_SYSTEM}
 
-    # If verification previously failed, treat any new substantive input as a correction attempt
-    if current_status == "verification_failed" and intent in ("correction", "normal_claim_input"):
-        state["conversation_status"] = "collecting"
-        state["awaiting_confirmation"] = False
-        state["confirmed"] = False
+Supported insurance types: {', '.join(sorted(INSURANCE_TYPE_KEYS))}
+Reference date: {date.today().isoformat()}
+Current question target: {state.get('next_question_field') or 'none'}
+Current extracted facts: {json.dumps(state.get('extracted_data', {}), ensure_ascii=False, default=str)}
+Recent conversation:
+{_history_text(state)}
 
-    # Fix the "thank you after completion" bug specifically
-    # Only fire once a claim is actually verified
-    if current_status in ("verified",) and intent in ("gratitude", "closing", "acknowledgement"):
+Claimant's latest utterance:
+{raw}
+"""
+    patch = _invoke_structured(llm, prompt, ExtractionPatch) or _fallback_patch(state)
+    state["last_intent"] = patch.intent
+    state["current_field_hint"] = next((c.field for c in patch.changes if c.field), None)
+
+    if patch.intent in {"filler", "greeting", "gratitude", "repeat", "question", "closing", "escalation", "confirmation", "rejection"} and not patch.changes:
         state["_skip_extraction"] = True
-        state["_skip_all"] = True
-        
-        if intent == "gratitude":
-            next_q = "You're very welcome! Let me know if you need anything else."
-        elif intent == "closing":
-            next_q = "Goodbye! Have a great day."
-        else: # acknowledgement
-            next_q = "Understood. Please let me know if you need any further assistance."
-            
-        state["next_question"] = next_q
-        state["message"] = next_q
-        state["next_question_field"] = ""
-        _audit(state, f"Short-circuited turn processor due to status '{current_status}' and intent '{intent}' after completion.")
-        return state
 
-    # Human escalation requested
-    if intent == "escalation":
+    if patch.intent == "escalation":
         state["escalate_to_human"] = True
         state["escalation_reason"] = "user_requested"
         state["conversation_status"] = "escalated"
-        state["_skip_extraction"] = True
         state["_skip_all"] = True
-        msg = "I understand. I am transferring your claim to a human claims specialist who will assist you directly. A representative will be with you shortly."
-        state["next_question"] = msg
-        state["message"] = msg
-        state["next_question_field"] = "escalation"
-        _audit(state, "Claimant requested escalation to a human representative.")
+        state["next_question"] = "I understand. I'll connect you with a claims specialist who can help you directly."
+        state["message"] = state["next_question"]
         return state
 
-    # Gratitude/greeting/closing intents must be detected and handled BEFORE claim_extractor ever runs, regardless of conversation_status
-    if intent == "greeting":
-        state["_skip_extraction"] = True
-        state["_greeting_prefix"] = "Hello! "
-        _audit(state, "Claimant greeted the agent. Skipping extraction.")
-        
-    elif intent == "gratitude":
-        state["_skip_extraction"] = True
-        state["_gratitude_prefix"] = "You're welcome! "
-        _audit(state, "Claimant expressed gratitude. Skipping extraction.")
-        
-    elif intent == "closing":
-        state["_skip_extraction"] = True
+    if patch.intent == "closing":
         state["_skip_all"] = True
-        next_q = "Goodbye! Please let me know when you are ready to continue."
-        state["next_question"] = next_q
-        state["message"] = next_q
-        state["next_question_field"] = ""
-        _audit(state, "Claimant initiated closing during intake. Skipping extraction.")
+        state["next_question"] = "Of course. We can continue whenever you're ready."
+        state["message"] = state["next_question"]
         return state
 
-    # 1. User in confirmation state
-    if awaiting_conf:
-        if intent == "affirmation":
-            state["confirmed"] = True
-            state["awaiting_confirmation"] = False
-            state["conversation_status"] = "pending_verification"
-            state["_skip_extraction"] = True
-            _audit(state, "Claimant reviewed and affirmed extracted details are accurate.")
-            return state
-
-        if intent in ("rejection", "correction"):
-            state["awaiting_confirmation"] = False
-            state["confirmed"] = False
-            state["conversation_status"] = "collecting"
-            state["_rejection_active"] = True
-            _audit(state, f"Claimant initiated correction during confirmation: '{raw_text}'")
-            return state
-
-    # 2. Repeat intent
-    if intent == "repeat":
-        state["_skip_extraction"] = True
-        _audit(state, "Claimant requested repeat of previous prompt.")
-        return state
-
-    # 3. Defer intent
-    if intent == "defer":
-        target = _identify_field_from_utterance(raw_text, fallback_field=target_field)
+    if patch.intent == "defer":
+        target = next((c.field for c in patch.changes if c.field), None) or state.get("next_question_field")
         if target:
-            state["field_status"][target] = "deferred"
-            state["extracted_data"][target] = UNKNOWN_SENTINEL
+            state.setdefault("unknown_fields", [])
             if target not in state["unknown_fields"]:
                 state["unknown_fields"].append(target)
-            state["deferral_message"] = f"No problem, we can provide the {FIELD_HUMAN_NAMES.get(target, target)} later."
-            state["_skip_extraction"] = True
-            _audit(state, f"Claimant deferred field '{target}'.")
-            return state
+            state["field_status"][target] = "deferred"
+            state["extracted_data"][target] = UNKNOWN_SENTINEL
+            state["deferral_message"] = f"That's fine; we can come back to the {FIELD_HUMAN_NAMES.get(target, target)} later."
+        state["_skip_extraction"] = True
 
+    if patch.needs_clarification and patch.clarification:
+        state["current_field_hint"] = state.get("current_field_hint") or state.get("next_question_field")
+        state["clarification_request"] = patch.clarification
+
+    valid_changes: List[Dict[str, Any]] = []
+    for raw_change in patch.changes:
+        change = _validate_change(raw_change, state)
+        if not change:
+            _audit(state, f"Rejected low-confidence/invalid extraction for '{raw_change.field}'.")
+            continue
+        note = _merge_change(state, change, turn)
+        if note:
+            state["recently_extracted_fields"].append(change.field)
+            valid_changes.append(change.model_dump())
+            _audit(state, note)
+
+    state["extraction_changes"] = valid_changes
     return state
 
 
-# ---------------------------------------------------------------------------
-# Node 2: Multi-Field Semantic Extractor
-# ---------------------------------------------------------------------------
 def claim_extractor(state: ClaimState) -> ClaimState:
-    """
-    Extracts structured fields from user utterance using LLM with deterministic fallback.
-    Applies quality gate to filter out filler noise.
-    """
-    claim_text = state.get("claim_text", "")
-    target_field = state.get("next_question_field")
-    data: Dict[str, Any] = dict(state.get("extracted_data") or {})
-    field_status: Dict[str, str] = dict(state.get("field_status") or {})
-    recently_extracted: List[str] = []
-
-    if not _is_meaningful_claim_utterance(claim_text):
-        _audit(state, "Utterance did not pass input quality gate (filler/noise/greeting).")
-        state["recently_extracted_fields"] = []
-        return state
-
-    heuristic = _rule_based_fallback_extraction(claim_text, target_field=target_field)
-
-    llm_extracted: Dict[str, Any] = {}
-    try:
-        sanitized_text = _sanitize_claim_text(claim_text)
-        prompt = EXTRACTION_PROMPT.format(
-            target_field=target_field or "None",
-            claim_text=sanitized_text,
-        )
-        resp = llm.invoke(prompt)
-        raw_content = getattr(resp, "content", resp)
-        content = " ".join(str(c) for c in raw_content) if isinstance(raw_content, list) else str(raw_content)
-        m_json = re.search(r"\{.*\}", content, re.DOTALL)
-        if m_json:
-            parsed = json.loads(m_json.group(0))
-            if isinstance(parsed, dict):
-                llm_extracted = parsed
-    except Exception as exc:
-        logger.error("LLM extraction unavailable (%s), using rule-based extraction.", exc, exc_info=True)
-
-    merged: Dict[str, Any] = {}
-
-    # Policy ID
-    pol_id = heuristic.get("policy_id") or llm_extracted.get("policy_id")
-    if pol_id and isinstance(pol_id, str):
-        clean_pol = pol_id.strip().upper()
-        if clean_pol not in FILLER_OR_GREETING_WORDS and len(clean_pol) >= 3:
-            merged["policy_id"] = clean_pol
-
-    # Event Date
-    inc_date = heuristic.get("event_date") or _normalize_date(str(llm_extracted.get("event_date", "")))
-    if inc_date:
-        merged["event_date"] = inc_date
-
-    # Insurance Type: LLM first, validated against SUPPORTED_INSURANCE_TYPES, keyword rules as fallback only
-    llm_type = llm_extracted.get("insurance_type")
-    if llm_type and str(llm_type).lower() in INSURANCE_TYPE_KEYS:
-        itype = str(llm_type).lower()
-    else:
-        itype = heuristic.get("insurance_type")  # keyword fallback (_infer_insurance_type result)
-
-    if itype and itype in INSURANCE_TYPE_KEYS:
-        merged["insurance_type"] = itype
-
-    # Event Description
-    desc = heuristic.get("event_description") or llm_extracted.get("event_description")
-    if desc and isinstance(desc, str) and len(desc.strip()) >= 3:
-        if desc.strip().upper() not in FILLER_OR_GREETING_WORDS:
-            merged["event_description"] = desc.strip()
-
-    # Estimated Claim Amount
-    amt = heuristic.get("estimated_claim_amount") or _coerce_amount(llm_extracted.get("estimated_claim_amount"))
-    if amt is not None and amt > 0:
-        merged["estimated_claim_amount"] = amt
-
-    for k, v in merged.items():
-        if v is not None and v != UNKNOWN_SENTINEL:
-            old_val = data.get(k)
-            data[k] = v
-            field_status[k] = "provided"
-            recently_extracted.append(k)
-            if old_val and old_val != v:
-                _audit(state, f"Corrected field '{k}': '{old_val}' -> '{v}'")
-            else:
-                _audit(state, f"Extracted field '{k}': '{v}'")
-
-    state["extracted_data"] = data
-    state["field_status"] = field_status
-    state["recently_extracted_fields"] = recently_extracted
+    """Compatibility node; semantic extraction is performed by the turn processor."""
     return state
 
 
-# ---------------------------------------------------------------------------
-# Node 3: Mandatory Field Checker
-# ---------------------------------------------------------------------------
 def mandatory_field_checker(state: ClaimState) -> ClaimState:
-    """
-    Evaluates required fields and computes extraction confidence.
-    """
     if state.get("_skip_all"):
         return state
 
-    data = state.get("extracted_data") or {}
-    field_status = state.get("field_status") or {}
-    unknowns = set(state.get("unknown_fields") or [])
-
+    data = state.get("extracted_data", {})
+    unknown = set(state.get("unknown_fields", []))
     missing: List[str] = []
-    for f in REQUIRED_FIELDS:
-        val = data.get(f)
-        if val is None or val == "" or val == UNKNOWN_SENTINEL:
-            if f not in unknowns:
-                missing.append(f)
-                field_status[f] = "missing"
+    statuses = dict(state.get("field_status", {}))
+    metadata = state.setdefault("field_metadata", {})
+
+    for field in REQUIRED_FIELDS:
+        value = data.get(field)
+        if value in (None, "", UNKNOWN_SENTINEL):
+            statuses[field] = "deferred" if field in unknown else "missing"
+            if field not in unknown:
+                missing.append(field)
         else:
-            field_status[f] = "provided"
+            statuses[field] = statuses.get(field, "provided")
+            metadata.setdefault(field, {"status": statuses[field], "confidence": 1.0})
 
-    # Infinite loop protection: Track consecutive queries on the same target field
-    retries = dict(state.get("consecutive_field_retries") or {})
-    current_target = state.get("next_question_field")
-    if current_target and current_target in missing:
-        retries[current_target] = retries.get(current_target, 0) + 1
-        if retries[current_target] >= 3:
-            # Loop breaker: auto-defer field after 3 unfulfilled attempts
-            unknown_list = list(state.get("unknown_fields") or [])
-            if current_target not in unknown_list:
-                unknown_list.append(current_target)
-            state["unknown_fields"] = unknown_list
-            field_status[current_target] = "deferred"
-            data[current_target] = UNKNOWN_SENTINEL
-            state["deferral_message"] = f"We can provide the {FIELD_HUMAN_NAMES.get(current_target, current_target)} later."
-            if current_target in missing:
-                missing.remove(current_target)
-            retries[current_target] = 0
-            _audit(state, f"Auto-deferred field '{current_target}' after 3 attempts to prevent infinite loop.")
-    elif current_target and current_target not in missing:
-        retries[current_target] = 0
-
-    state["consecutive_field_retries"] = retries
-
-    provided_count = len([f for f in REQUIRED_FIELDS if f not in missing])
-    state["extraction_confidence"] = round(provided_count / len(REQUIRED_FIELDS), 2)
     state["missing_fields"] = missing
-    state["field_status"] = field_status
-
-    # Hard turn ceiling: escalate to human if 25 turns reached without completion
-    if state.get("turn_number", 0) >= 25 and missing:
-        state["escalate_to_human"] = True
-        state["escalation_reason"] = "max_turns_exceeded"
-        state["conversation_status"] = "escalated"
-        msg = "I've recorded all the information provided so far. I will now connect you with a claims specialist to finalize your claim."
-        state["next_question"] = msg
-        state["message"] = msg
-        state["_skip_all"] = True
-        _audit(state, "Max conversational turns reached (25). Escalating to human adjuster.")
-        return state
+    state["field_status"] = statuses
+    confidences = [float(metadata.get(f, {}).get("confidence", 0.0)) for f in REQUIRED_FIELDS if f not in missing]
+    state["extraction_confidence"] = round(sum(confidences) / len(REQUIRED_FIELDS), 2) if confidences else 0.0
 
     if state.get("confirmed"):
+        state["conversation_status"] = "pending_verification"
         state["awaiting_confirmation"] = False
-        state["conversation_status"] = "pending_verification"   # was "claimant_confirmed"
     elif not missing:
+        state["conversation_status"] = "reviewing"
         state["awaiting_confirmation"] = True
-        state["conversation_status"] = "reviewing"               # was "confirming"
     else:
-        state["awaiting_confirmation"] = False
         state["conversation_status"] = "collecting"
-
+        state["awaiting_confirmation"] = False
     return state
 
 
-# ---------------------------------------------------------------------------
-# Node 4: Dynamic Next Question & Response Generator
-# ---------------------------------------------------------------------------
-def next_question_generator(state: ClaimState) -> ClaimState:
-    """
-    Generates natural, empathetic voice prompts:
-    - Contextual acknowledgements of newly received fields
-    - Direct, friendly questions for missing fields
-    - Structured confirmation prompt before final submission
-    - Final intake completion message
-    """
-    if state.get("_skip_all"):
-        return state
-
-    # 1. Pending verification
-    if state.get("conversation_status") == "pending_verification" or state.get("confirmed"):
-        msg = "Thanks — let me verify your policy details now."
-        state["next_question"] = msg
-        state["next_question_field"] = ""
-        state["message"] = msg
-        return state
-
-    # 2. Awaiting confirmation / Review
-    if state.get("awaiting_confirmation"):
-        if state.get("summary_already_shown"):
-            msg = "Does everything look correct? Please say yes to verify, or let me know what needs to be changed."
-        else:
-            summary = _build_confirmation_summary(state.get("extracted_data", {}))
-            msg = (
-                f"I have collected all the basic details for your claim:\n{summary}\n"
-                "Does everything look correct? Please say yes to verify, or let me know if you would like to change anything."
-            )
-            state["summary_already_shown"] = True
-            
-        state["next_question"] = msg
-        state["next_question_field"] = "confirmation"
-        state["message"] = msg
-        return state
-
-    # 3. Missing fields follow-up
-    missing = state.get("missing_fields", [])
-    if not missing:
-        state["next_question"] = INITIAL_PROMPT
-        state["next_question_field"] = ""
-        state["message"] = INITIAL_PROMPT
-        return state
-
-    if len(missing) == len(REQUIRED_FIELDS) and not state.get("extracted_data"):
-        state["next_question"] = INITIAL_PROMPT
-        state["next_question_field"] = "insurance_type"
-        state["message"] = INITIAL_PROMPT
-        return state
-
-    next_field = missing[0]
-    state["next_question_field"] = next_field
-
-    ack_prefix = ""
-    deferral_msg = state.get("deferral_message")
-    
-    # Check for greeting/gratitude prefixes popped from state
-    greeting_prefix = state.pop("_greeting_prefix", None)
-    gratitude_prefix = state.pop("_gratitude_prefix", None)
-    
-    if greeting_prefix:
-        ack_prefix = greeting_prefix
-    elif gratitude_prefix:
-        ack_prefix = gratitude_prefix
-    elif deferral_msg:
-        ack_prefix = f"{deferral_msg} "
-    else:
-        recent = state.get("recently_extracted_fields", [])
-        if recent:
-            first_ack = recent[0]
-            ack_val = state.get("extracted_data", {}).get(first_ack)
-            if first_ack == "insurance_type" and ack_val:
-                disp = SUPPORTED_INSURANCE_TYPES.get(str(ack_val), str(ack_val).title())
-                ack_prefix = f"Got it, a {disp} insurance claim. "
-            elif first_ack == "event_date" and ack_val:
-                ack_prefix = f"Thank you. "
-            elif first_ack == "policy_id" and ack_val:
-                ack_prefix = f"Got your policy number {ack_val}. "
-            elif first_ack == "estimated_claim_amount" and ack_val:
-                ack_prefix = f"Understood, estimated at {ack_val}. "
-            else:
-                ack_prefix = "Thank you. "
-
-    question = FIELD_NATURAL_QUESTIONS.get(next_field, f"Could you please provide the {FIELD_HUMAN_NAMES.get(next_field, next_field)}?")
-    full_prompt = f"{ack_prefix}{question}".strip()
-
-    state["next_question"] = full_prompt
-    state["message"] = full_prompt
-    return state
+def _confirmation_summary(data: Dict[str, Any]) -> str:
+    values = []
+    for field in REQUIRED_FIELDS:
+        value = data.get(field, "Not provided")
+        if field == "insurance_type" and value in SUPPORTED_INSURANCE_TYPES:
+            value = SUPPORTED_INSURANCE_TYPES[value]
+        if field == "estimated_claim_amount" and isinstance(value, (int, float)):
+            value = f"₹{value:,.2f}"
+        values.append(f"{FIELD_HUMAN_NAMES[field].title()}: {value}")
+    return "\n".join(values)
 
 
-def _build_confirmation_summary(data: Dict[str, Any]) -> str:
-    """Generate a clean human-readable summary of collected claim fields."""
-    ctype_raw = data.get("insurance_type", "")
-    ctype_disp = SUPPORTED_INSURANCE_TYPES.get(ctype_raw, str(ctype_raw).title() if ctype_raw else "Not specified")
-    pol_id = data.get("policy_id", "Not provided")
-    date_val = data.get("event_date", "Not provided")
-    desc = data.get("event_description", "Not provided")
-    amt_val = data.get("estimated_claim_amount")
-    amt_disp = f"₹{amt_val:,.2f}" if isinstance(amt_val, (int, float)) else str(amt_val or "Not provided")
-
-    return (
-        f"• Insurance Type: {ctype_disp}\n"
-        f"• Policy ID: {pol_id}\n"
-        f"• Incident Date: {date_val}\n"
-        f"• Estimated Amount: {amt_disp}"
-    )
-
-
-RESPONSE_GENERATION_PROMPT = """You are the conversational agent for an insurance claim intake system.
-Your job is to generate the natural phrasing for the next response to the claimant.
-You MUST follow these rules strictly:
-1. Only use the facts given in the extracted data. Never invent a policy number, date, amount, or description. If a fact is not present, do not state it.
-2. Formulate your response based on the 'Action / Status' and 'Target Field' provided by the state machine.
-3. Keep your response concise, empathetic, and professional.
-4. Do not ask for fields that are not missing.
-5. If the user corrected a field, acknowledge the specific correction.
-6. Output ONLY the spoken text, without any internal JSON, reasoning, or XML.
-
-Action / Status: {conversation_status}
-Target Field to Ask: {target_field}
-Extracted Facts:
-{extracted_facts}
-Missing Fields: {missing_fields}
-Recently Extracted/Corrected Fields: {recently_extracted}
-Recent Conversation History:
-{history}
-
-Generate the exact text to speak/show to the user:
-"""
-
-def natural_response_generator(state: ClaimState) -> ClaimState:
-    """
-    Final step: Generates grounded conversational phrasing using the LLM,
-    falling back to the deterministic wording if the LLM fails.
-    """
-    if state.get("_skip_all"):
-        return state
-
-    history = state.get("conversation_history", [])[-3:]
-    history_str = "\n".join(f"{h['speaker']}: {h['text']}" for h in history) if history else "None"
-    
-    extracted_data = state.get("extracted_data", {})
-    facts_str = _build_confirmation_summary(extracted_data) if extracted_data else "None"
-    
+def _generate_dynamic_response(state: ClaimState) -> Optional[str]:
     missing = state.get("missing_fields", [])
     recent = state.get("recently_extracted_fields", [])
-    
-    # We tell the LLM if we are asking for full confirmation or just a quick follow up
-    status = state.get("conversation_status", "unknown")
-    if status == "confirming":
-        if state.get("summary_already_shown"):
-            status = "confirming (already showed summary, just asking for final yes/no)"
-        else:
-            status = "confirming (first time, please read out the extracted facts summary)"
-            
+    facts = state.get("extracted_data", {})
+    target = state.get("next_question_field")
+    clarification = state.get("clarification_request", "")
+
+    prompt = f"""{QUESTION_SYSTEM}
+
+Conversation status: {state.get('conversation_status', 'collecting')}
+Latest user intent: {state.get('last_intent', 'unknown')}
+Target field: {target or 'none'}
+Missing fields: {json.dumps(missing)}
+Newly extracted/corrected fields: {json.dumps(recent)}
+Verified extracted facts: {json.dumps(facts, ensure_ascii=False, default=str)}
+Existing field metadata: {json.dumps(state.get('field_metadata', {}), ensure_ascii=False, default=str)}
+Clarification requested by semantic extractor: {clarification or 'none'}
+Recent conversation:
+{_history_text(state)}
+
+Write the next response now.
+"""
     try:
-        prompt = RESPONSE_GENERATION_PROMPT.format(
-            conversation_status=status,
-            target_field=state.get("next_question_field") or "None",
-            extracted_facts=facts_str,
-            missing_fields=", ".join(missing) if missing else "None",
-            recently_extracted=", ".join(recent) if recent else "None",
-            history=history_str
-        )
-        resp = llm.invoke(prompt)
-        content = getattr(resp, "content", resp)
-        text = " ".join(str(c) for c in content) if isinstance(content, list) else str(content)
-        text = text.strip()
-        
-        if text:
-            state["next_question"] = text
-            state["message"] = text
+        return _text_from_response(llm.invoke(prompt)) or None
     except Exception as exc:
-        logger.error("LLM natural response generation failed: %s", exc, exc_info=True)
-        
+        logger.error("Dynamic response generation failed: %s", exc, exc_info=True)
+        return None
+
+
+def next_question_generator(state: ClaimState) -> ClaimState:
+    if state.get("_skip_all"):
+        return state
+
+    state.pop("clarification_request", None) if state.get("last_intent") not in {"unclear"} else None
+
+    if state.get("awaiting_confirmation"):
+        state["next_question_field"] = "confirmation"
+        if state.get("summary_already_shown"):
+            fallback = "Does that all look right? If anything needs changing, just tell me what to correct."
+        else:
+            fallback = f"Here's what I have so far:\n{_confirmation_summary(state.get('extracted_data', {}))}\nDoes that all look right, or is there anything you'd like me to change?"
+            state["summary_already_shown"] = True
+        generated = _generate_dynamic_response(state)
+        state["next_question"] = generated or fallback
+        state["message"] = state["next_question"]
+        return state
+
+    missing = state.get("missing_fields", [])
+    if missing:
+        # Prefer the field most directly implied by the latest turn; otherwise
+        # rotate through missing fields without hard-coded wording.
+        hinted = state.get("current_field_hint")
+        target = hinted if hinted in missing else missing[0]
+        state["next_question_field"] = target
+    else:
+        state["next_question_field"] = "confirmation"
+
+    fallback = "Could you tell me a little more about what happened?" if not state.get("extracted_data") else "What else can you tell me about the incident?"
+    generated = _generate_dynamic_response(state)
+    state["next_question"] = generated or fallback
+    state["message"] = state["next_question"]
     return state
+
+
+def natural_response_generator(state: ClaimState) -> ClaimState:
+    """Final response node kept for graph/API compatibility."""
+    if state.get("_skip_all"):
+        return state
+    state["message"] = state.get("next_question", "")
+    state["spoken_response"] = state["message"]
+    return state
+
+
+__all__ = [
+    "conversation_turn_processor",
+    "claim_extractor",
+    "mandatory_field_checker",
+    "next_question_generator",
+    "natural_response_generator",
+]
