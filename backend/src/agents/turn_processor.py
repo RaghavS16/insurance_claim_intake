@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -23,18 +24,13 @@ async def process_claimant_turn(
 ) -> Dict[str, Any]:
     """Process one claimant turn and persist user, state and agent response atomically."""
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
-    if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated"}:
+    if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated", "submitted"}:
         return prior_state
 
-    graph_input = {
-        **prior_state,
-        "claim_text": user_text,
-        "ticket_id": claim.ticket_id,
-        "input_mode": input_mode,
-    }
+    graph_input = {**prior_state, "claim_text": user_text, "ticket_id": claim.ticket_id, "input_mode": input_mode}
     result = build_conversation_graph().invoke(graph_input)
-
     extracted = result.get("extracted_data", {}) or {}
+
     claim.pipeline_state = dict(result)
     claim.insurance_type = extracted.get("insurance_type")
     claim.event_description = extracted.get("event_description")
@@ -48,6 +44,14 @@ async def process_claimant_turn(
             claim.event_date = datetime.strptime(str(event_date_str), "%Y-%m-%d").date()
         except ValueError:
             logger.warning("Invalid normalized event date: %r", event_date_str)
+
+    # event_location was introduced into the Phase 1 schema with migration 0005.
+    # Keep this write compatible with older ORM snapshots until the mapped model
+    # is regenerated/deployed everywhere.
+    if "event_location" in extracted:
+        db.execute(text("UPDATE claims SET event_location = :location WHERE id = :claim_id"), {
+            "location": extracted.get("event_location"), "claim_id": str(claim.id)
+        })
     flag_modified(claim, "pipeline_state")
 
     agent_text = result.get("next_question") or result.get("message", "")
