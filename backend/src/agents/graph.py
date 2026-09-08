@@ -6,6 +6,7 @@ import re
 from langgraph.graph import END, StateGraph
 
 from src.agents import nodes
+from src.agents.response_guard import safe_spoken_reply
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
 
@@ -37,10 +38,11 @@ def _ensure_incident_narrative(state: ClaimState) -> ClaimState:
 
 def _response_planner(state: ClaimState) -> ClaimState:
     state = nodes.next_question_generator(state)
-    spoken = str(state.get("spoken_response") or "").strip()
-    if spoken and not state.get("awaiting_confirmation") and not state.get("_skip_all"):
-        state["next_question"] = spoken
-        state["message"] = spoken
+    natural = safe_spoken_reply(state)
+    if natural and not state.get("awaiting_confirmation") and not state.get("_skip_all"):
+        state["next_question"] = natural
+        state["message"] = natural
+        state["response_message"] = natural
     return state
 
 
