@@ -25,6 +25,9 @@ def conversation_turn_processor(state):
             state["confirmed"] = False
             state["awaiting_confirmation"] = False
             state["conversation_status"] = "collecting"
+            state["_skip_all"] = True
+            state["next_question"] = "No problem. Tell me what needs to be corrected, and I’ll update it."
+            state["message"] = state["next_question"]
     return state
 
 __all__ = ["conversation_turn_processor"]
