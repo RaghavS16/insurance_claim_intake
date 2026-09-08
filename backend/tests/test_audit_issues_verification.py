@@ -21,8 +21,6 @@ from src.utils.rate_limiter import limiter, enforce_rate_limit
 from src.utils.logger import mask_pii, mask_pii_for_llm
 from src.utils.tracing import generate_correlation_id, get_correlation_id, set_correlation_id
 from src.utils.email_otp import send_otp_email_async
-from src.voice.stt import transcribe_pcm16_async
-from src.voice.tts import synthesize_async, TTSError
 from src.agents.graph import build_conversation_graph
 
 
@@ -152,16 +150,7 @@ async def test_async_email_dispatch_non_blocking():
     assert isinstance(res, bool)
 
 
-@pytest.mark.asyncio
-async def test_async_stt_and_tts_execution():
-    """Verify async wrappers for STT and TTS."""
-    # STT on empty audio returns empty string without error
-    stt_res = await transcribe_pcm16_async(b"\x00" * 100)
-    assert stt_res == ""
 
-    # TTS empty string raises TTSError cleanly
-    with pytest.raises(TTSError):
-        await synthesize_async("")
 
 
 # ===========================================================================

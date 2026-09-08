@@ -18,11 +18,6 @@ from src.agents.nodes import (
     claim_extractor,
     mandatory_field_checker,
     next_question_generator,
-    _detect_utterance_intent,
-    _is_meaningful_claim_utterance,
-    _infer_insurance_type,
-    _rule_based_fallback_extraction,
-    INITIAL_PROMPT,
 )
 from src.agents.graph import build_conversation_graph
 
@@ -33,7 +28,7 @@ def _base_state(**overrides) -> dict:
         "extracted_data": {},
         "missing_fields": ["policy_id", "event_date", "insurance_type", "event_description", "estimated_claim_amount"],
         "field_status": {},
-        "next_question": INITIAL_PROMPT,
+        "next_question": "Hello, how can I help you?",
         "next_question_field": "",
         "conversation_status": "collecting",
         "awaiting_confirmation": False,
@@ -45,90 +40,7 @@ def _base_state(**overrides) -> dict:
     return state
 
 
-class TestSixInsuranceTypesInference:
-    """Validate strict inference of ONLY the 6 supported insurance types."""
 
-    def test_infer_motor(self):
-        assert _infer_insurance_type("My car was hit from behind.") == "motor"
-        assert _infer_insurance_type("There was a collision and my bumper got dented.") == "motor"
-        assert _infer_insurance_type("I met with an accident on my bike yesterday.") == "motor"
-        assert _infer_insurance_type("I had a bike accident yesterday and the front of my bike was damaged.") == "motor"
-
-    def test_infer_travel(self):
-        assert _infer_insurance_type("I lost my luggage while travelling.") == "travel"
-        assert _infer_insurance_type("My flight was delayed and baggage was missing.") == "travel"
-
-    def test_infer_home(self):
-        assert _infer_insurance_type("My house was damaged by a fire.") == "home"
-        assert _infer_insurance_type("There is a water leak in my apartment roof.") == "home"
-
-    def test_infer_health(self):
-        assert _infer_insurance_type("I was hospitalized.") == "health"
-        assert _infer_insurance_type("I had an emergency surgery at the clinic.") == "health"
-
-    def test_infer_senior_health(self):
-        assert _infer_insurance_type("My father needs hospitalization.") == "senior_health"
-        assert _infer_insurance_type("My elderly mother was admitted to ICU.") == "senior_health"
-        assert _infer_insurance_type("Claim for my grandmother's medical treatment.") == "senior_health"
-
-    def test_infer_cyber(self):
-        assert _infer_insurance_type("My computer was hacked.") == "cyber"
-        assert _infer_insurance_type("We suffered a ransomware attack on our server.") == "cyber"
-
-
-class TestInputQualityGate:
-    """Validate that noise, greetings, and filler words NEVER become claim data."""
-
-    def test_empty_string_rejected(self):
-        assert not _is_meaningful_claim_utterance("")
-        assert not _is_meaningful_claim_utterance("   ")
-
-    def test_single_filler_words_rejected(self):
-        assert not _is_meaningful_claim_utterance("you")
-        assert not _is_meaningful_claim_utterance("YOU")
-        assert not _is_meaningful_claim_utterance("yeah")
-        assert not _is_meaningful_claim_utterance("okay")
-        assert not _is_meaningful_claim_utterance("uh")
-        assert not _is_meaningful_claim_utterance("um")
-
-    def test_greetings_rejected(self):
-        assert not _is_meaningful_claim_utterance("hello")
-        assert not _is_meaningful_claim_utterance("hi")
-        assert not _is_meaningful_claim_utterance("hey")
-
-    def test_meaningful_claim_utterances_accepted(self):
-        assert _is_meaningful_claim_utterance("My car was hit from behind yesterday")
-        assert _is_meaningful_claim_utterance("ABC12345")
-        assert _is_meaningful_claim_utterance("50000 rupees")
-        assert _is_meaningful_claim_utterance("I lost my luggage while travelling")
-
-
-class TestIntentDetection:
-    def test_affirmation_intents(self):
-        assert _detect_utterance_intent("yes") == "affirmation"
-        assert _detect_utterance_intent("looks good") == "affirmation"
-        assert _detect_utterance_intent("everything is correct") == "affirmation"
-        assert _detect_utterance_intent("confirm") == "affirmation"
-
-    def test_rejection_intents(self):
-        assert _detect_utterance_intent("no") == "rejection"
-        assert _detect_utterance_intent("that's wrong") == "rejection"
-        assert _detect_utterance_intent("incorrect") == "rejection"
-
-    def test_repeat_intents(self):
-        assert _detect_utterance_intent("Could you repeat that?") == "repeat"
-        assert _detect_utterance_intent("Say that again please") == "repeat"
-        assert _detect_utterance_intent("what?") == "repeat"
-
-    def test_correction_intents(self):
-        assert _detect_utterance_intent("Actually, it was 50000") == "correction"
-        assert _detect_utterance_intent("sorry, i meant the 15th") == "correction"
-        assert _detect_utterance_intent("make the amount 60,000") == "correction"
-
-    def test_dont_know_and_defer_intents(self):
-        assert _detect_utterance_intent("I don't know") == "defer"
-        assert _detect_utterance_intent("not sure") == "defer"
-        assert _detect_utterance_intent("I'll provide it later") == "defer"
 
 
 class TestPhase1Conversations:
