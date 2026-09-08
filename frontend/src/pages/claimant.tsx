@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/router";
-import { ClaimantSidebar } from "@/components/claimant/ClaimantSidebar";
+import { ClaimantSidebar, ClaimSummary } from "@/components/claimant/ClaimantSidebar";
 import { ClaimantTopBar } from "@/components/claimant/ClaimantTopBar";
 import { ClaimantChatArea } from "@/components/claimant/ClaimantChatArea";
 import { VoiceConsole } from "@/components/claimant/VoiceConsole";
@@ -24,29 +24,47 @@ interface TranscriptSegment {
   timestamp?: number;
 }
 
+interface SessionPayload {
+  ticket_id: string;
+  status?: string;
+  conversation_status?: string;
+  insurance_type?: string;
+  event_description?: string;
+  event_location?: string;
+  event_date?: string;
+  estimated_claim_amount?: number;
+  extracted_data?: ExtractedData;
+  missing_fields?: string[];
+  field_status?: Record<string, string>;
+  awaiting_confirmation?: boolean;
+  confirmed?: boolean;
+  conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; created_at?: string | null }>;
+  initial_message?: string;
+  resumed?: boolean;
+}
+
 export default function ClaimantPage() {
   const router = useRouter();
-
-  const [token, setToken] = useState<string>("");
-  const [userName, setUserName] = useState<string>("");
-  const [ticketId, setTicketId] = useState<string>("");
-  const [conversationStatus, setConversationStatus] = useState<string>("not_started");
-  const [agentState, setAgentState] = useState<string>("idle"); // idle, listening, thinking, speaking
+  const [token, setToken] = useState("");
+  const [userName, setUserName] = useState("");
+  const [ticketId, setTicketId] = useState("");
+  const [conversationStatus, setConversationStatus] = useState("not_started");
+  const [agentState, setAgentState] = useState("idle");
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
   const [history, setHistory] = useState<ConversationTurn[]>([]);
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [textMode, setTextMode] = useState<boolean>(false);
-  const [textInput, setTextInput] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
-  const [confirmed, setConfirmed] = useState<boolean>(false);
-  const [submittingClaim, setSubmittingClaim] = useState<boolean>(false);
-  const [submittedMessage, setSubmittedMessage] = useState<string>("");
-  const [errorBanner, setErrorBanner] = useState<string>("");
-
-  // Edit Modal State
+  const [claimsList, setClaimsList] = useState<ClaimSummary[]>([]);
+  const [linkedPolicies, setLinkedPolicies] = useState<any[]>([]);
+  const [loadingClaims, setLoadingClaims] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [textMode, setTextMode] = useState(false);
+  const [textInput, setTextInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [submittingClaim, setSubmittingClaim] = useState(false);
+  const [submittedMessage, setSubmittedMessage] = useState("");
+  const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState<string>("");
-
+  const [editValue, setEditValue] = useState("");
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -57,374 +75,348 @@ export default function ClaimantPage() {
   const playbackContextRef = useRef<AudioContext | null>(null);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioBlobQueueRef = useRef<Blob[]>([]);
-  const isPlayingRef = useRef<boolean>(false);
-  const isRecordingRef = useRef<boolean>(false);
+  const isPlayingRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const hasInitializedRef = useRef(false);
   isRecordingRef.current = isRecording;
-  const hasInitializedRef = useRef<boolean>(false);
 
-  // Auto-scroll to bottom
   const scrollToBottom = useCallback((force = false) => {
     const container = chatContainerRef.current;
     if (!container) return;
-    const threshold = 300;
-    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
-    if (force || isNearBottom) {
-      setTimeout(() => {
-        if (container) {
-          container.scrollTo({
-            top: container.scrollHeight,
-            behavior: "smooth",
-          });
-        }
-      }, 50);
-    }
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 300;
+    if (force || nearBottom) setTimeout(() => container.scrollTo({ top: container.scrollHeight, behavior: "smooth" }), 50);
   }, []);
-
-  useEffect(() => {
-    scrollToBottom(true);
-  }, [history.length, partialSegments.size, scrollToBottom]);
+  useEffect(() => { scrollToBottom(true); }, [history.length, partialSegments.size, scrollToBottom]);
 
   const getPlaybackContext = useCallback(() => {
     if (!playbackContextRef.current || playbackContextRef.current.state === "closed") {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       playbackContextRef.current = new AudioCtx();
     }
-    if (playbackContextRef.current.state === "suspended") {
-      playbackContextRef.current.resume().catch(() => {});
-    }
+    if (playbackContextRef.current.state === "suspended") playbackContextRef.current.resume().catch(() => {});
     return playbackContextRef.current;
   }, []);
 
-  // Web Audio queue playback
   const enqueueAudio = useCallback((blob: Blob) => {
     audioBlobQueueRef.current.push(blob);
-
     const playNext = async () => {
-      if (isPlayingRef.current || audioBlobQueueRef.current.length === 0) return;
-      const nextBlob = audioBlobQueueRef.current.shift();
-      if (!nextBlob) return;
-
+      if (isPlayingRef.current || !audioBlobQueueRef.current.length) return;
+      const next = audioBlobQueueRef.current.shift(); if (!next) return;
       isPlayingRef.current = true;
       try {
         const ctx = getPlaybackContext();
-        const arrayBuffer = await nextBlob.arrayBuffer();
-        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-        activeSourceRef.current = source;
-
+        const buffer = await ctx.decodeAudioData(await next.arrayBuffer());
+        const source = ctx.createBufferSource(); source.buffer = buffer; source.connect(ctx.destination); activeSourceRef.current = source;
         setAgentState("speaking");
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "tts_started" }));
-        }
-
         source.onended = () => {
           isPlayingRef.current = false;
-          if (activeSourceRef.current === source) {
-            activeSourceRef.current = null;
-          }
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: "tts_stopped" }));
-          }
-          if (audioBlobQueueRef.current.length === 0) {
-            setAgentState(isRecordingRef.current ? "listening" : "idle");
-          }
+          if (activeSourceRef.current === source) activeSourceRef.current = null;
+          if (!audioBlobQueueRef.current.length) setAgentState(isRecordingRef.current ? "listening" : "idle");
           playNext();
         };
-
         source.start(0);
-      } catch (err) {
-        console.warn("Web Audio playback error:", err);
+      } catch {
         isPlayingRef.current = false;
         activeSourceRef.current = null;
         playNext();
       }
     };
-
     playNext();
   }, [getPlaybackContext]);
 
-  // WebSocket message handler
+  const fetchClaimsList = useCallback(async (authToken: string) => {
+    if (!authToken) return;
+    setLoadingClaims(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data) ? data : (data.items || []);
+        setClaimsList(items);
+      }
+    } catch {
+      // ignore network errors silently
+    } finally {
+      setLoadingClaims(false);
+    }
+  }, []);
+
+  const fetchLinkedPolicies = useCallback(async (authToken: string) => {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/policies/my-policies`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLinkedPolicies(Array.isArray(data) ? data : []);
+      }
+    } catch {}
+  }, []);
+
   const handleWsMessage = useCallback((event: MessageEvent) => {
-    if (typeof event.data === "string") {
-      let msg: Record<string, any>;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
+    if (typeof event.data !== "string") {
+      if (event.data instanceof Blob) enqueueAudio(event.data);
+      else if (event.data instanceof ArrayBuffer) enqueueAudio(new Blob([event.data], { type: "audio/wav" }));
+      return;
+    }
+    let msg: Record<string, any>;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (msg.type === "barge_in") {
+      try { activeSourceRef.current?.stop(); } catch {}
+      activeSourceRef.current = null;
+      audioBlobQueueRef.current = [];
+      isPlayingRef.current = false;
+      setPartialSegments(new Map());
+      return;
+    }
+    if (msg.type === "agent_state") { setAgentState(msg.state); return; }
+    if (msg.type === "transcript") {
+      const speaker = msg.speaker as string, segmentId = msg.segment_id as string, text = msg.text as string, isFinal = msg.is_final as boolean;
+      if (!text) return;
+      if (!isFinal) {
+        setPartialSegments(prev => {
+          const next = new Map(prev);
+          next.set(segmentId, { segment_id: segmentId, sequence: msg.sequence || 0, speaker: speaker === "agent" ? "agent" : "user", text, is_final: false, global_seq: msg.global_seq, timestamp: msg.timestamp });
+          return next;
+        });
+      } else {
+        setPartialSegments(prev => { const next = new Map(prev); next.delete(segmentId); return next; });
+        setHistory(prev => [...prev, { turn: prev.length + 1, speaker: speaker === "agent" ? "agent" : "user", text, segment_id: segmentId, global_seq: msg.global_seq, timestamp: msg.timestamp || Date.now() }]);
       }
-
-      if (msg.type === "barge_in") {
-        if (activeSourceRef.current) {
-          try {
-            activeSourceRef.current.stop();
-          } catch {}
-          activeSourceRef.current = null;
-        }
-        if ("speechSynthesis" in window) {
-          window.speechSynthesis.cancel();
-        }
-        audioBlobQueueRef.current = [];
-        isPlayingRef.current = false;
-        setPartialSegments(new Map());
-      } else if (msg.type === "agent_state") {
-        setAgentState(msg.state as string);
-      } else if (msg.type === "transcript") {
-        const speaker = msg.speaker as string;
-        const segmentId = msg.segment_id as string;
-        const sequence = msg.sequence as number;
-        const text = msg.text as string;
-        const isFinal = msg.is_final as boolean;
-        const globalSeq = msg.global_seq as number | undefined;
-        const timestamp = msg.timestamp as number | undefined;
-
-        if (speaker === "claimant" || speaker === "user") {
-          if (!isFinal) {
-            setPartialSegments((prev) => {
-              const next = new Map(prev);
-              next.set(segmentId, {
-                segment_id: segmentId,
-                sequence,
-                speaker: "user",
-                text,
-                is_final: false,
-                global_seq: globalSeq,
-                timestamp,
-              });
-              return next;
-            });
-          } else {
-            setPartialSegments((prev) => {
-              const next = new Map(prev);
-              next.delete(segmentId);
-              return next;
-            });
-            if (text && text.trim()) {
-              setHistory((prev) => [
-                ...prev,
-                {
-                  turn: prev.length + 1,
-                  speaker: "user",
-                  text,
-                  segment_id: segmentId,
-                  global_seq: globalSeq,
-                  timestamp,
-                },
-              ]);
-            }
-          }
-        } else if (speaker === "agent") {
-          setHistory((prev) => [
-            ...prev,
-            {
-              turn: prev.length + 1,
-              speaker: "agent",
-              text,
-              segment_id: segmentId,
-              global_seq: globalSeq,
-              timestamp,
-            },
-          ]);
-        }
-      } else if (msg.type === "state_update") {
-        setExtractedData((msg.extracted_data as ExtractedData) || {});
-        if (msg.conversation_status) {
-          setConversationStatus(msg.conversation_status as string);
-        }
-        if (msg.confirmed) {
-          setConfirmed(true);
-        }
-      } else if (msg.type === "agent_text_fallback") {
-        const text = msg.text as string;
-        setHistory((prev) => [
-          ...prev,
-          {
-            turn: prev.length + 1,
-            speaker: "agent",
-            text,
-            timestamp: Date.now(),
-          },
-        ]);
-        if ("speechSynthesis" in window && text) {
-          try {
-            const utter = new SpeechSynthesisUtterance(text);
-            utter.rate = 1.0;
-            window.speechSynthesis.speak(utter);
-          } catch {}
-        }
-      }
-    } else if (event.data instanceof Blob) {
-      enqueueAudio(event.data);
-    } else if (event.data instanceof ArrayBuffer) {
-      enqueueAudio(new Blob([event.data], { type: "audio/wav" }));
+      return;
+    }
+    if (msg.type === "state_update") {
+      setExtractedData(msg.extracted_data || {});
+      setConversationStatus(msg.conversation_status || "collecting");
+      setConfirmed(Boolean(msg.confirmed));
+      return;
     }
   }, [enqueueAudio]);
 
   const stopVoiceRecording = useCallback(() => {
-    if (workletNodeRef.current) {
-      try {
-        workletNodeRef.current.port.postMessage({ command: "stop" });
-        workletNodeRef.current.disconnect();
-      } catch {}
-      workletNodeRef.current = null;
-    }
-    if (audioContextRef.current) {
-      try {
-        audioContextRef.current.close();
-      } catch {}
-      audioContextRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
+    try { workletNodeRef.current?.port.postMessage({ command: "stop" }); workletNodeRef.current?.disconnect(); } catch {}
+    workletNodeRef.current = null;
+    try { audioContextRef.current?.close(); } catch {}
+    audioContextRef.current = null;
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
     setIsRecording(false);
     setAgentState("idle");
   }, []);
 
   const connectWebSocket = useCallback((currentTicketId: string, currentToken: string) => {
-    if (wsRef.current) {
-      try {
-        wsRef.current.close();
-      } catch {}
-    }
-    const wsUrl = `${API_BASE.replace(/^http/, "ws")}/api/v1/ws/voice/${currentTicketId}?token=${currentToken}`;
-    const ws = new WebSocket(wsUrl);
+    try { wsRef.current?.close(); } catch {}
+    const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`);
     ws.binaryType = "blob";
     ws.onmessage = handleWsMessage;
-    ws.onclose = () => {
-      if (isRecordingRef.current) stopVoiceRecording();
-    };
+    ws.onclose = () => { if (isRecordingRef.current) stopVoiceRecording(); };
     wsRef.current = ws;
   }, [handleWsMessage, stopVoiceRecording]);
 
-  const startSession = useCallback(async (authToken: string, policyNum?: string) => {
+  const applySession = useCallback((data: SessionPayload, authToken: string, fallbackMessage?: string) => {
+    setTicketId(data.ticket_id);
+    localStorage.setItem("active_claim_ticket_id", data.ticket_id);
+    setConversationStatus(data.conversation_status || data.status || "collecting");
+    setExtractedData(data.extracted_data || {});
+    setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+    setPartialSegments(new Map());
+    const saved = (data.conversation || []).map(t => ({
+      turn: t.turn,
+      speaker: t.speaker,
+      text: t.text,
+      timestamp: t.created_at ? Date.parse(t.created_at) : Date.now(),
+    }));
+    if (saved.length) {
+      setHistory(saved);
+    } else if (fallbackMessage || data.initial_message) {
+      setHistory([{
+        turn: 1,
+        speaker: "agent",
+        text: data.initial_message || fallbackMessage || "Tell me what happened, in your own words. I'll collect the details as we go.",
+        timestamp: Date.now(),
+      }]);
+    } else {
+      setHistory([]);
+    }
+    connectWebSocket(data.ticket_id, authToken);
+    fetchClaimsList(authToken);
+  }, [connectWebSocket, fetchClaimsList]);
+
+  const loadClaimByTicket = useCallback(async (selectedTicketId: string, authToken: string) => {
+    if (!authToken || !selectedTicketId) return;
     if (isRecordingRef.current) stopVoiceRecording();
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    localStorage.removeItem("active_claim_ticket_id");
-    setTicketId("");
-    setExtractedData({});
-    setHistory([]);
-    setConfirmed(false);
-    setSubmittedMessage("");
-
-    if (!authToken) return;
+    setLoading(true);
+    setErrorBanner("");
     try {
-      setLoading(true);
-      setErrorBanner("");
-      const payload: any = {};
-      if (policyNum) {
-        payload.policy_number = policyNum.trim().toUpperCase();
-      }
-
-      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      const res = await fetch(`${API_BASE}/api/v1/claims/${selectedTicketId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      if (!res.ok) throw new Error(`Could not load claim #${selectedTicketId}`);
       const data = await res.json();
-      setTicketId(data.ticket_id);
-      localStorage.setItem("active_claim_ticket_id", data.ticket_id);
-      setConversationStatus("collecting");
-      setExtractedData(data.extracted_data || (policyNum ? { policy_id: policyNum } : {}));
-      setPartialSegments(new Map());
-      setHistory([
-        {
-          turn: 1,
-          speaker: "agent",
-          text: data.initial_message || (policyNum 
-            ? `Hello! I see you are filing a claim for policy ${policyNum}. Please describe what happened, and I will capture all the details for you.`
-            : "Hello! I'm here to assist you in filing your insurance claim. Please describe what happened, and I will capture all the details for you."),
-          global_seq: 0,
-          timestamp: Date.now(),
-        },
-      ]);
-      connectWebSocket(data.ticket_id, authToken);
+      applySession(data, authToken);
+      router.replace({ pathname: "/claimant", query: { ticket: selectedTicketId } }, undefined, { shallow: true });
     } catch (err: any) {
-      setErrorBanner(`Failed to start session: ${err.message}`);
+      setErrorBanner(err.message || "Failed to load claim.");
     } finally {
       setLoading(false);
     }
-  }, [connectWebSocket, stopVoiceRecording]);
+  }, [applySession, router, stopVoiceRecording]);
 
-  // Authenticate user on load and start session exactly once
-  useEffect(() => {
-    if (!router.isReady) return;
-    const savedToken = localStorage.getItem("access_token");
-    if (!savedToken) {
-      router.push("/login");
-      return;
+  const startNewSession = useCallback(async (authToken: string) => {
+    if (isRecordingRef.current) stopVoiceRecording();
+    try { wsRef.current?.close(); } catch {}
+    setLoading(true);
+    setErrorBanner("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/new-session`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error("Failed to create new claim session.");
+      const data = await res.json();
+      setConfirmed(false);
+      setSubmittedMessage("");
+      applySession(data, authToken);
+      router.replace({ pathname: "/claimant", query: { ticket: data.ticket_id } }, undefined, { shallow: true });
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not start new intake.");
+    } finally {
+      setLoading(false);
     }
-    setToken(savedToken);
+  }, [applySession, router, stopVoiceRecording]);
 
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${savedToken}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Session expired");
-        return res.json();
-      })
-      .then((data) => {
-        if (data.role !== "CLAIMANT") {
-          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
+  const handleDeleteClaim = useCallback(async (targetTicketId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!token || !targetTicketId) return;
+    if (!window.confirm(`Discard draft for claim #${targetTicketId}?`)) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${targetTicketId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Unable to delete claim.");
+      }
+      fetchClaimsList(token);
+      if (targetTicketId === ticketId) {
+        await startNewSession(token);
+      }
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not delete claim.");
+    }
+  }, [fetchClaimsList, startNewSession, ticketId, token]);
+
+  const restoreOrCreateSession = useCallback(async (authToken: string, explicitTicket?: string, policyNum?: string) => {
+    if (!authToken) return;
+    setLoading(true);
+    setErrorBanner("");
+    try {
+      if (explicitTicket) {
+        const res = await fetch(`${API_BASE}/api/v1/claims/${explicitTicket}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          applySession(data, authToken);
           return;
         }
-        setUserName(data.full_name || "Claimant");
-        if (!hasInitializedRef.current) {
-          hasInitializedRef.current = true;
-          const initialPolicy = (router.query.policy || router.query.policy_id) as string | undefined;
-          startSession(savedToken, initialPolicy);
-        }
-      })
-      .catch(() => {
-        localStorage.removeItem("access_token");
-        router.push("/login");
+      }
+
+      const activeRes = await fetch(`${API_BASE}/api/v1/claims/active`, {
+        headers: { Authorization: `Bearer ${authToken}` },
       });
-  }, [router.isReady, router.query, startSession, router]);
+      if (activeRes.ok) {
+        const active = await activeRes.json();
+        if (active.active) {
+          applySession(active, authToken);
+          return;
+        }
+      }
+
+      const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
+      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      applySession(await res.json(), authToken);
+    } catch (err: any) {
+      setErrorBanner(`Unable to restore your claim session: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [applySession]);
+
+  const handleExportTranscript = useCallback(async () => {
+    if (!ticketId || !token) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Could not export transcript.");
+      const data = await res.json();
+      const textContent = data.formatted_text || JSON.stringify(data, null, 2);
+      const blob = new Blob([textContent], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Claim_${ticketId}_Dossier.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setErrorBanner(err.message || "Failed to download export.");
+    }
+  }, [ticketId, token]);
+
+  useEffect(() => {
+    if (!router.isReady || hasInitializedRef.current) return;
+    const savedToken = localStorage.getItem("access_token");
+    if (!savedToken) { router.push("/login"); return; }
+    setToken(savedToken);
+    hasInitializedRef.current = true;
+    fetch(`${API_BASE}/api/v1/auth/me`, { headers: { Authorization: `Bearer ${savedToken}` } })
+      .then(r => { if (!r.ok) throw new Error("Session expired"); return r.json(); })
+      .then(data => {
+        if (data.role !== "CLAIMANT") { router.push(data.role === "ADMIN" ? "/admin" : "/adjuster"); return; }
+        setUserName(data.full_name || "Claimant");
+        const initialPolicy = (router.query.policy || router.query.policy_id) as string | undefined;
+        const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
+        fetchClaimsList(savedToken);
+        fetchLinkedPolicies(savedToken);
+        return restoreOrCreateSession(savedToken, initialTicket, initialPolicy);
+      })
+      .catch(() => { localStorage.removeItem("access_token"); router.push("/login"); });
+  }, [router.isReady, router.query.policy, router.query.policy_id, router.query.ticket, router.query.ticket_id, restoreOrCreateSession, router, fetchClaimsList, fetchLinkedPolicies]);
+
+  useEffect(() => () => { try { wsRef.current?.close(); } catch {} stopVoiceRecording(); }, [stopVoiceRecording]);
 
   const startVoiceRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamRef.current = stream;
-
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-      });
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = audioCtx;
-
       await audioCtx.audioWorklet.addModule("/audio-processor.js");
       const source = audioCtx.createMediaStreamSource(stream);
       let worklet: AudioWorkletNode;
-      try {
-        worklet = new AudioWorkletNode(audioCtx, "audio-processor");
-      } catch {
-        worklet = new AudioWorkletNode(audioCtx, "pcm16-processor");
-      }
+      try { worklet = new AudioWorkletNode(audioCtx, "audio-processor"); } catch { worklet = new AudioWorkletNode(audioCtx, "pcm16-processor"); }
       workletNodeRef.current = worklet;
-
-      worklet.port.onmessage = (event) => {
+      worklet.port.onmessage = event => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          if (event.data instanceof ArrayBuffer) {
-            wsRef.current.send(event.data);
-          } else if (event.data?.buffer instanceof ArrayBuffer) {
-            wsRef.current.send(event.data.buffer);
-          }
+          wsRef.current.send(event.data instanceof ArrayBuffer ? event.data : event.data?.buffer);
         }
       };
-
       source.connect(worklet);
       worklet.connect(audioCtx.destination);
       setIsRecording(true);
@@ -433,76 +425,54 @@ export default function ClaimantPage() {
       setErrorBanner(`Microphone access error: ${err.message}`);
     }
   };
+  const toggleMic = () => isRecording ? stopVoiceRecording() : startVoiceRecording();
 
-  const toggleMic = () => {
-    if (isRecording) {
-      stopVoiceRecording();
-    } else {
-      startVoiceRecording();
-    }
-  };
-
-  const handleSendText = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!textInput.trim() || !ticketId || !token) return;
-    const text = textInput.trim();
+  const handleSendText = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const rawText = customText || textInput;
+    if (!rawText.trim() || !ticketId || !token) return;
+    const text = rawText.trim();
     setTextInput("");
-
-    setHistory((prev) => [
-      ...prev,
-      { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() },
-    ]);
-
-    fetch(`${API_BASE}/api/v1/claims/${ticketId}/text-turn`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        const agentText = data.agent_message || data.message;
-        if (agentText) {
-          setHistory((prev) => [
-            ...prev,
-            { turn: prev.length + 1, speaker: "agent", text: agentText, timestamp: Date.now() },
-          ]);
-        }
-        if (data.extracted_data) {
-          setExtractedData(data.extracted_data);
-        }
-        if (data.conversation_status) {
-          setConversationStatus(data.conversation_status);
-        }
-      })
-      .catch(() => {});
+    setHistory(prev => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
+    setAgentState("thinking");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/text-turn`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Unable to process message.");
+      if (data.agent_message) {
+        setHistory(prev => [...prev, { turn: prev.length + 1, speaker: "agent", text: data.agent_message, timestamp: Date.now() }]);
+      }
+      setExtractedData(data.extracted_data || {});
+      setConversationStatus(data.conversation_status || "collecting");
+      setConfirmed(Boolean(data.confirmed));
+      fetchClaimsList(token);
+    } catch (err: any) {
+      setErrorBanner(err.message || "Unable to process message.");
+    } finally {
+      setAgentState("idle");
+    }
   };
 
   const handleSubmitClaim = async () => {
     if (!ticketId || !token) return;
     setSubmittingClaim(true);
     setErrorBanner("");
-
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ confirmed: true }),
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || "Failed to submit claim.");
-      }
-      const resData = await res.json();
-      setSubmittedMessage(resData.message || `Claim successfully submitted! Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to submit claim.");
+      setSubmittedMessage(data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`);
       setConfirmed(true);
-      localStorage.removeItem("active_claim_ticket_id");
       if (isRecording) stopVoiceRecording();
+      fetchClaimsList(token);
     } catch (err: any) {
       setErrorBanner(err.message || "An error occurred while submitting your claim.");
     } finally {
@@ -515,23 +485,31 @@ export default function ClaimantPage() {
     setEditValue(currentVal != null ? String(currentVal) : "");
   };
 
-  const handleSaveEdit = () => {
-    if (!editingField) return;
+  const handleSaveEdit = async () => {
+    if (!editingField || !ticketId || !token) return;
     let parsedVal: any = editValue.trim();
     if (editingField === "estimated_claim_amount") {
       parsedVal = parseFloat(editValue.replace(/[^0-9.]/g, "")) || null;
     }
-    const updated = { ...extractedData, [editingField]: parsedVal };
-    setExtractedData(updated);
-
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "manual_edit", field: editingField, value: parsedVal }));
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ [editingField]: parsedVal }),
+      });
+      if (!res.ok) throw new Error("Could not save this correction.");
+      const data = await res.json();
+      setExtractedData(data.extracted_data || { ...extractedData, [editingField]: parsedVal });
+      setEditingField(null);
+      fetchClaimsList(token);
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not save correction.");
     }
-    setEditingField(null);
   };
 
   const handleLogout = () => {
     if (isRecording) stopVoiceRecording();
+    try { wsRef.current?.close(); } catch {}
     localStorage.removeItem("access_token");
     router.push("/login");
   };
@@ -541,28 +519,33 @@ export default function ClaimantPage() {
     : "New Claim Intake";
 
   return (
-    <div className="bg-[#f7f9fb] text-[#191c1e] font-body antialiased min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
-      {/* Modular Sidebar Component */}
-      <ClaimantSidebar userName={userName} onLogout={handleLogout} />
+    <div className="bg-[#f8fafc] text-[#0f172a] font-body antialiased min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
+      <ClaimantSidebar
+        userName={userName}
+        claims={claimsList}
+        activeTicketId={ticketId}
+        loadingClaims={loadingClaims}
+        onSelectClaim={(id) => loadClaimByTicket(id, token)}
+        onNewClaim={() => startNewSession(token)}
+        onDeleteClaim={handleDeleteClaim}
+        onLogout={handleLogout}
+      />
 
-      {/* Main Canvas */}
       <main className="flex-1 md:ml-64 flex flex-col h-[calc(100vh-57px)] md:h-screen bg-white overflow-hidden">
-        {/* Modular TopBar Component */}
         <ClaimantTopBar
           isRecording={isRecording}
           agentState={agentState}
           currentIncidentTitle={currentIncidentTitle}
-          onStartNewSession={() => startSession(token)}
+          ticketId={ticketId}
+          onStartNewSession={() => startNewSession(token)}
+          onExportTranscript={handleExportTranscript}
           loading={loading}
           errorBanner={errorBanner}
           onDismissError={() => setErrorBanner("")}
         />
 
-        {/* Two Column Layout */}
         <div className="flex flex-1 overflow-hidden flex-col lg:flex-row h-full">
-          {/* Left Column: Conversation & Voice Bar */}
           <div className="flex-1 flex flex-col h-full relative bg-white overflow-hidden">
-            {/* Modular Chat Area Component */}
             <ClaimantChatArea
               history={history}
               partialSegments={partialSegments}
@@ -570,16 +553,18 @@ export default function ClaimantPage() {
               confirmed={confirmed}
               submittedMessage={submittedMessage}
               chatContainerRef={chatContainerRef}
+              linkedPolicies={linkedPolicies}
+              onSelectPromptSuggestion={(text) => handleSendText(undefined, text)}
+              onExportTranscript={handleExportTranscript}
             />
 
-            {/* Modular Voice Console Component */}
             <VoiceConsole
               isRecording={isRecording}
               textMode={textMode}
               setTextMode={setTextMode}
               textInput={textInput}
               setTextInput={setTextInput}
-              onSendText={handleSendText}
+              onSendText={(e) => handleSendText(e)}
               onToggleMic={toggleMic}
               onStopAudio={() => {
                 if (isRecording) stopVoiceRecording();
@@ -589,10 +574,11 @@ export default function ClaimantPage() {
             />
           </div>
 
-          {/* Right Column: Collected Details Panel Component */}
           <CollectedDetailsPanel
             extractedData={extractedData}
+            linkedPolicies={linkedPolicies}
             onOpenEdit={handleOpenEdit}
+            onSelectPolicy={(num) => handleSendText(undefined, num)}
             onSubmitClaim={handleSubmitClaim}
             submittingClaim={submittingClaim}
             confirmed={confirmed}
@@ -601,7 +587,6 @@ export default function ClaimantPage() {
         </div>
       </main>
 
-      {/* Modular Manual Edit Modal Component */}
       <ManualEditModal
         editingField={editingField}
         editValue={editValue}

@@ -1,4 +1,4 @@
-"""Typed state used by the conversational claim-intake graph."""
+"""Typed state for the Phase 1 conversational claim-intake graph."""
 from typing import Any, Dict, List, Optional, TypedDict
 
 
@@ -31,12 +31,10 @@ class ClaimState(TypedDict, total=False):
     current_field_hint: Optional[str]
     clarification_request: Optional[str]
 
-    _skip_extraction: bool
     _skip_all: bool
+    _skip_extraction: bool
+    _confirmation_pending: bool
     _rejection_active: bool
-    _greeting_prefix: Optional[str]
-    _gratitude_prefix: Optional[str]
-    summary_already_shown: Optional[bool]
 
     escalate_to_human: bool
     escalation_reason: Optional[str]

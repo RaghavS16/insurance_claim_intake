@@ -144,66 +144,57 @@ export default function LinkPolicyPage() {
   return (
     <div className="bg-[#f7f9fb] text-[#191c1e] font-body antialiased min-h-screen flex selection:bg-[#b7eaff] selection:text-[#001f28]">
       {/* Desktop Side Navigation Shell */}
-      <nav className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#f7f9fb] border-r border-[#e0e3e5] py-8 px-4 z-40">
-        <div className="mb-8 px-2">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#00647c] text-2xl">waves</span>
-            <h1 className="font-headline text-xl font-bold text-[#191c1e] tracking-tight">InsureClaimAI</h1>
+      <nav className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#f8fafc] border-r border-[#e2e8f0] py-6 px-4 z-40 select-none">
+        <div className="mb-6 px-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white shadow-xs">
+              <span className="material-symbols-outlined text-[20px]">shield_with_heart</span>
+            </div>
+            <div>
+              <h1 className="font-headline text-base font-bold text-[#0f172a] tracking-tight leading-tight">
+                InsureClaimAI
+              </h1>
+              <p className="font-label text-[10px] text-[#64748b] uppercase tracking-wider font-semibold">
+                Autonomous Intake
+              </p>
+            </div>
           </div>
-          <p className="font-label text-xs text-[#505f76] mt-0.5">Kinetic Assurance</p>
         </div>
 
         <div className="flex-1 space-y-1">
           <Link
             href="/claimant"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] hover:bg-[#eceef0] transition-all duration-200 group"
+            className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-600 hover:text-[#00647c] hover:bg-white transition-all text-xs font-semibold"
           >
-            <span className="material-symbols-outlined text-[20px] group-hover:text-[#00647c] transition-colors">
-              dashboard
-            </span>
-            <span className="font-label text-xs font-medium">Active Intake</span>
+            <span className="material-symbols-outlined text-lg">chat_bubble</span>
+            <span>Active Intake & History</span>
           </Link>
-          <div
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] opacity-50 cursor-not-allowed"
-          >
-            <span className="material-symbols-outlined text-[20px]">history</span>
-            <span className="font-label text-xs font-medium">Claims History</span>
-          </div>
-          <div
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#505f76] opacity-50 cursor-not-allowed"
-          >
-            <span className="material-symbols-outlined text-[20px]">description</span>
-            <span className="font-label text-xs font-medium">Documents</span>
-          </div>
           <Link
             href="/link-policy"
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#00647c] font-bold bg-[#eceef0] transition-all duration-200 group relative"
+            className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#00647c] font-bold bg-white border border-[#00647c]/20 shadow-xs text-xs"
           >
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-[#00647c] rounded-r-full"></div>
-            <span className="material-symbols-outlined fill text-[20px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-              settings
-            </span>
-            <span className="font-label text-xs font-semibold">Link Policy</span>
+            <span className="material-symbols-outlined text-lg text-[#00647c]">link</span>
+            <span>Link Policy</span>
           </Link>
         </div>
 
         {/* User Card in Nav */}
-        <div className="mt-auto px-2 pt-6 border-t border-[#e0e3e5] flex items-center justify-between">
+        <div className="mt-auto p-3 border-t border-[#e2e8f0] bg-white rounded-xl flex items-center justify-between shadow-2xs">
           <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-9 h-9 rounded-full bg-[#d0e1fb] text-[#54647a] flex items-center justify-center font-bold text-xs shrink-0">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00647c] to-[#0284c7] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
               {currentUser?.full_name?.charAt(0) || "U"}
             </div>
             <div className="flex flex-col truncate">
-              <span className="font-label text-xs text-[#191c1e] font-semibold truncate">
+              <span className="text-xs text-slate-800 font-semibold truncate leading-tight">
                 {currentUser?.full_name || "User"}
               </span>
-              <span className="text-[10px] text-[#505f76] capitalize">{currentUser?.role?.toLowerCase() || "Claimant"}</span>
+              <span className="text-[10px] text-slate-400 capitalize">Policyholder</span>
             </div>
           </div>
           <button
             onClick={handleLogout}
             title="Sign out"
-            className="text-[#505f76] hover:text-[#ba1a1a] p-1.5 rounded-md hover:bg-[#eceef0] transition-colors cursor-pointer"
+            className="text-slate-400 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
           >
             <span className="material-symbols-outlined text-lg">logout</span>
           </button>

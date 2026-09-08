@@ -1,8 +1,4 @@
-"""
-Centralized application settings and environment validation.
-Uses pydantic-settings to validate required configurations across
-development, staging, and production environments.
-"""
+"""Centralized application settings and environment validation."""
 from pathlib import Path
 from typing import List, Optional
 from pydantic import Field, field_validator, model_validator
@@ -12,8 +8,6 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    """Application settings with environment validation."""
-
     model_config = SettingsConfigDict(env_file=str(_BACKEND_DIR / ".env"), env_file_encoding="utf-8", extra="ignore")
 
     ENVIRONMENT: str = Field("development")
@@ -38,18 +32,16 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = Field(10, ge=0, le=100)
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
 
-    # LLM Settings
-    LLM_PROVIDER: str = "ollama"  # "ollama" for local, "cloud" for OpenAI-compatible cloud endpoint
+    LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
-
-    # Cloud LLM Settings
     CLOUD_LLM_MODEL: str = "Qwen/Qwen3.5-27B"
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
     CLOUD_LLM_API_KEY: Optional[str] = None
+    LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 
-    # Pipecat voice pipeline
     STT_MODEL_SIZE: str = "small"
+    STT_LANGUAGE: str = "en"
     STT_DEVICE: str = "cuda"
     STT_COMPUTE_TYPE: str = "float16"
     VAD_AGGRESSIVENESS: int = Field(1, ge=0, le=3)

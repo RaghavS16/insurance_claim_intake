@@ -1,11 +1,20 @@
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 import { ExtractedData } from "./ExtractionPanel";
 
+export interface LinkedPolicySimple {
+  policy_number: string;
+  policy_type: string;
+  coverage_amount?: number;
+  policyholder_name?: string;
+}
+
 interface CollectedDetailsPanelProps {
   extractedData: ExtractedData;
+  linkedPolicies?: LinkedPolicySimple[];
   onOpenEdit: (field: string, currentVal: any) => void;
+  onSelectPolicy?: (policyNumber: string) => void;
   onSubmitClaim: () => void;
   submittingClaim: boolean;
   confirmed: boolean;
@@ -14,12 +23,16 @@ interface CollectedDetailsPanelProps {
 
 export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   extractedData,
+  linkedPolicies = [],
   onOpenEdit,
+  onSelectPolicy,
   onSubmitClaim,
   submittingClaim,
   confirmed,
   ticketId,
 }) => {
+  const [showPolicyPicker, setShowPolicyPicker] = useState(false);
+
   const pendingCount = [
     !extractedData.policy_id,
     !extractedData.insurance_type,
@@ -28,18 +41,20 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   ].filter(Boolean).length;
 
   return (
-    <div className="w-full lg:w-[400px] xl:w-[460px] bg-[#f7f9fb] flex flex-col h-full border-t lg:border-t-0 lg:border-l border-[#e0e3e5] shrink-0 overflow-hidden">
+    <div className="w-full lg:w-[400px] xl:w-[460px] bg-[#f8fafc] flex flex-col h-full border-t lg:border-t-0 lg:border-l border-[#e2e8f0] shrink-0 overflow-hidden">
       {/* Header */}
-      <div className="p-4 md:p-5 border-b border-[#e0e3e5] bg-white sticky top-0 z-10 flex justify-between items-center shadow-sm shrink-0">
+      <div className="p-4 md:p-5 border-b border-[#e2e8f0] bg-white sticky top-0 z-10 flex justify-between items-center shadow-xs shrink-0">
         <div>
-          <h2 className="font-headline text-base md:text-lg font-bold text-[#191c1e]">Collected Details</h2>
-          <p className="font-label text-xs text-[#505f76]">Review and verify extracted information</p>
+          <h2 className="font-headline text-base md:text-lg font-bold text-[#0f172a]">
+            Collected Details
+          </h2>
+          <p className="font-label text-xs text-[#64748b]">Review and verify extracted information</p>
         </div>
         <span
           className={`font-label text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${
             pendingCount === 0
-              ? "bg-emerald-100 text-emerald-800"
-              : "bg-[#d0e1fb] text-[#54647a]"
+              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+              : "bg-slate-100 text-slate-600 border border-slate-200"
           }`}
         >
           {pendingCount === 0 ? "Ready to Submit" : `${pendingCount} Pending`}
@@ -50,164 +65,229 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
       <div className="p-4 md:p-5 space-y-3.5 flex-1 overflow-y-auto">
         {/* Detail Card: Policy ID */}
         <div
-          className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-sm ${
-            extractedData.policy_id ? "border-[#00647c]" : "border-[#bdc8ce]"
+          className={`bg-white border rounded-xl p-4 flex flex-col gap-2 relative overflow-hidden shadow-xs ${
+            extractedData.policy_id ? "border-[#00647c] ring-1 ring-[#00647c]/10" : "border-[#cbd5e1]"
           }`}
         >
-          {extractedData.policy_id && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>}
+          {extractedData.policy_id && (
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#00647c]"></div>
+          )}
           <div className="flex justify-between items-start pl-1">
-            <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
               Policy ID
             </span>
             <button
               onClick={() => onOpenEdit("policy_id", extractedData.policy_id)}
-              className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
             </button>
           </div>
           <div className="flex items-center gap-2 pl-1">
-            <span className="material-symbols-outlined text-[#505f76] text-[20px]">verified_user</span>
-            <span className="font-body text-sm text-[#191c1e] font-semibold font-mono">
-              {extractedData.policy_id || <span className="text-[#505f76] font-normal italic">Not specified yet</span>}
+            <span className="material-symbols-outlined text-[#64748b] text-[20px]">verified_user</span>
+            <span className="font-body text-sm text-[#0f172a] font-semibold font-mono">
+              {extractedData.policy_id || (
+                <span className="text-[#94a3b8] font-normal italic">Not specified yet</span>
+              )}
             </span>
           </div>
+
+          {/* Quick Policy Selector */}
           {!extractedData.policy_id && (
-            <Link
-              href="/link-policy"
-              className="text-[11px] text-[#0891B2] font-semibold hover:underline mt-1 pl-1 flex items-center gap-1"
-            >
-              <span>Select from linked policies</span>
-              <span className="material-symbols-outlined text-xs">arrow_forward</span>
-            </Link>
+            <div className="mt-1 pt-1 border-t border-slate-100 pl-1 space-y-2">
+              {linkedPolicies.length > 0 ? (
+                <div>
+                  <button
+                    onClick={() => setShowPolicyPicker(!showPolicyPicker)}
+                    className="text-[11px] text-[#00647c] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Choose from {linkedPolicies.length} linked policies</span>
+                    <span className="material-symbols-outlined text-xs">
+                      {showPolicyPicker ? "expand_less" : "expand_more"}
+                    </span>
+                  </button>
+
+                  {showPolicyPicker && (
+                    <div className="mt-2 space-y-1.5 p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      {linkedPolicies.map((p) => (
+                        <div
+                          key={p.policy_number}
+                          onClick={() => {
+                            onSelectPolicy?.(p.policy_number);
+                            setShowPolicyPicker(false);
+                          }}
+                          className="p-2 bg-white hover:bg-cyan-50 border border-slate-200 hover:border-[#00647c] rounded-md cursor-pointer transition-colors flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-mono text-xs font-bold text-[#00647c]">
+                              {p.policy_number}
+                            </p>
+                            <p className="text-[10px] text-slate-500 capitalize">
+                              {p.policy_type} Insurance
+                            </p>
+                          </div>
+                          <span className="material-symbols-outlined text-sm text-[#00647c]">
+                            check_circle
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link
+                  href="/link-policy"
+                  className="text-[11px] text-[#00647c] font-semibold hover:underline flex items-center gap-1"
+                >
+                  <span>Link a policy to your account</span>
+                  <span className="material-symbols-outlined text-xs">arrow_forward</span>
+                </Link>
+              )}
+            </div>
           )}
         </div>
 
         {/* Detail Card: Insurance Type */}
-        <div className="bg-white border border-[#bdc8ce] rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
               Insurance Type
             </span>
             <button
               onClick={() => onOpenEdit("insurance_type", extractedData.insurance_type)}
-              className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
             </button>
           </div>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-[#00647c] text-[20px]">category</span>
-            <span className="font-body text-sm text-[#191c1e] font-semibold capitalize">
+            <span className="font-body text-sm text-[#0f172a] font-semibold capitalize">
               {extractedData.insurance_type ? (
-                (SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] || extractedData.insurance_type
+                (SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] ||
+                extractedData.insurance_type
               ) : (
-                <span className="text-[#505f76] font-normal italic">Pending classification...</span>
+                <span className="text-[#94a3b8] font-normal italic">Pending classification...</span>
               )}
             </span>
           </div>
         </div>
 
         {/* Detail Card: Incident Date */}
-        <div className="bg-white border border-[#bdc8ce] rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
               Incident Date
             </span>
             <button
               onClick={() => onOpenEdit("event_date", extractedData.event_date)}
-              className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#00647c] text-[20px]">event</span>
-            <span className="font-body text-sm text-[#191c1e] font-semibold">
+            <span className="material-symbols-outlined text-[#64748b] text-[20px]">calendar_today</span>
+            <span className="font-body text-sm text-[#0f172a] font-semibold">
               {extractedData.event_date || (
-                <span className="text-[#505f76] font-normal italic">Waiting for date...</span>
+                <span className="text-[#94a3b8] font-normal italic">Waiting for date...</span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Detail Card: Incident Location */}
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs">
+          <div className="flex justify-between items-start">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
+              Incident Location
+            </span>
+            <button
+              onClick={() => onOpenEdit("event_location", extractedData.event_location)}
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px]">edit</span>
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[#64748b] text-[20px]">location_on</span>
+            <span className="font-body text-sm text-[#0f172a] font-semibold">
+              {extractedData.event_location || (
+                <span className="text-[#94a3b8] font-normal italic">Collecting location...</span>
               )}
             </span>
           </div>
         </div>
 
         {/* Detail Card: Estimated Loss */}
-        <div className="bg-white border border-[#bdc8ce] rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
               Estimated Loss (INR)
             </span>
             <button
               onClick={() => onOpenEdit("estimated_claim_amount", extractedData.estimated_claim_amount)}
-              className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
             </button>
           </div>
-          <div className="flex items-center gap-2 pl-1">
+          <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-[#00647c] text-[20px]">payments</span>
-            <span className="font-body text-sm text-[#191c1e] font-semibold">
+            <span className="font-body text-sm text-[#0f172a] font-semibold">
               {extractedData.estimated_claim_amount != null ? (
-                `₹${extractedData.estimated_claim_amount.toLocaleString()}`
+                `₹${Number(extractedData.estimated_claim_amount).toLocaleString("en-IN")}`
               ) : (
-                <span className="text-[#505f76] font-normal italic">Discussing damage cost...</span>
+                <span className="text-[#94a3b8] font-normal italic">Discussing damage cost...</span>
               )}
             </span>
           </div>
         </div>
 
-        {/* Detail Card: Description Summary */}
-        <div className="bg-white border border-[#bdc8ce] rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+        {/* Detail Card: Description */}
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs">
           <div className="flex justify-between items-start">
-            <span className="font-label text-[11px] text-[#505f76] font-semibold uppercase tracking-wider">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">
               Description Summary
             </span>
             <button
               onClick={() => onOpenEdit("event_description", extractedData.event_description)}
-              className="text-[#00647c] hover:text-[#007f9d] p-0.5 rounded cursor-pointer"
+              className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
             </button>
           </div>
-          <div className="flex items-start gap-2">
-            <span className="material-symbols-outlined text-[#505f76] text-[18px] mt-0.5">subject</span>
-            <p className="font-body text-xs text-[#191c1e] leading-relaxed">
-              {extractedData.event_description || (
-                <span className="text-[#505f76] italic">
-                  Voice summaries will update automatically as you converse with the AI assistant.
-                </span>
-              )}
-            </p>
-          </div>
+          <p className="font-body text-xs text-[#334155] leading-relaxed line-clamp-3">
+            {extractedData.event_description || (
+              <span className="text-[#94a3b8] italic">No description recorded yet</span>
+            )}
+          </p>
         </div>
       </div>
 
-      {/* Action Footer */}
-      <div className="p-4 border-t border-[#e0e3e5] bg-white shrink-0 shadow-sm">
+      {/* Submission CTA Footer */}
+      <div className="p-4 md:p-5 border-t border-[#e2e8f0] bg-white shrink-0">
         <button
-          type="button"
           onClick={onSubmitClaim}
-          disabled={submittingClaim || confirmed || !ticketId}
-          className="w-full bg-[#00647c] hover:bg-[#007f9d] text-white font-label text-xs font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm"
+          disabled={submittingClaim || confirmed}
+          className={`w-full py-3 px-4 rounded-xl font-label text-xs font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center gap-2 shadow-xs ${
+            confirmed
+              ? "bg-emerald-600 text-white cursor-default"
+              : "bg-[#00647c] hover:bg-[#004e61] text-white cursor-pointer active:scale-[0.99]"
+          } ${submittingClaim ? "opacity-75 cursor-wait" : ""}`}
         >
-          {submittingClaim ? (
-            <>
-              <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-              <span>Submitting Claim...</span>
-            </>
-          ) : confirmed ? (
-            <>
-              <span className="material-symbols-outlined text-base">check</span>
-              <span>Claim Submitted</span>
-            </>
-          ) : (
-            <>
-              <span className="material-symbols-outlined text-base">send</span>
-              <span>
-                Submit Claim {pendingCount > 0 ? `(${pendingCount} Items Incomplete)` : ""}
-              </span>
-            </>
-          )}
+          <span className="material-symbols-outlined text-base">
+            {confirmed ? "check_circle" : "send"}
+          </span>
+          <span>
+            {confirmed
+              ? "Claim Submitted"
+              : submittingClaim
+              ? "Submitting Claim..."
+              : pendingCount > 0
+              ? `Submit Claim (${pendingCount} Items Incomplete)`
+              : "Submit Verified Claim"}
+          </span>
         </button>
       </div>
     </div>

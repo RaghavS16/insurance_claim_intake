@@ -4,6 +4,7 @@ import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 export interface ExtractedData {
   policy_id?: string | null;
   event_date?: string | null;
+  event_location?: string | null;
   insurance_type?: string | null;
   event_description?: string | null;
   estimated_claim_amount?: number | null;

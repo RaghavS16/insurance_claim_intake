@@ -1,465 +1,103 @@
 """
 Claim intake and management API routes.
 
-Handles claim creation, voice sessions, text intake, confirmation,
-document upload, and claim listing.
-Extracted from the monolithic main.py for clean architectural separation.
+Phase 1 owns the persistent claimant conversation: draft sessions can be
+resumed after navigation, browser refresh, or a disconnected voice socket.
 """
-import os
 import uuid
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import Claim, ConversationTurn, User
-from src.agents.graph import build_conversation_graph
 from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
+from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
 
-
-
-
-# ---------------------------------------------------------------------------
-# Request Models
-# ---------------------------------------------------------------------------
 class ClaimIntakeRequest(BaseModel):
-    claim_text: str = Field(..., min_length=1, max_length=5000, description="User utterance or input text")
-    input_mode: str = Field("text", description="'voice' or 'text'")
-    ticket_id: Optional[str] = Field(None, description="Existing claim ticket ID for subsequent turns")
-
+    claim_text: str = Field(..., min_length=1, max_length=5000)
+    input_mode: str = Field("text")
+    ticket_id: Optional[str] = None
 
 class ClaimConfirmRequest(BaseModel):
-    confirmed: bool = Field(True, description="True to confirm and submit claim")
-
+    confirmed: bool = Field(True)
 
 class VoiceSessionRequest(BaseModel):
-    policy_number: Optional[str] = Field(None, description="Preselected policy number")
-
+    policy_number: Optional[str] = None
 
 class TextTurnRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000, description="User text turn message")
-
+    text: str = Field(..., min_length=1, max_length=5000)
 
 class UpdateClaimRequest(BaseModel):
     policy_id: Optional[str] = None
     insurance_type: Optional[str] = None
     event_date: Optional[str] = None
     event_description: Optional[str] = None
+    event_location: Optional[str] = None
     estimated_claim_amount: Optional[float] = None
     extracted_data: Optional[Dict[str, Any]] = None
 
 
-# ---------------------------------------------------------------------------
-# Lazy dependency accessor to avoid circular imports
-# ---------------------------------------------------------------------------
-def _get_current_user():
-    """Lazy import to break the circular dependency between main.py and route modules."""
-    from src.api.main import get_current_user
-    return get_current_user
+def _resolve_user(request: Request, db: Session) -> User:
+    """Resolve the authenticated claimant for both HTTP and test requests."""
+    auth = request.headers.get("authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else None
+    uid = None
+    if token:
+        payload = verify_token(token)
+        uid = payload.get("sub") if payload else None
+    elif settings.ENVIRONMENT == "test":
+        uid = request.headers.get("X-User-ID")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    user = db.query(User).filter(User.id == uid).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authenticated user not found.")
+    return user
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-@router.post("/voice-session")
-def start_voice_session(
-    request: Request,
-    payload: Optional[VoiceSessionRequest] = None,
-    db: Session = Depends(get_db),
-):
-    """Create a new draft claim session and return ticket_id for WebSocket voice streaming."""
-    current_user = _resolve_user(request, db)
-    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
-    
-    init_extracted: Dict[str, Any] = {}
-    if payload and payload.policy_number:
-        init_extracted["policy_id"] = payload.policy_number.strip().upper()
-    
-    claim = Claim(
-        ticket_id=ticket_id,
-        claimant_id=current_user.id,
-        customer_id=str(current_user.id),
-        input_mode="voice",
-        status="draft",
-        conversation_status="not_started",
-        pipeline_state={"extracted_data": init_extracted} if init_extracted else {},
-    )
-    db.add(claim)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to create voice session")
-        raise HTTPException(status_code=500, detail="Failed to create claim session.")
+def _claim_payload(claim: Claim) -> Dict[str, Any]:
+    state = dict(getattr(claim, "pipeline_state", None) or {})
     return {
-        "ticket_id": ticket_id,
-        "extracted_data": init_extracted,
-        "initial_message": "Please tell me what happened. You can describe the incident in your own words, and I'll collect the details I need.",
-    }
-
-
-@router.post("/intake")
-async def intake_claim(
-    payload: ClaimIntakeRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Process user claim utterance, extract mandatory fields, and evaluate missing fields."""
-    current_user = _resolve_user(request, db)
-    claim = None
-    user_id = str(current_user.id)
-
-    if payload.ticket_id:
-        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id).first()
-        if not claim:
-            raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-        enforce_claim_ownership(claim, current_user)
-
-    # Short-circuit if already evaluated to prevent overwriting confirmed data
-    if claim and getattr(claim, "status", None) == "evaluated":
-        state = dict(getattr(claim, "pipeline_state", None) or {})
-        return {
-            "ticket_id": claim.ticket_id,
-            "extracted_data": state.get("extracted_data", {}),
-            "missing_fields": state.get("missing_fields", []),
-            "awaiting_confirmation": state.get("awaiting_confirmation", True),
-            "message": "Claim already evaluated. Use GET /api/v1/claims/{ticket_id} to see result.",
-        }
-
-    ticket_id = payload.ticket_id or (claim.ticket_id if claim else f"CLAIM-{uuid.uuid4().hex[:8].upper()}")
-
-    if claim is None:
-        claim = Claim(
-            ticket_id=ticket_id,
-            claimant_id=current_user.id,
-            customer_id=user_id,
-            input_mode=payload.input_mode,
-            status="draft",
-        )
-        db.add(claim)
-        db.flush()
-
-    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
-    turn_num = prior_turns + 1
-
-    try:
-        result = await process_claimant_turn(db, claim, payload.claim_text, payload.input_mode, turn_num)
-    except Exception as exc:
-        logger.exception("intake_claim: conversation turn processing failed")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The claim processing pipeline encountered an error. "
-                "Please try again in a moment. "
-                f"(Error: {type(exc).__name__})"
-            ),
-        )
-
-    return {
-        "ticket_id": ticket_id,
-        "extracted_data": result.get("extracted_data", {}),
-        "missing_fields": result.get("missing_fields", []),
-        "field_status": result.get("field_status", {}),
-        "awaiting_confirmation": result.get("awaiting_confirmation", False),
-        "confirmed": result.get("confirmed", False),
-        "conversation_status": result.get("conversation_status"),
-        "message": result.get("next_question") or result.get("message", ""),
-    }
-
-
-@router.post("/{ticket_id}/text-turn")
-async def claim_text_turn(
-    ticket_id: str,
-    payload: TextTurnRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Process a typed text turn for an active claim session."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
-    turn_num = prior_turns + 1
-
-    try:
-        result = await process_claimant_turn(db, claim, payload.text, "text", turn_num)
-    except Exception as exc:
-        logger.exception("claim_text_turn: processing failed")
-        raise HTTPException(
-            status_code=503,
-            detail=f"The claim processing pipeline encountered an error. ({type(exc).__name__})",
-        )
-
-    agent_msg = result.get("next_question") or result.get("message", "")
-    return {
-        "ticket_id": ticket_id,
-        "extracted_data": result.get("extracted_data", {}),
-        "missing_fields": result.get("missing_fields", []),
-        "field_status": result.get("field_status", {}),
-        "awaiting_confirmation": result.get("awaiting_confirmation", False),
-        "confirmed": result.get("confirmed", False),
-        "conversation_status": result.get("conversation_status"),
-        "agent_message": agent_msg,
-        "message": agent_msg,
-        "escalate_to_human": result.get("escalate_to_human", False),
-        "escalation_reason": result.get("escalation_reason", ""),
-    }
-
-
-def _verify_response(claim, state, cached=False):
-    return {
+        "id": str(claim.id) if claim.id else None,
         "ticket_id": claim.ticket_id,
         "status": claim.status,
-        "extracted_data": state.get("extracted_data", {}),
-        "policy_verification": state.get("policy_verification"),
-        "message": "Claim already verified.",
-        "_cached": cached,
+        "conversation_status": claim.conversation_status,
+        "insurance_type": claim.insurance_type,
+        "event_date": claim.event_date.isoformat() if claim.event_date else None,
+        "event_description": claim.event_description,
+        "event_location": claim.event_location,
+        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
+        "extracted_data": state.get("extracted_data") or {},
+        "missing_fields": state.get("missing_fields") or [],
+        "field_status": state.get("field_status") or {},
+        "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
+        "confirmed": bool(state.get("confirmed")),
+        "created_at": claim.created_at.isoformat() if claim.created_at else None,
+        "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }
 
 
-def _verification_failure_message(reason: str) -> str:
-    messages = {
-        "policy_not_found": "We couldn't find a policy with that number. Please double-check and try again.",
-        "policy_not_linked": "Please link this policy to your account before filing a claim.",
-        "ownership_mismatch": "This policy isn't linked to your account. Please verify the policy number.",
-        "insurance_type_mismatch": "This policy type doesn't match the claim you're filing.",
-        "policy_inactive": "This policy is currently inactive.",
-        "policy_not_active_on_event_date": "This policy wasn't active on the date you reported. Please check the incident date and policy number.",
-        "missing_event_date": "We need a valid incident date to verify your policy.",
-        "invalid_event_date": "The incident date couldn't be understood. Please provide it again.",
-        "no_policy_id": "We need your policy number to verify this claim.",
-    }
-    return messages.get(reason, "We couldn't verify your policy. A specialist will follow up.")
-
-
-@router.post("/{ticket_id}/verify")
-def verify_claim(
-    ticket_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    state = dict(getattr(claim, "pipeline_state", None) or {})
-    missing = state.get("missing_fields", [])
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Cannot verify claim: missing mandatory fields {missing}.")
-
-    if claim.status == "verified":
-        return _verify_response(claim, state, cached=True)
-
-    extracted = state.get("extracted_data", {})
-    raw_itype = extracted.get("insurance_type") or getattr(claim, "insurance_type", None)
-    insurance_type = str(raw_itype) if raw_itype else None
-    verification = verify_policy_for_claim(
-        policy_id=extracted.get("policy_id"),
-        event_date_str=extracted.get("event_date"),
-        claimant_user_id=str(current_user.id),
-        insurance_type=insurance_type,
-        db=db,
-    )
-
-    if verification["valid"]:
-        claim.status = "verified"  # type: ignore
-        claim.conversation_status = "verified"  # type: ignore
-        message = "Your claim details have been verified."
-    else:
-        claim.status = "verification_failed"  # type: ignore
-        claim.conversation_status = "verification_failed"  # type: ignore
-        message = _verification_failure_message(verification.get("reason", ""))
-
-    state["policy_verification"] = verification
-    claim.pipeline_state = state  # type: ignore
-    db.commit()
-
-    return {
-        "ticket_id": claim.ticket_id,
-        "status": claim.status,
-        "extracted_data": extracted,
-        "policy_verification": verification,
-        "message": message,
-    }
-
-
-@router.post("/{ticket_id}/confirm")
-@router.post("/confirm/{ticket_id}")
-async def confirm_claim(
-    ticket_id: str,
-    request: Request,
-    payload: Optional[ClaimConfirmRequest] = None,
-    db: Session = Depends(get_db),
-):
-    """
-    Confirm and submit a claim after verifying required fields and policy validity.
-    Assigns claim to specialization adjuster and marks status as submitted/confirmed.
-    """
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    state = dict(getattr(claim, "pipeline_state", None) or {})
-    extracted = dict(state.get("extracted_data") or {})
-
-    # Extract all required claim fields
-    policy_id = extracted.get("policy_id")
-    raw_itype = extracted.get("insurance_type") or getattr(claim, "insurance_type", None)
-    insurance_type = str(raw_itype) if raw_itype else None
-    event_date_str = extracted.get("event_date") or (str(claim.event_date) if claim.event_date else None)
-    est_amount = extracted.get("estimated_claim_amount") or getattr(claim, "estimated_claim_amount", None)
-
-    missing = []
-    if not policy_id:
-        missing.append("Policy ID")
-    if not insurance_type:
-        missing.append("Insurance Category")
-    if not event_date_str:
-        missing.append("Incident Date")
-    if est_amount is None:
-        missing.append("Estimated Cost")
-
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot submit claim: Please provide all required details: {', '.join(missing)}.",
-        )
-
-    # Perform strict policy verification against database
-    verification = verify_policy_for_claim(
-        policy_id=str(policy_id),
-        event_date_str=str(event_date_str),
-        claimant_user_id=str(current_user.id),
-        insurance_type=insurance_type,
-        db=db,
-    )
-
-    if not verification.get("valid"):
-        reason = verification.get("reason", "")
-        fail_msg = _verification_failure_message(reason)
-        claim.status = "verification_failed"
-        claim.conversation_status = "verification_failed"
-        state["policy_verification"] = verification
-        claim.pipeline_state = state
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Claim verification failed: {fail_msg}",
-        )
-
-    # Policy verified: Link policy foreign key if available
-    from src.database.models import Policy
-    pol_record = db.query(Policy).filter(Policy.policy_number == str(policy_id).strip().upper()).first()
-    if pol_record:
-        claim.policy_id = pol_record.id
-
-    # Mark as confirmed / submitted
-    claim.status = "submitted"
-    claim.conversation_status = "confirmed"
-
-    state["confirmed"] = True
-    state["awaiting_confirmation"] = False
-    state["policy_verification"] = verification
-    claim.pipeline_state = state
-
-    # Assign to an adjuster matching the specialization if available
-    try:
-        from src.database.models import Adjuster
-        claim_itype = claim.insurance_type or extracted.get("insurance_type")
-        if claim_itype:
-            adjuster = db.query(Adjuster).filter(
-                Adjuster.specialization == claim_itype,
-                Adjuster.is_active == True
-            ).first()
-            if adjuster:
-                adjuster.claims_assigned = (adjuster.claims_assigned or 0) + 1
-    except Exception:
-        pass
-
-    try:
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to confirm claim: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to save claim confirmation.")
-
-    return {
-        "ticket_id": claim.ticket_id,
-        "status": "submitted",
-        "conversation_status": "confirmed",
-        "confirmed": True,
-        "policy_verification": verification,
-        "message": f"Claim #{ticket_id} has been verified, confirmed, and submitted to an adjuster.",
-    }
-
-
-@router.post("/message/{ticket_id}")
-async def send_claim_message(
-    ticket_id: str,
-    payload: Dict[str, Any],
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Text-based message submission fallback for claim intake."""
-    message_text = payload.get("message") or payload.get("text") or ""
-    req = ClaimIntakeRequest(
-        claim_text=message_text,
-        input_mode="text",
-        ticket_id=ticket_id,
-    )
-    result = await intake_claim(req, request, db)
-    return {
-        "ticket_id": ticket_id,
-        "agent_message": result.get("message"),
-        "extracted_data": result.get("extracted_data"),
-        "missing_fields": result.get("missing_fields"),
-        "confirmed": result.get("confirmed", False),
-    }
-
-
-@router.get("/{ticket_id}/conversation")
-def get_conversation_history(
-    ticket_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Fetch the complete chronological conversation turns for a claim."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
+def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
     turns = (
         db.query(ConversationTurn)
         .filter(ConversationTurn.claim_id == claim.id)
-        .order_by(ConversationTurn.turn_number, ConversationTurn.created_at)
+        .order_by(ConversationTurn.turn_number, ConversationTurn.created_at, ConversationTurn.id)
         .all()
     )
     return [
         {
             "turn": t.turn_number,
-            "speaker": t.speaker,
+            "speaker": "user" if t.speaker in {"user", "claimant"} else "agent",
             "text": t.text,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
@@ -467,171 +105,309 @@ def get_conversation_history(
     ]
 
 
-@router.get("/{ticket_id}")
-def get_claim(
-    ticket_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Retrieve current status and structured state of a claim."""
+@router.get("")
+@router.get("/")
+def list_user_claims(request: Request, db: Session = Depends(get_db)):
+    """List all claims belonging to the authenticated claimant, newest first."""
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
+    claims = (
+        db.query(Claim)
+        .filter(Claim.claimant_id == current_user.id)
+        .order_by(Claim.updated_at.desc())
+        .all()
+    )
+    result = []
+    for c in claims:
+        payload = _claim_payload(c)
+        last_turn = (
+            db.query(ConversationTurn)
+            .filter(ConversationTurn.claim_id == c.id)
+            .order_by(ConversationTurn.turn_number.desc(), ConversationTurn.created_at.desc())
+            .first()
+        )
+        turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id).count()
+        payload["last_message"] = last_turn.text if last_turn else None
+        payload["last_message_speaker"] = last_turn.speaker if last_turn else None
+        payload["turn_count"] = turn_count
+        result.append(payload)
+    return {"items": result, "total": len(result)}
 
-    state = claim.pipeline_state or {}
-    return {
-        "ticket_id": claim.ticket_id,
-        "status": claim.status,
-        "conversation_status": claim.conversation_status,
-        "insurance_type": claim.insurance_type,
-        "event_date": str(claim.event_date) if claim.event_date else None,
-        "event_description": claim.event_description,
-        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,  # type: ignore[arg-type]
-        "extracted_data": state.get("extracted_data") or {},
-        "missing_fields": state.get("missing_fields") or [],
-        "response_message": state.get("response_message"),
-        "created_at": claim.created_at.isoformat() if claim.created_at else None,
-    }
 
-
-@router.patch("/{ticket_id}")
-def update_claim_details(
-    ticket_id: str,
-    payload: UpdateClaimRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """Partially update claim details and extracted data."""
-    from datetime import datetime
+@router.post("/new-session")
+def create_new_claim_session(request: Request, payload: Optional[VoiceSessionRequest] = None, db: Session = Depends(get_db)):
+    """Force creation of a brand new claim session regardless of existing drafts."""
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, current_user)
-
-    state = dict(getattr(claim, "pipeline_state", None) or {})
-    extracted = dict(state.get("extracted_data") or {})
-
-    if payload.extracted_data:
-        extracted.update(payload.extracted_data)
-
-    if payload.policy_id is not None:
-        extracted["policy_id"] = payload.policy_id.strip().upper() if payload.policy_id else None
-
-    if payload.insurance_type is not None:
-        claim.insurance_type = payload.insurance_type.strip().lower() if payload.insurance_type else None
-        extracted["insurance_type"] = claim.insurance_type
-
-    if payload.event_date is not None:
-        extracted["event_date"] = payload.event_date.strip() if payload.event_date else None
-        if payload.event_date and payload.event_date.strip():
-            try:
-                claim.event_date = datetime.strptime(payload.event_date.strip(), "%Y-%m-%d").date()
-            except ValueError:
-                pass
-
-    if payload.event_description is not None:
-        claim.event_description = payload.event_description
-        extracted["event_description"] = payload.event_description
-
-    if payload.estimated_claim_amount is not None:
-        claim.estimated_claim_amount = payload.estimated_claim_amount
-        extracted["estimated_claim_amount"] = payload.estimated_claim_amount
-
-    state["extracted_data"] = extracted
-    claim.pipeline_state = state
-
+    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    init_extracted: Dict[str, Any] = {}
+    if payload and payload.policy_number:
+        init_extracted["policy_id"] = payload.policy_number.strip().upper()
+    claim = Claim(
+        ticket_id=ticket_id,
+        claimant_id=current_user.id,
+        customer_id=str(current_user.id),
+        input_mode="text",
+        status="draft",
+        conversation_status="collecting",
+        pipeline_state={"extracted_data": init_extracted} if init_extracted else {},
+    )
+    db.add(claim)
     try:
         db.commit()
         db.refresh(claim)
     except Exception:
         db.rollback()
-        logger.exception("Failed to patch claim %s", ticket_id)
-        raise HTTPException(status_code=500, detail="Failed to update claim.")
-
+        logger.exception("Failed to create new claim session")
+        raise HTTPException(status_code=500, detail="Failed to create claim session.")
     return {
-        "ticket_id": claim.ticket_id,
-        "status": claim.status,
-        "conversation_status": claim.conversation_status,
-        "insurance_type": claim.insurance_type,
-        "event_date": str(claim.event_date) if claim.event_date else None,
-        "event_description": claim.event_description,
-        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
-        "extracted_data": extracted,
-        "message": "Claim updated successfully.",
+        **_claim_payload(claim),
+        "resumed": False,
+        "initial_message": "Tell me what happened, in your own words. I'll collect the details as we go.",
+        "conversation": [],
     }
 
 
-@router.get("")
-def list_claims(
-    request: Request,
-    page: int = 1,
-    page_size: int = 20,
-    db: Session = Depends(get_db),
-):
-    """List claims owned by the authenticated user with pagination."""
+@router.post("/voice-session")
+def start_voice_session(request: Request, payload: Optional[VoiceSessionRequest] = None, db: Session = Depends(get_db)):
+    """Create a draft only when no resumable draft exists; otherwise resume it."""
     current_user = _resolve_user(request, db)
+    resumable = (
+        db.query(Claim)
+        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.status.in_(["draft", "pending_confirmation"]))
+        .order_by(Claim.updated_at.desc())
+        .first()
+    )
+    if resumable:
+        return {
+            **_claim_payload(resumable),
+            "resumed": True,
+            "initial_message": "Welcome back. We can continue from where we left off.",
+            "conversation": _conversation_payload(db, resumable),
+        }
 
-    if page < 1:
-        page = 1
-    if page_size < 1 or page_size > 100:
-        page_size = 20
+    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    init_extracted: Dict[str, Any] = {}
+    if payload and payload.policy_number:
+        init_extracted["policy_id"] = payload.policy_number.strip().upper()
+    claim = Claim(
+        ticket_id=ticket_id,
+        claimant_id=current_user.id,
+        customer_id=str(current_user.id),
+        input_mode="voice",
+        status="draft",
+        conversation_status="collecting",
+        pipeline_state={"extracted_data": init_extracted} if init_extracted else {},
+    )
+    db.add(claim)
+    try:
+        db.commit(); db.refresh(claim)
+    except Exception:
+        db.rollback(); logger.exception("Failed to create voice session")
+        raise HTTPException(status_code=500, detail="Failed to create claim session.")
+    return {**_claim_payload(claim), "resumed": False, "initial_message": "Tell me what happened, in your own words. I'll collect the details as we go.", "conversation": []}
 
-    user_id = str(current_user.id)
-    query = db.query(Claim).filter(
-        (Claim.claimant_id == current_user.id) | (Claim.customer_id == user_id)
-    ).order_by(Claim.created_at.desc())
 
-    total = query.count()
-    offset = (page - 1) * page_size
-    claims = query.offset(offset).limit(page_size).all()
+@router.get("/active")
+def get_active_claim(request: Request, db: Session = Depends(get_db)):
+    """Return the claimant's newest resumable draft and its complete chat history."""
+    current_user = _resolve_user(request, db)
+    claim = (
+        db.query(Claim)
+        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.status.in_(["draft", "pending_confirmation"]))
+        .order_by(Claim.updated_at.desc())
+        .first()
+    )
+    if not claim:
+        return {"active": False}
+    return {"active": True, **_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
 
-    results = []
-    for c in claims:
-        st = c.pipeline_state or {}
-        results.append({
-            "id": str(c.id),
-            "ticket_id": c.ticket_id,
-            "insurance_type": c.insurance_type,
-            "status": c.status,
-            "conversation_status": c.conversation_status,
-            "extracted_data": st.get("extracted_data") or {},
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        })
+
+@router.get("/{ticket_id}/conversation")
+def get_conversation_history(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    return _conversation_payload(db, claim)
+
+
+@router.get("/{ticket_id}/export")
+def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    """Export formatted conversation transcript and extracted claim dossier."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    turns = _conversation_payload(db, claim)
+    payload = _claim_payload(claim)
+    
+    formatted_lines = [
+        f"=== INSURANCE CLAIM INTAKE DOSSIER ===",
+        f"Ticket ID: #{claim.ticket_id}",
+        f"Status: {claim.status.upper()}",
+        f"Insurance Type: {claim.insurance_type or 'Unspecified'}",
+        f"Incident Date: {claim.event_date or 'Unspecified'}",
+        f"Incident Location: {claim.event_location or 'Unspecified'}",
+        f"Estimated Amount: ₹{claim.estimated_claim_amount:,.2f}" if claim.estimated_claim_amount is not None else "Estimated Amount: Unspecified",
+        f"Description: {claim.event_description or 'Unspecified'}",
+        f"Created At: {claim.created_at}",
+        f"\n=== CONVERSATION TRANSCRIPT ({len(turns)} messages) ===",
+    ]
+    for t in turns:
+        speaker_tag = "CLAIMANT" if t["speaker"] == "user" else "ASSISTANT"
+        ts = f" [{t['created_at']}]" if t.get("created_at") else ""
+        formatted_lines.append(f"Turn {t['turn']} | {speaker_tag}{ts}:\n{t['text']}\n")
+        
     return {
-        "items": results,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
+        "claim": payload,
+        "turns": turns,
+        "formatted_text": "\n".join(formatted_lines),
     }
 
 
-
-
-# ---------------------------------------------------------------------------
-# Helper: resolve authenticated user from request
-# ---------------------------------------------------------------------------
-def _resolve_user(request: Request, db: Session) -> User:
-    """
-    Resolve authenticated user via the centralized get_current_user dependency.
-    Uses lazy import to avoid circular imports.
-    """
-    from src.api.main import get_current_user
-    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+@router.delete("/{ticket_id}")
+def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    """Allow claimant to discard their own draft session."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation"):
+        raise HTTPException(status_code=400, detail="Only draft claims can be deleted.")
     
-    security = HTTPBearer(auto_error=False)
-    # Extract token from Authorization header
-    auth_header = request.headers.get("authorization", "")
-    credentials = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    
-    # Call get_current_user with the resolved dependencies
-    db_gen = None
+    # Delete associated conversation turns first
+    db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()
+    db.delete(claim)
     try:
-        return get_current_user(request=request, credentials=credentials, db=db)
+        db.commit()
     except Exception:
-        raise
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete claim session.")
+    return {"message": f"Claim #{ticket_id} and history removed.", "success": True}
+
+
+@router.get("/{ticket_id}")
+def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
+
+
+@router.post("/intake")
+async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = None
+    if payload.ticket_id:
+        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id).first()
+        if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+        enforce_claim_ownership(claim, current_user)
+    if claim is None:
+        claim = Claim(ticket_id=f"CLAIM-{uuid.uuid4().hex[:8].upper()}", claimant_id=current_user.id, customer_id=str(current_user.id), input_mode=payload.input_mode, status="draft")
+        db.add(claim); db.flush()
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    try:
+        result = await process_claimant_turn(db, claim, payload.claim_text, payload.input_mode, prior_turns // 2 + 1)
+    except Exception as exc:
+        logger.exception("Claim conversation processing failed")
+        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+    return {**_claim_payload(claim), "message": result.get("next_question") or result.get("message", "")}
+
+
+@router.post("/{ticket_id}/text-turn")
+async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    try:
+        result = await process_claimant_turn(db, claim, payload.text, "text", prior_turns // 2 + 1)
+    except Exception as exc:
+        logger.exception("Text turn processing failed")
+        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+    return {**_claim_payload(claim), "agent_message": result.get("next_question") or result.get("message", "")}
+
+
+def _verification_failure_message(reason: str) -> str:
+    return {
+        "policy_not_found": "I couldn't find that policy number. Please double-check it.",
+        "policy_not_linked": "Please link this policy to your account before filing a claim.",
+        "ownership_mismatch": "That policy isn't linked to your account.",
+        "insurance_type_mismatch": "That policy type doesn't match this claim.",
+        "policy_inactive": "That policy is currently inactive.",
+        "policy_not_active_on_event_date": "The policy wasn't active on the incident date.",
+        "missing_event_date": "I need the incident date to verify the policy.",
+        "invalid_event_date": "I couldn't understand that incident date.",
+        "no_policy_id": "I need your policy number to verify the claim.",
+    }.get(reason, "I couldn't verify the policy. A claims specialist will need to review it.")
+
+
+@router.post("/{ticket_id}/verify")
+def verify_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    state = dict(claim.pipeline_state or {})
+    missing = state.get("missing_fields", [])
+    if missing: raise HTTPException(status_code=400, detail=f"Cannot verify claim: missing mandatory fields {missing}.")
+    extracted = state.get("extracted_data", {})
+    verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
+    if verification["valid"]:
+        claim.status = "verified"; claim.conversation_status = "verified"
+    else:
+        claim.status = "verification_failed"; claim.conversation_status = "verification_failed"
+    state["policy_verification"] = verification; claim.pipeline_state = state
+    db.commit()
+    return {**_claim_payload(claim), "policy_verification": verification, "message": "Claim details verified." if verification["valid"] else _verification_failure_message(verification.get("reason", ""))}
+
+
+@router.post("/{ticket_id}/confirm")
+async def confirm_claim(ticket_id: str, request: Request, payload: Optional[ClaimConfirmRequest] = None, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
+    if not state.get("confirmed"):
+        raise HTTPException(status_code=400, detail="Please confirm the claim details in the conversation before submitting.")
+    missing = state.get("missing_fields") or []
+    if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
+    verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
+    if not verification.get("valid"):
+        state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
+        raise HTTPException(status_code=400, detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}")
+    claim.status = "submitted"; claim.conversation_status = "confirmed"; state["policy_verification"] = verification; claim.pipeline_state = state
+    db.commit()
+    return {**_claim_payload(claim), "policy_verification": verification, "message": f"Claim #{ticket_id} has been verified, confirmed, and submitted."}
+
+
+@router.patch("/{ticket_id}")
+def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
+    if payload.extracted_data: extracted.update(payload.extracted_data)
+    for field in ("policy_id", "insurance_type", "event_date", "event_description", "event_location", "estimated_claim_amount"):
+        value = getattr(payload, field)
+        if value is not None: extracted[field] = value
+    claim.pipeline_state = {**state, "extracted_data": extracted}; claim.insurance_type = extracted.get("insurance_type"); claim.event_description = extracted.get("event_description"); claim.event_location = extracted.get("event_location"); claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
+    if extracted.get("event_date"):
+        from datetime import datetime
+        try: claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
+        except ValueError: pass
+    db.commit(); db.refresh(claim)
+    return _claim_payload(claim)
+
+
+@router.post("/message/{ticket_id}")
+async def send_claim_message(ticket_id: str, payload: Dict[str, Any], request: Request, db: Session = Depends(get_db)):
+    text = payload.get("message") or payload.get("text") or ""
+    return await claim_text_turn(ticket_id, TextTurnRequest(text=text), request, db)
