@@ -1,16 +1,9 @@
-"""Conversation guard helpers."""
-from src.agents import nodes
+"""Compatibility export for the canonical conversation turn processor.
 
+Confirmation is intentionally not inferred here. The graph records a pending
+confirmation state; only an explicit claimant confirmation followed by the
+verification/submission API can advance the claim.
+"""
+from src.agents.nodes import conversation_turn_processor
 
-def conversation_turn_processor(state):
-    state = nodes.conversation_turn_processor(state)
-    if state.get("last_intent") == "confirmation" and state.get("awaiting_confirmation"):
-        state["confirmed"] = True
-        state["awaiting_confirmation"] = False
-        state["conversation_status"] = "pending_verification"
-        state["_skip_extraction"] = True
-    elif state.get("last_intent") == "rejection" and state.get("awaiting_confirmation"):
-        state["confirmed"] = False
-        state["awaiting_confirmation"] = False
-        state["conversation_status"] = "collecting"
-    return state
+__all__ = ["conversation_turn_processor"]
