@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -44,14 +43,6 @@ async def process_claimant_turn(
             claim.event_date = datetime.strptime(str(event_date_str), "%Y-%m-%d").date()
         except ValueError:
             logger.warning("Invalid normalized event date: %r", event_date_str)
-
-    # event_location was introduced into the Phase 1 schema with migration 0005.
-    # Keep this write compatible with older ORM snapshots until the mapped model
-    # is regenerated/deployed everywhere.
-    if "event_location" in extracted:
-        db.execute(text("UPDATE claims SET event_location = :location WHERE id = :claim_id"), {
-            "location": extracted.get("event_location"), "claim_id": str(claim.id)
-        })
     flag_modified(claim, "pipeline_state")
 
     agent_text = result.get("next_question") or result.get("message", "")
