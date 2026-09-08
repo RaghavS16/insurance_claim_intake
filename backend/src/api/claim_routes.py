@@ -68,9 +68,15 @@ def _resolve_user(request: Request, db: Session) -> User:
 def _claim_payload(claim: Claim) -> Dict[str, Any]:
     state = dict(getattr(claim, "pipeline_state", None) or {})
     return {
+        "id": str(claim.id) if claim.id else None,
         "ticket_id": claim.ticket_id,
         "status": claim.status,
         "conversation_status": claim.conversation_status,
+        "insurance_type": claim.insurance_type,
+        "event_date": claim.event_date.isoformat() if claim.event_date else None,
+        "event_description": claim.event_description,
+        "event_location": claim.event_location,
+        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
         "extracted_data": state.get("extracted_data") or {},
         "missing_fields": state.get("missing_fields") or [],
         "field_status": state.get("field_status") or {},
@@ -97,6 +103,67 @@ def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
         }
         for t in turns
     ]
+
+
+@router.get("")
+@router.get("/")
+def list_user_claims(request: Request, db: Session = Depends(get_db)):
+    """List all claims belonging to the authenticated claimant, newest first."""
+    current_user = _resolve_user(request, db)
+    claims = (
+        db.query(Claim)
+        .filter(Claim.claimant_id == current_user.id)
+        .order_by(Claim.updated_at.desc())
+        .all()
+    )
+    result = []
+    for c in claims:
+        payload = _claim_payload(c)
+        last_turn = (
+            db.query(ConversationTurn)
+            .filter(ConversationTurn.claim_id == c.id)
+            .order_by(ConversationTurn.turn_number.desc(), ConversationTurn.created_at.desc())
+            .first()
+        )
+        turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id).count()
+        payload["last_message"] = last_turn.text if last_turn else None
+        payload["last_message_speaker"] = last_turn.speaker if last_turn else None
+        payload["turn_count"] = turn_count
+        result.append(payload)
+    return {"items": result, "total": len(result)}
+
+
+@router.post("/new-session")
+def create_new_claim_session(request: Request, payload: Optional[VoiceSessionRequest] = None, db: Session = Depends(get_db)):
+    """Force creation of a brand new claim session regardless of existing drafts."""
+    current_user = _resolve_user(request, db)
+    ticket_id = f"CLAIM-{uuid.uuid4().hex[:8].upper()}"
+    init_extracted: Dict[str, Any] = {}
+    if payload and payload.policy_number:
+        init_extracted["policy_id"] = payload.policy_number.strip().upper()
+    claim = Claim(
+        ticket_id=ticket_id,
+        claimant_id=current_user.id,
+        customer_id=str(current_user.id),
+        input_mode="text",
+        status="draft",
+        conversation_status="collecting",
+        pipeline_state={"extracted_data": init_extracted} if init_extracted else {},
+    )
+    db.add(claim)
+    try:
+        db.commit()
+        db.refresh(claim)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create new claim session")
+        raise HTTPException(status_code=500, detail="Failed to create claim session.")
+    return {
+        **_claim_payload(claim),
+        "resumed": False,
+        "initial_message": "Tell me what happened, in your own words. I'll collect the details as we go.",
+        "conversation": [],
+    }
 
 
 @router.post("/voice-session")
@@ -165,13 +232,70 @@ def get_conversation_history(ticket_id: str, request: Request, db: Session = Dep
     return _conversation_payload(db, claim)
 
 
+@router.get("/{ticket_id}/export")
+def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    """Export formatted conversation transcript and extracted claim dossier."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    turns = _conversation_payload(db, claim)
+    payload = _claim_payload(claim)
+    
+    formatted_lines = [
+        f"=== INSURANCE CLAIM INTAKE DOSSIER ===",
+        f"Ticket ID: #{claim.ticket_id}",
+        f"Status: {claim.status.upper()}",
+        f"Insurance Type: {claim.insurance_type or 'Unspecified'}",
+        f"Incident Date: {claim.event_date or 'Unspecified'}",
+        f"Incident Location: {claim.event_location or 'Unspecified'}",
+        f"Estimated Amount: ₹{claim.estimated_claim_amount:,.2f}" if claim.estimated_claim_amount is not None else "Estimated Amount: Unspecified",
+        f"Description: {claim.event_description or 'Unspecified'}",
+        f"Created At: {claim.created_at}",
+        f"\n=== CONVERSATION TRANSCRIPT ({len(turns)} messages) ===",
+    ]
+    for t in turns:
+        speaker_tag = "CLAIMANT" if t["speaker"] == "user" else "ASSISTANT"
+        ts = f" [{t['created_at']}]" if t.get("created_at") else ""
+        formatted_lines.append(f"Turn {t['turn']} | {speaker_tag}{ts}:\n{t['text']}\n")
+        
+    return {
+        "claim": payload,
+        "turns": turns,
+        "formatted_text": "\n".join(formatted_lines),
+    }
+
+
+@router.delete("/{ticket_id}")
+def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    """Allow claimant to discard their own draft session."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation"):
+        raise HTTPException(status_code=400, detail="Only draft claims can be deleted.")
+    
+    # Delete associated conversation turns first
+    db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()
+    db.delete(claim)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete claim session.")
+    return {"message": f"Claim #{ticket_id} and history removed.", "success": True}
+
+
 @router.get("/{ticket_id}")
 def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    return _claim_payload(claim)
+    return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
 
 
 @router.post("/intake")

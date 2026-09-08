@@ -82,8 +82,8 @@ def _safe_date(raw: Any, reference: date) -> Optional[str]:
 def _deterministic_date(text: str, reference: date) -> Optional[str]:
     low = text.lower()
     if re.search(r"\bday before yesterday\b", low): return (reference - timedelta(days=2)).isoformat()
-    if re.search(r"\b(yesterday|the day before)\b", low): return (reference - timedelta(days=1)).isoformat()
-    if re.search(r"\b(today|this day)\b", low): return reference.isoformat()
+    if re.search(r"\b(yesterday\s+(?:morning|afternoon|evening)|yesterday|the day before)\b", low): return (reference - timedelta(days=1)).isoformat()
+    if re.search(r"\b(this\s+(?:morning|afternoon|evening|day)|today\s+(?:morning|afternoon|evening)|today|earlier today|just now|couple hours ago)\b", low): return reference.isoformat()
     if re.search(r"\b(tomorrow|the next day)\b", low): return (reference + timedelta(days=1)).isoformat()
     for pattern in (r"\b(\d{4}-\d{1,2}-\d{1,2})\b", r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{4})\b", r"\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4})\b", r"\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\s+\d{4})\b"):
         match = re.search(pattern, low)
@@ -93,7 +93,7 @@ def _deterministic_date(text: str, reference: date) -> Optional[str]:
     return None
 
 def _parse_indian_amount(text: str) -> Optional[float]:
-    s = str(text).lower().replace(",", "").replace("₹", " ").strip()
+    s = text.lower().replace(",", "").replace("₹", " ").strip()
     m = re.search(r"(?:rs\.?|inr|rupees?)?\s*(\d+(?:\.\d+)?)\s*(crore|crores|cr|lakh|lakhs|lac|lacs|k|thousand)?\b", s)
     if not m: return None
     value = float(m.group(1)); unit = m.group(2) or ""
@@ -123,35 +123,67 @@ def _deterministic_type(text: str) -> Optional[str]:
 
 def _clean_policy_candidate(value: Any) -> Optional[str]:
     if not isinstance(value, str): return None
-    value = re.sub(r"[^A-Za-z0-9_-]", "", value).upper()
-    if len(value) < 3 or value in _GENERIC_POLICY_WORDS or not re.search(r"\d", value): return None
-    return value
+    raw = value.strip().upper()
+    raw = re.sub(r"^(?:MY\s+)?POLICY\s*(?:NUMBER|NO\.?|ID|IDENTIFIER)?\s*(?:IS|:)?\s*", "", raw, flags=re.I).strip()
+    raw = re.sub(r"\s+", "-", raw)
+    clean = re.sub(r"[^A-Za-z0-9_-]", "", raw).upper()
+    if len(clean) < 3 or clean in _GENERIC_POLICY_WORDS or not re.search(r"\d", clean): return None
+    return clean
 
 def _deterministic_policy(text: str) -> Optional[str]:
-    for pattern in (r"\bpolicy\s*(?:number|no\.?|id|identifier)\s*(?:is|:)?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})", r"\bpolicy\s*(?:is|:)\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})"):
+    for pattern in (
+        r"\bpolicy\s*(?:number|no\.?|id|identifier)?\s*(?:is|:)?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})",
+        r"\bpolicy\s*(?:is|:)\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})",
+    ):
         match = re.search(pattern, text, re.I)
         if match:
             candidate = _clean_policy_candidate(match.group(1))
             if candidate: return candidate
+
+    for pattern in (
+        r"\b([A-Za-z]{2,5}[-_ ]?\d{3,8}(?:[-_ ][A-Za-z0-9]{1,4})?)\b",
+        r"\b([A-Za-z0-9]{2,8}[-_]\d{2,8}(?:[-_][A-Za-z0-9]{1,4})?)\b",
+        r"\b([A-Za-z]{2,5}\d{3,8}[A-Za-z0-9]{0,4})\b",
+    ):
+        for m in re.finditer(pattern, text):
+            candidate = _clean_policy_candidate(m.group(1))
+            if candidate: return candidate
+
+    clean_stripped = text.strip()
+    if len(clean_stripped) <= 30:
+        candidate = _clean_policy_candidate(clean_stripped)
+        if candidate and len(candidate) >= 4 and re.search(r"\d", candidate):
+            return candidate
     return None
 
 def _policy_is_suspicious(value: Any) -> bool:
     return _clean_policy_candidate(value) is None
 
+_LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight"}
+
 def _deterministic_location(text: str) -> Optional[str]:
-    patterns = [r"\b(?:incident|accident|event)\s+(?:happened|occurred|took place)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the)\b|[,.!?]|$)"]
+    patterns = [
+        r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)",
+        r"\b(?:on the expressway|on highway\s*\w*|on\s+[A-Za-z0-9\s]+(?:road|street|avenue|expressway|highway))\b",
+        r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)",
+    ]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            value = " ".join(match.group(1).split()).strip(" .,")
-            if len(value) >= 2: return value
+            value = " ".join(match.group(1 if match.lastindex else 0).split()).strip(" .,")
+            value_lower = value.lower()
+            if any(stop in value_lower for stop in _LOCATION_STOPWORDS):
+                continue
+            if len(value) >= 2 and not re.match(r"^(?:a|an|the|my|this|that)\s+(?:car|bike|vehicle|accident|incident|hospital|damage|doctor)\b", value, re.I):
+                return value
     return None
 
 def _strip_incident_noise(value: Any) -> str:
     text = " ".join(str(value or "").split()).strip()
-    text = re.sub(r"\b(?:my\s+)?policy\s+(?:number|no\.?|id|identifier|idea)\b[^,.!?]*[,.!?]?", "", text, flags=re.I)
+    text = re.sub(r"\b(?:my\s+)?policy\s+(?:number|no\.?|id|identifier|idea)?\s*(?:is|:)?\s*[A-Za-z0-9_-]+[,.!?]?", "", text, flags=re.I)
+    text = re.sub(r"\b[A-Za-z]{2,5}[-_ ]?\d{3,8}(?:[-_ ][A-Za-z0-9]{1,4})?\b", "", text)
     text = re.sub(r"\b(?:₹|rs\.?|inr|rupees?|repair\s+cost|repair|damage|loss|estimated\s+(?:cost|loss)|claim|cost|bill)\s*(?:is|was|of|around|about|approximately|:)?\s*\d[\d,]*(?:\.\d+)?\s*(?:crores?|cr|lakhs?|lacs?|lac|k|thousand)?\b", "", text, flags=re.I)
-    text = re.sub(r"\b(?:yesterday|today|tomorrow|the day before|day before yesterday)\b", "", text, flags=re.I)
+    text = re.sub(r"\b(?:yesterday|today|tomorrow|the day before|day before yesterday|this morning|this afternoon|this evening)\b", "", text, flags=re.I)
     return re.sub(r"\s{2,}", " ", text).strip(" ,.-")
 
 def _normalize_description(value: Any, raw: str) -> Optional[str]:
@@ -222,11 +254,11 @@ def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldCh
         clean = " ".join(str(change.value).split()).strip(" .,"); return change.model_copy(update={"value":clean}) if 2 <= len(clean) <= 100 else None
     if change.field == "event_description":
         if change.operation == "remove": return change
-        clean = _normalize_description(change.value, str(state.get("last_user_utterance") or "")); return change.model_copy(update={"value":clean}) if clean else None
+        clean = _normalize_description(change.value, state.get("last_user_utterance") or ""); return change.model_copy(update={"value":clean}) if clean else None
     return None
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
-    raw = str(state.get("claim_text") or "").strip(); state["last_user_utterance"] = raw; state["turn_number"] = int(state.get("turn_number",0))+1; state.setdefault("conversation_history",[]).append({"turn":state["turn_number"],"speaker":"user","text":raw}); state.setdefault("extracted_data",{}); state.setdefault("field_status",{}); state.setdefault("field_metadata",{}); state.setdefault("audit_log",[]); state["recently_extracted_fields"]=[]; state["extraction_changes"]=[]; state["_skip_all"]=False; state["_confirmation_pending"]=False; state["_rejection_active"]=False
+    raw = (state.get("claim_text") or "").strip(); state["last_user_utterance"] = raw; state["turn_number"] = int(state.get("turn_number") or 0)+1; state.setdefault("conversation_history",[]).append({"turn":state["turn_number"],"speaker":"user","text":raw}); state.setdefault("extracted_data",{}); state.setdefault("field_status",{}); state.setdefault("field_metadata",{}); state.setdefault("audit_log",[]); state["recently_extracted_fields"]=[]; state["extraction_changes"]=[]; state["_skip_all"]=False; state["_confirmation_pending"]=False; state["_rejection_active"]=False
     if not raw: state["last_intent"]="filler"; return state
     awaiting = bool(state.get("awaiting_confirmation")); prompt = f"{SYSTEM_PROMPT}\nReference date: {date.today().isoformat()}\nCurrent authoritative facts: {json.dumps(state.get('extracted_data',{}),ensure_ascii=False,default=str)}\nRecent conversation:\n{_history_text(state)}\nLatest claimant utterance:\n{raw}"; patch = _invoke_structured(llm,prompt,ExtractionPatch) or ExtractionPatch(intent=_fallback_intent(raw,awaiting),changes=[]); state["last_intent"]=patch.intent; state["spoken_response"]=""
     deterministic = _rule_changes(raw,state); deterministic_fields={c.field for c in deterministic}; model_changes=[c for c in patch.changes if c.field not in deterministic_fields]; all_changes=deterministic+model_changes
@@ -269,16 +301,18 @@ def _confirmation_summary(data: Dict[str, Any]) -> str:
     details=[]
     if date_text: details.append(f"on {date_text}")
     if location: details.append(f"in {location}")
-    if amount is not None: details.append(f"with an estimated loss of ₹{float(amount):,.0f}")
+    if amount is not None: details.append(f"with an estimated loss of ₹{int(float(amount))}")
     if policy: details.append(f"under policy {policy}")
     return lead + (", " + ", ".join(details) if details else "") + "."
 
 def _deterministic_response(state: ClaimState) -> str:
     if state.get("_skip_all"): return state.get("next_question","")
     if state.get("awaiting_confirmation"): return _confirmation_summary(state.get("extracted_data",{})) + " Is everything correct?"
-    target=state.get("next_question_field") or (state.get("missing_fields") or [None])[0]
+    target = state.get("next_question_field") or (state.get("missing_fields", [None])[0] if state.get("missing_fields") else None)
     prompts={"policy_id":"What is your policy number?","event_date":"When did the incident happen?","insurance_type":"What type of insurance is this claim under?","event_description":"Could you briefly tell me what happened?","event_location":"Where did the incident happen?","estimated_claim_amount":"What is the approximate loss or repair cost?"}
-    return prompts.get(target,"What else can you tell me about the incident?")
+    if isinstance(target, str):
+        return prompts.get(target, "What else can you tell me about the incident?")
+    return "What else can you tell me about the incident?"
 
 def next_question_generator(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"): return state
