@@ -19,13 +19,17 @@ async def process_claimant_turn(
     claim: Claim,
     user_text: str,
     input_mode: str,
-    turn_number: int,
+    turn_number: int | None = None,
 ) -> Dict[str, Any]:
-    """Process one claimant turn and persist state and conversation atomically."""
-    prior_state = dict(getattr(claim, "pipeline_state", None) or {})
+    """Process one claimant turn and persist state plus both chat messages atomically."""
+    # Never rely on a caller-local turn counter. Voice sockets reconnect and text/voice
+    # can be mixed, so the database is the source of truth for ordering.
     if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated", "submitted"}:
-        return prior_state
+        return dict(getattr(claim, "pipeline_state", None) or {})
 
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    logical_turn = (prior_turns // 2) + 1
+    prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     graph_input = {**prior_state, "claim_text": user_text, "ticket_id": claim.ticket_id, "input_mode": input_mode}
     result = build_conversation_graph().invoke(graph_input)
     extracted = result.get("extracted_data", {}) or {}
@@ -49,9 +53,9 @@ async def process_claimant_turn(
 
     agent_text = result.get("next_question") or result.get("message", "")
     try:
-        db.add(ConversationTurn(claim_id=claim.id, turn_number=turn_number, speaker="user", text=user_text))
+        db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
         if agent_text:
-            db.add(ConversationTurn(claim_id=claim.id, turn_number=turn_number, speaker="agent", text=agent_text))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_text))
         db.commit()
     except Exception:
         db.rollback()
