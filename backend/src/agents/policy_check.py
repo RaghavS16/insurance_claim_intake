@@ -21,21 +21,25 @@ def verify_policy_for_claim(
         result["reason"] = "no_policy_id"
         return result
 
-    # Verification is a state transition, not a data-completeness shortcut.
-    # Require a confirmed draft for this claimant/policy before any verification.
-    candidate_claims = db.query(Claim).filter(Claim.claimant_id == claimant_user_id).order_by(Claim.created_at.desc()).all()
+    normalized_policy = policy_id.strip().upper()
+    candidate = (
+        db.query(Claim)
+        .filter(Claim.claimant_id == claimant_user_id)
+        .order_by(Claim.created_at.desc())
+        .all()
+    )
     confirmed = False
-    for candidate in candidate_claims:
-        state = candidate.pipeline_state or {}
+    for claim in candidate:
+        state = claim.pipeline_state or {}
         extracted = state.get("extracted_data") or {}
-        if str(extracted.get("policy_id", "")).strip().upper() == policy_id.strip().upper() and state.get("confirmed") is True:
-            confirmed = True
+        if str(extracted.get("policy_id", "")).strip().upper() == normalized_policy:
+            confirmed = state.get("confirmed") is True
             break
     if not confirmed:
         result["reason"] = "claimant_confirmation_required"
         return result
 
-    policy = db.query(Policy).filter(Policy.policy_number == policy_id.strip().upper()).first()
+    policy = db.query(Policy).filter(Policy.policy_number == normalized_policy).first()
     if not policy:
         result["reason"] = "policy_not_found"
         return result
@@ -62,9 +66,11 @@ def verify_policy_for_claim(
     if not (policy.effective_date <= event_date <= policy.expiry_date):
         result["reason"] = "policy_not_active_on_event_date"
         return result
-    result["valid"] = True
-    result["policy_number"] = policy.policy_number
-    result["policy_type"] = policy.policy_type
-    result["effective_date"] = policy.effective_date.isoformat()
-    result["expiry_date"] = policy.expiry_date.isoformat()
+    result.update({
+        "valid": True,
+        "policy_number": policy.policy_number,
+        "policy_type": policy.policy_type,
+        "effective_date": policy.effective_date.isoformat(),
+        "expiry_date": policy.expiry_date.isoformat(),
+    })
     return result
