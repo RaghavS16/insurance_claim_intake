@@ -23,8 +23,8 @@ langchain>=0.2.0
 langchain-ollama>=0.1.0
 langchain-openai>=0.1.0
 
-# Real-time voice: Pipecat + Faster Whisper + WebRTC VAD + Piper TTS
-pipecat-ai[whisper,websocket]==1.8.1
+# Real-time voice: Pipecat + streaming STT + local fallback + Piper TTS
+pipecat-ai[whisper,websocket,deepgram]==1.8.1
 piper-tts>=1.2.0
 webrtcvad-wheels>=2.0.14
 websockets>=14.0,<16.0
