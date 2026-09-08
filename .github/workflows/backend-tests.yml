@@ -9,6 +9,7 @@ on:
     branches:
       - main
       - "refactor/pipecat-voice-migration"
+      - "fix/**"
     paths:
       - "backend/**"
       - ".github/workflows/backend-tests.yml"
