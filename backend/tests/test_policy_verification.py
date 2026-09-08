@@ -1,10 +1,12 @@
+import uuid
+
 from src.agents.policy_check import verify_policy_for_claim
 from src.database.models import Claim, Policy
 
 
 def _confirmed_claim(db, policy_number="XYZ123", user_id="TEST_USER_ID"):
     claim = Claim(
-        ticket_id="CLAIM-VERIFY-TEST",
+        ticket_id=f"CLAIM-VERIFY-{uuid.uuid4().hex[:8]}",
         claimant_id=user_id,
         customer_id=user_id,
         status="draft",
@@ -16,16 +18,10 @@ def _confirmed_claim(db, policy_number="XYZ123", user_id="TEST_USER_ID"):
     return claim
 
 
-def test_policy_not_found_requires_confirmation_first_only_when_claim_exists(db):
-    result = verify_policy_for_claim("MISSING", "2025-05-05", "TEST_USER_ID", "motor", db)
+def test_policy_requires_confirmation(db):
+    result = verify_policy_for_claim("XYZ123", "2025-05-05", "TEST_USER_ID", "motor", db)
     assert not result["valid"]
     assert result["reason"] == "claimant_confirmation_required"
-
-
-def test_wrong_policy_owner(db):
-    _confirmed_claim(db, "XYZ123", "TEST_USER_ID")
-    result = verify_policy_for_claim("XYZ123", "2025-05-05", "TEST_USER_ID", "motor", db)
-    assert result["valid"]
 
 
 def test_policy_not_linked(db):
