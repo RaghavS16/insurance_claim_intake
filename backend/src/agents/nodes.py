@@ -52,7 +52,7 @@ class FieldChange(BaseModel):
     operation: Literal["set", "replace", "append", "remove", "ignore"]
     value: Any = None
     evidence: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class ExtractionPatch(BaseModel):
@@ -61,8 +61,7 @@ class ExtractionPatch(BaseModel):
     changes: List[FieldChange] = Field(default_factory=list)
     needs_clarification: bool = False
     clarification: str = ""
-    spoken_reply: Optional[str] = Field(
-        default=None,
+    spoken_reply: str = Field(
         description="A natural, helpful conversational response to speak back to the user (1-2 clear, concise sentences)."
     )
 
@@ -302,8 +301,7 @@ def _merge_change(state: ClaimState, change: FieldChange, turn: int) -> Optional
 
 
 def _fallback_patch(state: ClaimState) -> ExtractionPatch:
-    """Safe failure mode: preserve state rather than guessing from text."""
-    return ExtractionPatch(intent="unclear", changes=[], needs_clarification=False)
+    return ExtractionPatch(intent="unclear", changes=[], needs_clarification=False, spoken_reply="")
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
@@ -355,12 +353,14 @@ Claimant's latest utterance:
         state["_skip_all"] = True
         state["next_question"] = "I understand. I'll connect you with a claims specialist who can help you directly."
         state["message"] = state["next_question"]
+        state.setdefault("conversation_history", []).append({"turn": state.get("turn_number", 0), "speaker": "agent", "text": state["message"]})
         return state
 
     if patch.intent == "closing":
         state["_skip_all"] = True
         state["next_question"] = "Of course. We can continue whenever you're ready."
         state["message"] = state["next_question"]
+        state.setdefault("conversation_history", []).append({"turn": state.get("turn_number", 0), "speaker": "agent", "text": state["message"]})
         return state
 
     if patch.intent == "defer":
@@ -522,10 +522,17 @@ def next_question_generator(state: ClaimState) -> ClaimState:
 
 def natural_response_generator(state: ClaimState) -> ClaimState:
     """Final response node kept for graph/API compatibility."""
-    if state.get("_skip_all"):
-        return state
-    state["message"] = state.get("next_question", "")
-    state["spoken_response"] = state["message"]
+    if not state.get("_skip_all"):
+        state["message"] = state.get("next_question", "")
+        state["spoken_response"] = state["message"]
+    
+    if state.get("message"):
+        state.setdefault("conversation_history", []).append({
+            "turn": state.get("turn_number", 0),
+            "speaker": "agent",
+            "text": state["message"]
+        })
+        
     return state
 
 

@@ -88,7 +88,7 @@ class WebRTCVADAnalyzer(VADAnalyzer):
     """Pipecat VAD adapter backed by WebRTC VAD."""
 
     def __init__(self, aggressiveness: int = 1, *, sample_rate: int = 16000):
-        params = VADParams(confidence=0.5, start_secs=0.08, stop_secs=0.25, min_volume=0.0)
+        params = VADParams(confidence=0.5, start_secs=0.08, stop_secs=0.3, min_volume=0.0)
         super().__init__(sample_rate=sample_rate, params=params)
         self._vad = webrtcvad.Vad(aggressiveness)
 
@@ -253,9 +253,10 @@ class ClaimAgentProcessor(FrameProcessor):
 
     def __init__(self, claim: Claim, *, input_mode: str = "voice"):
         super().__init__()
+        self._db = SessionLocal()
+        self._db.add(claim)
         self._claim = claim
         self._input_mode = input_mode
-        self._db = SessionLocal()
         self._turn_number = 0
         self._segment_number = 0
 

@@ -24,6 +24,9 @@ async def process_claimant_turn(
 ) -> Dict[str, Any]:
     """Run the insurance conversation graph and persist the resulting turn."""
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
+    
+    if claim.conversation_status in {"pending_verification", "escalated"}:
+        return prior_state
 
     try:
         turn = ConversationTurn(
@@ -65,6 +68,9 @@ async def process_claimant_turn(
         except ValueError:
             logger.debug("Invalid normalized event date from graph: %r", event_date_str)
 
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(claim, "pipeline_state")
+    
     try:
         db.commit()
     except Exception as exc:
