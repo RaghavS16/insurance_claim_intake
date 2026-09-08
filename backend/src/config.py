@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     CLOUD_LLM_API_KEY: Optional[str] = None
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 
+    # Production voice defaults to streaming STT when a provider key is configured.
+    # Local Whisper remains available as a development/offline fallback.
+    STT_PROVIDER: str = "auto"
+    DEEPGRAM_API_KEY: Optional[str] = None
+    DEEPGRAM_MODEL: str = "nova-3-general"
     STT_MODEL_SIZE: str = "small"
     STT_LANGUAGE: str = "en"
     STT_DEVICE: str = "cuda"
