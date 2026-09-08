@@ -110,6 +110,7 @@ class Adjuster(Base):
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Specialization matching the 6 supported types: health | senior_health | home | travel | motor | cyber
     specialization: Mapped[str] = mapped_column(String, nullable=False)
     claims_assigned: Mapped[int] = mapped_column(Integer, default=0)

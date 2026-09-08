@@ -388,6 +388,8 @@ interface EditAdjusterModalProps {
   setEditName: (v: string) => void;
   editEmail: string;
   setEditEmail: (v: string) => void;
+  editPhone: string;
+  setEditPhone: (v: string) => void;
   editSpec: string;
   setEditSpec: (v: string) => void;
   editActive: boolean;
@@ -404,6 +406,8 @@ export const EditAdjusterModal: React.FC<EditAdjusterModalProps> = ({
   setEditName,
   editEmail,
   setEditEmail,
+  editPhone,
+  setEditPhone,
   editSpec,
   setEditSpec,
   editActive,
@@ -450,6 +454,18 @@ export const EditAdjusterModal: React.FC<EditAdjusterModalProps> = ({
               value={editEmail}
               onChange={(e) => setEditEmail(e.target.value)}
               className="input-minimal w-full bg-[#e0e3e5]/50 border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#505f76] cursor-not-allowed"
+            />
+          </div>
+
+          <div>
+            <label className="font-label text-xs text-[#505f76] block mb-1">Phone Number *</label>
+            <input
+              type="tel"
+              required
+              placeholder="+1 (555) 234-5678"
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
             />
           </div>
 

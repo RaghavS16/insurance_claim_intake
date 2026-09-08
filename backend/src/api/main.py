@@ -123,7 +123,7 @@ def get_current_user(
 
 def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
     """Dependency helper to get the authenticated user ID string."""
-    return str(current_user.id)
+    return current_user.id
 
 
 def require_role(allowed_roles: List[str]):
@@ -212,13 +212,20 @@ def _init_db_and_seeds():
 
             if "password_reset_otps" not in tables:
                 logger.info("Database auto-migration: creating password_reset_otps table")
-                PasswordResetOTP.__table__.create(bind=conn, checkfirst=True)
+                Base.metadata.create_all(bind=conn, tables=[Base.metadata.tables["password_reset_otps"]], checkfirst=True)
                 conn.commit()
 
             if "revoked_tokens" not in tables:
                 logger.info("Database auto-migration: creating revoked_tokens table")
-                RevokedToken.__table__.create(bind=conn, checkfirst=True)
+                Base.metadata.create_all(bind=conn, tables=[Base.metadata.tables["revoked_tokens"]], checkfirst=True)
                 conn.commit()
+
+            if "adjusters" in tables:
+                adjuster_cols = [c["name"] for c in inspector.get_columns("adjusters")]
+                if "phone" not in adjuster_cols:
+                    logger.info("Database auto-migration: adding phone to adjusters table")
+                    conn.execute(text("ALTER TABLE adjusters ADD COLUMN phone VARCHAR"))
+                    conn.commit()
 
             if "policies" in tables:
                 try:
@@ -260,19 +267,20 @@ def _init_db_and_seeds():
                         ))
 
                     canonical_adjusters = [
-                        ("motor", "Priya Sharma", "priya.motor@insure.co"),
-                        ("home", "Rohan Mehta", "rohan.home@insure.co"),
-                        ("health", "Dr. Anita Roy", "anita.health@insure.co"),
-                        ("senior_health", "Dr. V. Rao", "rao.senior@insure.co"),
-                        ("travel", "Vikram Sen", "vikram.travel@insure.co"),
-                        ("cyber", "Neha Kapoor", "neha.cyber@insure.co"),
+                        ("motor", "Priya Sharma", "priya.motor@insure.co", "+1 (555) 234-0101"),
+                        ("home", "Rohan Mehta", "rohan.home@insure.co", "+1 (555) 234-0102"),
+                        ("health", "Dr. Anita Roy", "anita.health@insure.co", "+1 (555) 234-0103"),
+                        ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+1 (555) 234-0104"),
+                        ("travel", "Vikram Sen", "vikram.travel@insure.co", "+1 (555) 234-0105"),
+                        ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+1 (555) 234-0106"),
                     ]
-                    for spec, name, email in canonical_adjusters:
+                    for spec, name, email, phone in canonical_adjusters:
                         uid = str(uuid.uuid4())
                         db.add(Adjuster(
                             id=uid,
                             name=name,
                             email=email,
+                            phone=phone,
                             specialization=spec,
                             claims_assigned=0,
                             is_active=True,
@@ -282,6 +290,7 @@ def _init_db_and_seeds():
                             id=uid,
                             full_name=name,
                             email=email,
+                            phone=phone,
                             password_hash=get_password_hash("AdjusterPassword123!"),
                             role="ADJUSTER",
                             status="active"
@@ -391,7 +400,7 @@ app.include_router(auth_routes.router)
 def get_me(current_user: User = Depends(get_current_user)):
     """Retrieve the currently authenticated user's profile."""
     return {
-        "id": str(current_user.id),
+        "id": current_user.id,
         "full_name": current_user.full_name,
         "email": current_user.email,
         "phone": current_user.phone,

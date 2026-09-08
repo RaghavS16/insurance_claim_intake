@@ -72,6 +72,7 @@ export default function AdminPage() {
   const [loadingAdjusters, setLoadingAdjusters] = useState(false);
   const [newAdjusterName, setNewAdjusterName] = useState("");
   const [newAdjusterEmail, setNewAdjusterEmail] = useState("");
+  const [newAdjusterPhone, setNewAdjusterPhone] = useState("");
   const [newAdjusterSpec, setNewAdjusterSpec] = useState("motor");
   const [creatingAdjuster, setCreatingAdjuster] = useState(false);
   const [createdAdjusterData, setCreatedAdjusterData] = useState<any>(null);
@@ -82,6 +83,7 @@ export default function AdminPage() {
   const [editingAdjuster, setEditingAdjuster] = useState<AdjusterItem | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
   const [editSpec, setEditSpec] = useState("motor");
   const [editActive, setEditActive] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -343,17 +345,24 @@ export default function AdminPage() {
     setCreatedAdjusterData(null);
 
     try {
+      if (!newAdjusterPhone.trim()) {
+        throw new Error("Phone number is required.");
+      }
+
+      const payload = {
+        name: newAdjusterName.trim(),
+        email: newAdjusterEmail.trim().toLowerCase(),
+        phone: newAdjusterPhone.trim(),
+        specialization: newAdjusterSpec,
+      };
+
       const res = await fetch(`${API_BASE}/api/v1/admin/adjusters`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          name: newAdjusterName.trim(),
-          email: newAdjusterEmail.trim().toLowerCase(),
-          specialization: newAdjusterSpec,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -362,6 +371,7 @@ export default function AdminPage() {
       setCreatedAdjusterData(data);
       setNewAdjusterName("");
       setNewAdjusterEmail("");
+      setNewAdjusterPhone("");
       fetchAdjusters(token);
     } catch (err: any) {
       setAdjusterError(err.message || "Error provisioning adjuster");
@@ -375,6 +385,7 @@ export default function AdminPage() {
     setEditingAdjuster(adj);
     setEditName(adj.name);
     setEditEmail(adj.email);
+    setEditPhone(adj.phone || "");
     setEditSpec(adj.specialization);
     setEditActive(adj.is_active);
     setEditError("");
@@ -398,6 +409,7 @@ export default function AdminPage() {
         },
         body: JSON.stringify({
           name: editName.trim(),
+          phone: editPhone.trim(),
           specialization: editSpec,
           is_active: editActive,
         }),
@@ -493,7 +505,8 @@ export default function AdminPage() {
       .filter((adj) => {
         const matchesSearch =
           adj.name.toLowerCase().includes(adjusterSearch.toLowerCase()) ||
-          adj.email.toLowerCase().includes(adjusterSearch.toLowerCase());
+          adj.email.toLowerCase().includes(adjusterSearch.toLowerCase()) ||
+          (adj.phone && adj.phone.includes(adjusterSearch));
         const matchesSpec = adjusterFilterSpec === "all" || adj.specialization === adjusterFilterSpec;
         return matchesSearch && matchesSpec;
       })
@@ -595,6 +608,8 @@ export default function AdminPage() {
                   setNewAdjusterName={setNewAdjusterName}
                   newAdjusterEmail={newAdjusterEmail}
                   setNewAdjusterEmail={setNewAdjusterEmail}
+                  newAdjusterPhone={newAdjusterPhone}
+                  setNewAdjusterPhone={setNewAdjusterPhone}
                   newAdjusterSpec={newAdjusterSpec}
                   setNewAdjusterSpec={setNewAdjusterSpec}
                   creatingAdjuster={creatingAdjuster}
@@ -688,6 +703,8 @@ export default function AdminPage() {
         setEditName={setEditName}
         editEmail={editEmail}
         setEditEmail={setEditEmail}
+        editPhone={editPhone}
+        setEditPhone={setEditPhone}
         editSpec={editSpec}
         setEditSpec={setEditSpec}
         editActive={editActive}

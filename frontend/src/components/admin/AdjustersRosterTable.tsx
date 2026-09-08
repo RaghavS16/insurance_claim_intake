@@ -5,6 +5,7 @@ export interface AdjusterItem {
   id: string;
   name: string;
   email: string;
+  phone?: string | null;
   specialization: string;
   claims_assigned: number;
   is_active: boolean;
@@ -129,7 +130,18 @@ export const AdjustersRosterTable: React.FC<AdjustersRosterTableProps> = ({
                 <tr key={adj.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="py-3.5 px-4 font-bold text-[#191c1e]">
                     <div>{adj.name}</div>
-                    <div className="font-normal text-[11px] text-[#505f76]">{adj.email}</div>
+                    <div className="font-normal text-[11px] text-[#505f76] flex items-center gap-1.5 flex-wrap">
+                      <span>{adj.email}</span>
+                      {adj.phone && (
+                        <>
+                          <span className="text-[#bdc8ce]">•</span>
+                          <span className="inline-flex items-center gap-0.5 text-[#505f76]">
+                            <span className="material-symbols-outlined text-[13px] text-[#0891B2]">call</span>
+                            {adj.phone}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </td>
                   <td className="py-3.5 px-4">
                     <span

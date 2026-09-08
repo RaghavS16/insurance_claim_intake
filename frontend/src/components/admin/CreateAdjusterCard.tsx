@@ -6,6 +6,8 @@ interface CreateAdjusterCardProps {
   setNewAdjusterName: (v: string) => void;
   newAdjusterEmail: string;
   setNewAdjusterEmail: (v: string) => void;
+  newAdjusterPhone: string;
+  setNewAdjusterPhone: (v: string) => void;
   newAdjusterSpec: string;
   setNewAdjusterSpec: (v: string) => void;
   creatingAdjuster: boolean;
@@ -21,6 +23,8 @@ export const CreateAdjusterCard: React.FC<CreateAdjusterCardProps> = ({
   setNewAdjusterName,
   newAdjusterEmail,
   setNewAdjusterEmail,
+  newAdjusterPhone,
+  setNewAdjusterPhone,
   newAdjusterSpec,
   setNewAdjusterSpec,
   creatingAdjuster,
@@ -51,8 +55,13 @@ export const CreateAdjusterCard: React.FC<CreateAdjusterCardProps> = ({
             <span>Account Provisioned!</span>
           </div>
           <p>
-            Email: <span className="font-mono font-bold">{createdAdjusterData.adjuster?.email}</span>
+            Email: <span className="font-mono font-bold">{createdAdjusterData.email || createdAdjusterData.adjuster?.email}</span>
           </p>
+          {(createdAdjusterData.phone || createdAdjusterData.adjuster?.phone) && (
+            <p>
+              Phone: <span className="font-mono font-bold">{createdAdjusterData.phone || createdAdjusterData.adjuster?.phone}</span>
+            </p>
+          )}
           <div className="p-2 bg-emerald-100/70 rounded border border-emerald-300 font-mono text-xs flex justify-between items-center">
             <span>Temp Pass: {createdAdjusterData.temporary_password}</span>
             <button
@@ -99,6 +108,21 @@ export const CreateAdjusterCard: React.FC<CreateAdjusterCardProps> = ({
             placeholder="jane.doe@insureclaimai.com"
             value={newAdjusterEmail}
             onChange={(e) => setNewAdjusterEmail(e.target.value)}
+            className="input-minimal bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="font-label text-xs font-medium text-[#505f76]" htmlFor="phoneNumber">
+            Phone Number *
+          </label>
+          <input
+            id="phoneNumber"
+            type="tel"
+            required
+            placeholder="+1 (555) 234-5678"
+            value={newAdjusterPhone}
+            onChange={(e) => setNewAdjusterPhone(e.target.value)}
             className="input-minimal bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
           />
         </div>

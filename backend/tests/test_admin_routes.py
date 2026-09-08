@@ -12,6 +12,7 @@ def test_admin_endpoints_forbidden_for_claimant(client):
     response = client.post("/api/v1/admin/adjusters", json={
         "name": "Test Adjuster",
         "email": "test.adj@insure.co",
+        "phone": "+1-555-000-1111",
         "specialization": "motor",
     })
     assert response.status_code == 403
@@ -19,6 +20,7 @@ def test_admin_endpoints_forbidden_for_claimant(client):
 
 def test_admin_create_adjuster(client, db):
     email = "sarah.connor@insure.co"
+    phone = "+1-555-432-1098"
     # Ensure clean state
     db.query(Adjuster).filter(Adjuster.email == email).delete()
     db.query(User).filter(User.email == email).delete()
@@ -27,6 +29,7 @@ def test_admin_create_adjuster(client, db):
     response = client.post("/api/v1/admin/adjusters", json={
         "name": "Sarah Connor",
         "email": email,
+        "phone": phone,
         "specialization": "motor",
     }, headers={"X-User-ID": "TEST_ADMIN_ID"})
 
@@ -34,6 +37,7 @@ def test_admin_create_adjuster(client, db):
     data = response.json()
     assert data["name"] == "Sarah Connor"
     assert data["email"] == email
+    assert data["phone"] == phone
     assert data["specialization"] == "motor"
     assert "temporary_password" in data
     assert len(data["temporary_password"]) > 6
@@ -42,10 +46,12 @@ def test_admin_create_adjuster(client, db):
     user = db.query(User).filter(User.email == email).first()
     assert user is not None
     assert user.role == "ADJUSTER"
+    assert user.phone == phone
 
     adjuster = db.query(Adjuster).filter(Adjuster.email == email).first()
     assert adjuster is not None
     assert adjuster.specialization == "motor"
+    assert adjuster.phone == phone
 
 
 def test_admin_list_adjusters(client):
@@ -55,6 +61,8 @@ def test_admin_list_adjusters(client):
     assert isinstance(data, list)
     emails = [a["email"] for a in data]
     assert len(emails) >= 1
+    # Check that phone field is present in adjuster objects
+    assert "phone" in data[0]
 
 
 def test_admin_import_policies_csv(client, db):
@@ -104,30 +112,36 @@ def test_admin_list_all_policies(client):
 
 
 def test_admin_adjuster_crud_lifecycle(client, db):
-    # 1. Create Adjuster
+    # 1. Create Adjuster with phone
     create_res = client.post("/api/v1/admin/adjusters", json={
         "name": "Alex Murphy",
         "email": "alex.murphy@insure.co",
+        "phone": "+1-555-987-6543",
         "specialization": "cyber",
     }, headers={"X-User-ID": "TEST_ADMIN_ID"})
     assert create_res.status_code == 200
-    adj_id = create_res.json()["id"]
+    data = create_res.json()
+    adj_id = data["id"]
+    assert data["phone"] == "+1-555-987-6543"
 
     # 2. Get Single Adjuster
     get_res = client.get(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})
     assert get_res.status_code == 200
     assert get_res.json()["name"] == "Alex Murphy"
+    assert get_res.json()["phone"] == "+1-555-987-6543"
     assert get_res.json()["specialization"] == "cyber"
     assert get_res.json()["is_active"] is True
 
-    # 3. Update Adjuster (Change specialization and active status)
+    # 3. Update Adjuster (Change name, phone, specialization, and active status)
     update_res = client.put(f"/api/v1/admin/adjusters/{adj_id}", json={
         "name": "Alex J. Murphy",
+        "phone": "+1-555-111-2222",
         "specialization": "home",
         "is_active": False,
     }, headers={"X-User-ID": "TEST_ADMIN_ID"})
     assert update_res.status_code == 200
     assert update_res.json()["name"] == "Alex J. Murphy"
+    assert update_res.json()["phone"] == "+1-555-111-2222"
     assert update_res.json()["specialization"] == "home"
     assert update_res.json()["is_active"] is False
 
@@ -135,6 +149,7 @@ def test_admin_adjuster_crud_lifecycle(client, db):
     user = db.query(User).filter(User.id == adj_id).first()
     assert user is not None
     assert user.full_name == "Alex J. Murphy"
+    assert user.phone == "+1-555-111-2222"
     assert user.status == "inactive"
 
     # 4. Reset Password
@@ -152,11 +167,52 @@ def test_admin_adjuster_crud_lifecycle(client, db):
     assert db.query(User).filter(User.id == adj_id).first() is None
 
 
+def test_admin_create_adjuster_missing_phone(client):
+    response = client.post("/api/v1/admin/adjusters", json={
+        "name": "No Phone Adjuster",
+        "email": "no.phone@insure.co",
+        "specialization": "motor",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert response.status_code == 422
+
+
+def test_admin_create_adjuster_invalid_phone(client):
+    response = client.post("/api/v1/admin/adjusters", json={
+        "name": "Invalid Phone Adjuster",
+        "email": "bad.phone@insure.co",
+        "phone": "invalid#phone",
+        "specialization": "motor",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert response.status_code == 400
+    assert "Phone number contains invalid characters" in response.json()["detail"]
+
+
+def test_admin_update_adjuster_empty_phone_rejected(client):
+    create_res = client.post("/api/v1/admin/adjusters", json={
+        "name": "Valid Adjuster",
+        "email": "valid.adj@insure.co",
+        "phone": "+1-555-333-4444",
+        "specialization": "motor",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert create_res.status_code == 200
+    adj_id = create_res.json()["id"]
+
+    update_res = client.put(f"/api/v1/admin/adjusters/{adj_id}", json={
+        "phone": "   ",
+    }, headers={"X-User-ID": "TEST_ADMIN_ID"})
+    assert update_res.status_code == 400
+    assert "Phone number cannot be empty" in update_res.json()["detail"]
+
+    # Cleanup
+    client.delete(f"/api/v1/admin/adjusters/{adj_id}", headers={"X-User-ID": "TEST_ADMIN_ID"})
+
+
 def test_admin_delete_adjuster_blocked_if_claims_assigned(client, db):
     # Create an adjuster and manually assign claims_assigned = 3
     create_res = client.post("/api/v1/admin/adjusters", json={
         "name": "Busy Adjuster",
         "email": "busy.adj@insure.co",
+        "phone": "+1-555-222-3333",
         "specialization": "motor",
     }, headers={"X-User-ID": "TEST_ADMIN_ID"})
     assert create_res.status_code == 200

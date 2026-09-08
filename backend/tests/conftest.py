@@ -88,15 +88,15 @@ def _seed_db(db):
             ))
 
     test_adjusters = [
-        ("motor",         "Priya Sharma",   "priya@insure.co"),
-        ("home",          "Rohan Mehta",    "rohan@insure.co"),
-        ("health",        "Dr. Anita Roy",  "anita@insure.co"),
-        ("senior_health", "Dr. V. Rao",     "rao@insure.co"),
-        ("travel",        "Vikram Sen",     "vikram@insure.co"),
-        ("cyber",         "Neha Kapoor",    "neha@insure.co"),
+        ("motor",         "Priya Sharma",   "priya@insure.co", "+1-555-0101"),
+        ("home",          "Rohan Mehta",    "rohan@insure.co", "+1-555-0102"),
+        ("health",        "Dr. Anita Roy",  "anita@insure.co", "+1-555-0103"),
+        ("senior_health", "Dr. V. Rao",     "rao@insure.co",   "+1-555-0104"),
+        ("travel",        "Vikram Sen",     "vikram@insure.co", "+1-555-0105"),
+        ("cyber",         "Neha Kapoor",    "neha@insure.co",  "+1-555-0106"),
     ]
 
-    for spec, name, email in test_adjusters:
+    for spec, name, email, phone in test_adjusters:
         adj = db.query(Adjuster).filter(Adjuster.email == email).first()
         uid = adj.id if adj else str(uuid.uuid4())
         
@@ -106,6 +106,7 @@ def _seed_db(db):
                 id=uid,
                 full_name=name,
                 email=email,
+                phone=phone,
                 password_hash=get_password_hash("AdjusterPassword123!"),
                 role="ADJUSTER",
                 status="active"
@@ -116,6 +117,7 @@ def _seed_db(db):
                 id=uid,
                 name=name,
                 email=email,
+                phone=phone,
                 specialization=spec,
                 claims_assigned=0,
                 is_active=True,

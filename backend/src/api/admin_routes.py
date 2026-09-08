@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from src.database.session import get_db
 from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
-from src.utils.validators import validate_email, validate_full_name
+from src.utils.validators import validate_email, validate_full_name, validate_phone
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -35,6 +35,7 @@ CANONICAL_POLICY_TYPES = {"health", "senior_health", "home", "travel", "motor", 
 class AddAdjusterRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=100, description="Full name of the adjuster")
     email: str = Field(..., min_length=3, max_length=254, description="Adjuster email address")
+    phone: str = Field(..., min_length=5, max_length=20, description="Phone number of the adjuster")
     specialization: str = Field(
         ...,
         description="Canonical specialization: health, senior_health, home, travel, motor, or cyber",
@@ -44,6 +45,7 @@ class AddAdjusterRequest(BaseModel):
 class UpdateAdjusterRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=100, description="Full name of the adjuster")
     email: Optional[str] = Field(None, min_length=3, max_length=254, description="Adjuster email address")
+    phone: Optional[str] = Field(None, max_length=20, description="Phone number of the adjuster")
     specialization: Optional[str] = Field(
         None,
         description="Canonical specialization: health, senior_health, home, travel, motor, or cyber",
@@ -279,6 +281,9 @@ def add_adjuster(
     try:
         clean_name = validate_full_name(payload.name)
         clean_email = validate_email(payload.email)
+        clean_phone = validate_phone(payload.phone)
+        if not clean_phone:
+            raise ValueError("Phone number is required.")
     except ValueError as val_err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
 
@@ -304,6 +309,7 @@ def add_adjuster(
         id=user_id,
         full_name=clean_name,
         email=clean_email,
+        phone=clean_phone,
         password_hash=get_password_hash(temp_password),
         role="ADJUSTER",
         status="active",
@@ -312,6 +318,7 @@ def add_adjuster(
         id=user_id,
         name=clean_name,
         email=clean_email,
+        phone=clean_phone,
         specialization=spec,
         claims_assigned=0,
         is_active=True,
@@ -333,6 +340,7 @@ def add_adjuster(
         "id": user_id,
         "name": clean_name,
         "email": clean_email,
+        "phone": clean_phone,
         "specialization": spec,
         "temporary_password": temp_password,
         "message": "Adjuster account created successfully. Provide the temporary password securely to the adjuster.",
@@ -353,6 +361,7 @@ def list_adjusters(
             "id": a.id,
             "name": a.name,
             "email": a.email,
+            "phone": a.phone,
             "specialization": a.specialization,
             "claims_assigned": a.claims_assigned,
             "is_active": a.is_active,
@@ -381,6 +390,7 @@ def get_adjuster(
         "id": adjuster.id,
         "name": adjuster.name,
         "email": adjuster.email,
+        "phone": adjuster.phone,
         "specialization": adjuster.specialization,
         "claims_assigned": adjuster.claims_assigned,
         "is_active": adjuster.is_active,
@@ -395,7 +405,7 @@ def update_adjuster(
     db: Session = Depends(get_db),
 ):
     """
-    Update an adjuster's information (name, email, specialization, active status).
+    Update an adjuster's information (name, email, phone, specialization, active status).
     Synchronizes the corresponding User account.
     """
     _resolve_admin(request, db)
@@ -434,6 +444,17 @@ def update_adjuster(
         except ValueError as err:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
 
+    if payload.phone is not None:
+        try:
+            clean_phone = validate_phone(payload.phone)
+            if not clean_phone:
+                raise ValueError("Phone number cannot be empty.")
+            adjuster.phone = clean_phone  # type: ignore[assignment]
+            if user:
+                user.phone = clean_phone  # type: ignore[assignment]
+        except ValueError as err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+
     if payload.specialization is not None:
         spec = payload.specialization.strip().lower()
         if spec not in CANONICAL_POLICY_TYPES:
@@ -463,6 +484,7 @@ def update_adjuster(
         "id": adjuster.id,
         "name": adjuster.name,
         "email": adjuster.email,
+        "phone": adjuster.phone,
         "specialization": adjuster.specialization,
         "claims_assigned": adjuster.claims_assigned,
         "is_active": adjuster.is_active,
