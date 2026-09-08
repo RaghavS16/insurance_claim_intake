@@ -21,7 +21,7 @@ async def process_claimant_turn(
     input_mode: str,
     turn_number: int,
 ) -> Dict[str, Any]:
-    """Process one claimant turn and persist user, state and agent response atomically."""
+    """Process one claimant turn and persist state and conversation atomically."""
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated", "submitted"}:
         return prior_state
@@ -33,10 +33,12 @@ async def process_claimant_turn(
     claim.pipeline_state = dict(result)
     claim.insurance_type = extracted.get("insurance_type")
     claim.event_description = extracted.get("event_description")
+    claim.event_location = extracted.get("event_location")
     claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
     claim.conversation_status = result.get("conversation_status", "collecting")
     if result.get("extraction_confidence") is not None:
         claim.extraction_confidence = float(result["extraction_confidence"])
+
     event_date_str = extracted.get("event_date")
     if event_date_str:
         try:
