@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from src.config import settings
 
 _IS_PG = settings.DATABASE_URL.startswith("postgresql")
@@ -102,6 +102,13 @@ class Claim(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+    turns: Mapped[list["ConversationTurn"]] = relationship(
+        "ConversationTurn",
+        back_populates="claim",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
 class PasswordResetOTP(Base):
     __tablename__ = "password_reset_otps"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -116,9 +123,11 @@ class PasswordResetOTP(Base):
 class ConversationTurn(Base):
     __tablename__ = "conversation_turns"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id"), nullable=False, default=None, index=True)
+    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, default=None, index=True)
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
     speaker: Mapped[str] = mapped_column(String, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    claim: Mapped["Claim"] = relationship("Claim", back_populates="turns")

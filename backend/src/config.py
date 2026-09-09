@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = Field(5, ge=1, le=50)
     DB_MAX_OVERFLOW: int = Field(10, ge=0, le=100)
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
+    REDIS_URL: Optional[str] = None
 
     LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://localhost:11434"

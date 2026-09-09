@@ -1,6 +1,7 @@
 """
-In-memory thread-safe rate limiter with sliding window tracking.
-Provides brute-force and credential-stuffing protection for sensitive endpoints.
+Distributed rate limiter with sliding window tracking.
+Supports Redis for multi-worker / cluster deployments with automatic,
+graceful fallback to in-memory sliding window when Redis is unavailable.
 """
 import threading
 import time
@@ -14,9 +15,9 @@ from src.utils.logger import app_logger
 logger = app_logger
 
 
-class SlidingWindowRateLimiter:
+class InMemorySlidingWindowRateLimiter:
     """
-    Thread-safe sliding window rate limiter.
+    Thread-safe in-memory sliding window rate limiter.
     Tracks timestamps of requests for each identifier (e.g. IP + endpoint).
     """
 
@@ -30,17 +31,11 @@ class SlidingWindowRateLimiter:
         max_requests: int,
         window_seconds: int,
     ) -> Tuple[bool, int, int]:
-        """
-        Check if a request is allowed.
-        Returns:
-            (allowed: bool, remaining_requests: int, retry_after_seconds: int)
-        """
         now = time.time()
         window_start = now - window_seconds
 
         with self._lock:
             queue = self._requests[key]
-            # Evict timestamps older than window_start
             while queue and queue[0] <= window_start:
                 queue.popleft()
 
@@ -54,7 +49,6 @@ class SlidingWindowRateLimiter:
                 return False, 0, retry_after
 
     def reset(self, key: Optional[str] = None):
-        """Reset history for a specific key or all keys (useful for testing)."""
         with self._lock:
             if key:
                 self._requests.pop(key, None)
@@ -62,8 +56,100 @@ class SlidingWindowRateLimiter:
                 self._requests.clear()
 
 
-# Global in-memory rate limiter instance
-limiter = SlidingWindowRateLimiter()
+class RedisSlidingWindowRateLimiter:
+    """
+    Distributed sliding window rate limiter using Redis sorted sets (ZSET).
+    Falls back transparently to in-memory limiter on connection errors.
+    """
+
+    def __init__(self, redis_url: str):
+        self._redis_url = redis_url
+        self._redis_client = None
+        self._fallback = InMemorySlidingWindowRateLimiter()
+        self._connect()
+
+    def _connect(self):
+        try:
+            import importlib
+            redis_mod = importlib.import_module("redis")
+            self._redis_client = redis_mod.Redis.from_url(
+                self._redis_url,
+                decode_responses=True,
+                socket_timeout=2.0,
+                socket_connect_timeout=2.0,
+            )
+            # Quick ping to verify connectivity
+            self._redis_client.ping()
+            logger.info("Connected to Redis for distributed rate limiting at %s", self._redis_url)
+        except Exception as exc:
+            logger.warning("Redis rate limiter unavailable (%s). Falling back to in-memory mode.", exc)
+            self._redis_client = None
+
+    def is_allowed(
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int,
+    ) -> Tuple[bool, int, int]:
+        if not self._redis_client:
+            return self._fallback.is_allowed(key, max_requests, window_seconds)
+
+        now = time.time()
+        window_start = now - window_seconds
+        redis_key = f"rate_limit:{key}"
+
+        try:
+            pipe = self._redis_client.pipeline()
+            # 1. Remove old timestamps outside sliding window
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            # 2. Count remaining requests in current window
+            pipe.zcard(redis_key)
+            # 3. Get oldest timestamp in current window for Retry-After calculation
+            pipe.zrange(redis_key, 0, 0, withscores=True)
+            results = pipe.execute()
+
+            current_count = results[1]
+            oldest_record = results[2]
+
+            if current_count < max_requests:
+                # Add current timestamp to window
+                p2 = self._redis_client.pipeline()
+                p2.zadd(redis_key, {str(now): now})
+                p2.expire(redis_key, window_seconds + 5)
+                p2.execute()
+                return True, max_requests - (current_count + 1), 0
+            else:
+                if oldest_record:
+                    oldest_ts = oldest_record[0][1]
+                    retry_after = max(1, int(oldest_ts + window_seconds - now))
+                else:
+                    retry_after = window_seconds
+                return False, 0, retry_after
+        except Exception as exc:
+            logger.warning("Redis rate limiter error (%s). Falling back to in-memory mode.", exc)
+            return self._fallback.is_allowed(key, max_requests, window_seconds)
+
+    def reset(self, key: Optional[str] = None):
+        if self._redis_client:
+            try:
+                if key:
+                    self._redis_client.delete(f"rate_limit:{key}")
+                else:
+                    keys = self._redis_client.keys("rate_limit:*")
+                    if keys:
+                        self._redis_client.delete(*keys)
+            except Exception:
+                pass
+        self._fallback.reset(key)
+
+
+def _build_limiter():
+    if getattr(settings, "REDIS_URL", None):
+        return RedisSlidingWindowRateLimiter(settings.REDIS_URL)
+    return InMemorySlidingWindowRateLimiter()
+
+
+limiter = _build_limiter()
 
 
 def enforce_rate_limit(
@@ -75,7 +161,7 @@ def enforce_rate_limit(
 ) -> None:
     """
     Enforce rate limiting on an incoming HTTP request.
-    Raises HTTPException(429) if threshold exceeded.
+    Raises HTTPException(429) with Retry-After header if threshold exceeded.
     """
     # Allow tests to selectively bypass rate limits unless testing rate limits explicitly
     if allow_test_bypass and settings.ENVIRONMENT == "test":
