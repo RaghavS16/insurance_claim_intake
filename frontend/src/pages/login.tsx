@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
+import { setAuthToken } from "../lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -9,7 +10,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -35,7 +36,7 @@ export default function LoginPage() {
       }
 
       const data = await res.json();
-      localStorage.setItem("access_token", data.access_token);
+      setAuthToken(data.access_token, rememberMe);
 
       // Fetch user role to determine redirection
       const meRes = await fetch(`${API_BASE}/api/v1/auth/me`, {
@@ -56,8 +57,8 @@ export default function LoginPage() {
       } else {
         setError("Invalid user role.");
       }
-    } catch (err: any) {
-      setError(err.message || "An error occurred during login.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An error occurred during login.");
     } finally {
       setLoading(false);
     }
@@ -82,7 +83,7 @@ export default function LoginPage() {
           <div className="mb-8">
             <h1 className="font-headline text-3xl font-bold text-[#191c1e] mb-2">Welcome back</h1>
             <p className="font-body text-sm text-[#505f76]">
-              Sign in to continue to your dashboard and manage your audio flows.
+              Sign in to continue to your dashboard and manage your insurance claims.
             </p>
           </div>
 

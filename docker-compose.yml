@@ -1,31 +1,52 @@
-version: '3.8'
 services:
   postgres:
     image: pgvector/pgvector:pg15
     environment:
       POSTGRES_PASSWORD: DBpassword
       POSTGRES_DB: insurance_claims
-    ports: ["5433:5432"]
+    ports:
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
       - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d insurance_claims"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   backend:
     build: ./backend
-    ports: ["8000:8000"]
+    ports:
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-      AWS_REGION: ap-south-1
-    depends_on: [postgres]
+      ENVIRONMENT: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
-    ports: ["3000:3000"]
+    ports:
+      - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:

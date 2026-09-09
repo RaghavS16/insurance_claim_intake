@@ -8,15 +8,15 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
 from src.database.models import Policy, PolicyLinkAudit, User
 from src.utils.logger import app_logger
-
 from src.utils.rate_limiter import enforce_rate_limit
-from src.utils.logger import app_logger
+from src.api.deps import get_current_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/policies", tags=["Policies"])
@@ -39,9 +39,6 @@ class LinkPolicyRequest(BaseModel):
 # ---------------------------------------------------------------------------
 def _resolve_user(request: Request, db: Session) -> User:
     """Resolve authenticated user via centralized get_current_user dependency."""
-    from src.api.main import get_current_user
-    from fastapi.security import HTTPAuthorizationCredentials
-
     auth_header = request.headers.get("authorization", "")
     credentials = None
     if auth_header.startswith("Bearer "):

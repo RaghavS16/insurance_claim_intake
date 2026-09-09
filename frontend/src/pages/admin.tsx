@@ -13,6 +13,7 @@ import {
   PasswordResetModal,
   DeleteAdjusterModal,
 } from "@/components/admin/AdminModals";
+import { getAuthToken, clearAuthToken } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -98,7 +99,7 @@ export default function AdminPage() {
 
   // Authenticate Admin
   useEffect(() => {
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;
@@ -119,6 +120,7 @@ export default function AdminPage() {
         fetchPolicies(token);
         fetchAdjusters(token);
       } catch {
+        clearAuthToken();
         router.push("/login");
       } finally {
         setLoading(false);
@@ -163,7 +165,7 @@ export default function AdminPage() {
   };
 
   const handleLogout = async () => {
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (token) {
       try {
         await fetch(`${API_BASE}/api/v1/auth/logout`, {
@@ -172,7 +174,7 @@ export default function AdminPage() {
         });
       } catch {}
     }
-    localStorage.removeItem("access_token");
+    clearAuthToken();
     router.push("/login");
   };
 
@@ -187,7 +189,7 @@ export default function AdminPage() {
 
   const handleUploadCsv = async () => {
     if (!csvFile) return;
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setImportingCsv(true);
@@ -237,7 +239,7 @@ export default function AdminPage() {
 
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setCreatingPolicy(true);
@@ -295,7 +297,7 @@ export default function AdminPage() {
   const handleSavePolicyEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPolicy) return;
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setSavingPolicy(true);
@@ -337,7 +339,7 @@ export default function AdminPage() {
   // Create Adjuster Handler
   const handleCreateAdjuster = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setCreatingAdjuster(true);
@@ -394,7 +396,7 @@ export default function AdminPage() {
   const handleSaveAdjusterEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAdjuster) return;
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setSavingEdit(true);
@@ -429,7 +431,7 @@ export default function AdminPage() {
 
   // Reset Password Handler
   const handleResetPassword = async (adj: AdjusterItem) => {
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setResettingPasswordId(adj.id);
@@ -457,7 +459,7 @@ export default function AdminPage() {
   // Delete Adjuster Handler
   const handleDeleteAdjuster = async () => {
     if (!deletingAdjuster) return;
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) return;
 
     setDeletingLoading(true);

@@ -249,6 +249,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many incorrect attempts. Please request a new code.",
+            headers={"Retry-After": "300"},  # Suggest retry after 5 minutes
         )
 
     if hash_otp(payload.otp.strip()) != record.otp_hash:

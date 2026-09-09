@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { useRouter } from "next/router";
+import { getAuthToken, clearAuthToken } from "../lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -7,7 +8,7 @@ export default function IndexPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;
@@ -28,12 +29,12 @@ export default function IndexPage() {
         } else if (data.role === "ADMIN") {
           router.push("/admin");
         } else {
-          localStorage.removeItem("access_token");
+          clearAuthToken();
           router.push("/login");
         }
       })
       .catch(() => {
-        localStorage.removeItem("access_token");
+        clearAuthToken();
         router.push("/login");
       });
   }, [router]);

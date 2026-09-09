@@ -38,104 +38,16 @@ from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
 # Route modules
 from src.api import auth_routes, claim_routes, policy_routes, admin_routes
 
+# Shared auth dependencies (also exported for backward compatibility)
+from src.api.deps import get_current_user, get_current_user_id, require_role  # noqa: F401
+
 logger = app_logger
-security_scheme = HTTPBearer(auto_error=False)
 
 
 # ---------------------------------------------------------------------------
-# Centralized Authentication Dependencies
+# Note: get_current_user, get_current_user_id, and require_role are now defined
+# in src.api.deps and re-exported from this module for backward compatibility.
 # ---------------------------------------------------------------------------
-def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
-    db: Session = Depends(get_db)
-) -> User:
-    """
-    Extract and verify JWT token to fetch the currently authenticated user.
-
-    SECURITY: The X-User-ID header fallback is ONLY available in test environments.
-    Production/staging environments strictly require a valid JWT bearer token.
-    """
-    token = None
-    if credentials:
-        token = credentials.credentials
-
-    uid = None
-    if token:
-        if is_token_revoked(token):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated: Token has been revoked."
-            )
-        payload = verify_token(token)
-        if payload:
-            uid = payload.get("sub")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated: Invalid or expired token."
-            )
-    else:
-        # X-User-ID fallback is ONLY available in test environment
-        if settings.ENVIRONMENT == "test":
-            uid = request.headers.get("X-User-ID")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required: missing bearer token."
-            )
-
-    if not uid:
-        if settings.ENVIRONMENT == "test" and not request.headers.get("X-Test-No-Fallback"):
-            uid = "TEST_USER_ID"
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required."
-            )
-
-    # Fetch user from DB
-    user = db.query(User).filter(User.id == uid).first()
-    if not user:
-        if settings.ENVIRONMENT == "test":
-            # Autocreate mock user dynamically to prevent breaking existing Phase 1 tests
-            user = db.query(User).filter(User.email == f"{uid.lower()}@test.com").first()
-            if not user:
-                user = User(
-                    id=uid,
-                    full_name=uid,
-                    email=f"{uid.lower()}@test.com",
-                    phone="",
-                    password_hash=get_password_hash("test-password"),
-                    role="CLAIMANT",
-                    status="active"
-                )
-                db.add(user)
-                db.commit()
-                db.refresh(user)
-            return user
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required: User not found."
-        )
-    return user
-
-
-def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
-    """Dependency helper to get the authenticated user ID string."""
-    return current_user.id
-
-
-def require_role(allowed_roles: List[str]):
-    """Enforce that the authenticated user possesses an allowed role."""
-    def dependency(current_user: User = Depends(get_current_user)):
-        if current_user.role not in allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied: Role '{current_user.role}' not permitted."
-            )
-        return current_user
-    return dependency
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +146,11 @@ def _init_db_and_seeds():
                 except Exception:
                     pass
 
-        # Only seed demo sample policies and test users in development and test environments
+        # Seed canonical policies and users in development and test environments
         if settings.ENVIRONMENT in ("development", "test"):
             db = SessionLocal()
             try:
-                # Seed policies if empty
+                # 1. Seed policies if empty
                 if db.query(Policy).first() is None:
                     canonical_policies = [
                         ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
@@ -265,19 +177,22 @@ def _init_db_and_seeds():
                             policyholder_phone_last4=hphone,
                             link_attempts=0,
                         ))
+                    db.commit()
 
-                    canonical_adjusters = [
-                        ("motor", "Priya Sharma", "priya.motor@insure.co", "+1 (555) 234-0101"),
-                        ("home", "Rohan Mehta", "rohan.home@insure.co", "+1 (555) 234-0102"),
-                        ("health", "Dr. Anita Roy", "anita.health@insure.co", "+1 (555) 234-0103"),
-                        ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+1 (555) 234-0104"),
-                        ("travel", "Vikram Sen", "vikram.travel@insure.co", "+1 (555) 234-0105"),
-                        ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+1 (555) 234-0106"),
-                    ]
-                    for spec, name, email, phone in canonical_adjusters:
-                        uid = str(uuid.uuid4())
+                # 2. Seed adjusters roster if empty
+                canonical_adjusters = [
+                    ("motor", "Priya Sharma", "priya.motor@insure.co", "+1 (555) 234-0101"),
+                    ("home", "Rohan Mehta", "rohan.home@insure.co", "+1 (555) 234-0102"),
+                    ("health", "Dr. Anita Roy", "anita.health@insure.co", "+1 (555) 234-0103"),
+                    ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+1 (555) 234-0104"),
+                    ("travel", "Vikram Sen", "vikram.travel@insure.co", "+1 (555) 234-0105"),
+                    ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+1 (555) 234-0106"),
+                ]
+                for spec, name, email, phone in canonical_adjusters:
+                    existing_adj = db.query(Adjuster).filter(Adjuster.email == email).first()
+                    if not existing_adj:
                         db.add(Adjuster(
-                            id=uid,
+                            id=str(uuid.uuid4()),
                             name=name,
                             email=email,
                             phone=phone,
@@ -285,28 +200,39 @@ def _init_db_and_seeds():
                             claims_assigned=0,
                             is_active=True,
                         ))
-                        # Seed matching user credentials
+                db.commit()
+
+                # 3. Seed canonical users (Admin, Adjusters, Claimant)
+                canonical_users = [
+                    ("System Admin", "admin@insure.co", "+1 (555) 000-0001", "AdminPassword123!", "ADMIN"),
+                    ("Test Admin", "admin@test.com", "+1 (555) 000-0002", "AdminPassword123!", "ADMIN"),
+                    ("John Doe", "john@test.com", "1234", "ClaimantPassword123!", "CLAIMANT"),
+                ]
+                # Add adjusters to canonical users
+                for spec, name, email, phone in canonical_adjusters:
+                    canonical_users.append((name, email, phone, "AdjusterPassword123!", "ADJUSTER"))
+
+                for uname, uemail, uphone, upass, urole in canonical_users:
+                    existing_u = db.query(User).filter(User.email == uemail).first()
+                    if not existing_u:
                         db.add(User(
-                            id=uid,
-                            full_name=name,
-                            email=email,
-                            phone=phone,
-                            password_hash=get_password_hash("AdjusterPassword123!"),
-                            role="ADJUSTER",
-                            status="active"
+                            id=str(uuid.uuid4()),
+                            full_name=uname,
+                            email=uemail,
+                            phone=uphone,
+                            password_hash=get_password_hash(upass),
+                            role=urole,
+                            status="active",
                         ))
+                    else:
+                        # Ensure active status and valid role
+                        if existing_u.status != "active":
+                            existing_u.status = "active"
+                        if existing_u.role != urole:
+                            existing_u.role = urole
 
-                    # Seed default claimant john@test.com
-                    db.add(User(
-                        full_name="John Doe",
-                        email="john@test.com",
-                        password_hash=get_password_hash("ClaimantPassword123!"),
-                        role="CLAIMANT",
-                        status="active"
-                    ))
-
-                    db.commit()
-                    logger.info("Development database initialized with canonical demo policies and test users.")
+                db.commit()
+                logger.info("Database initialized with canonical policies, adjusters, and users (including Admin).")
             finally:
                 db.close()
         else:

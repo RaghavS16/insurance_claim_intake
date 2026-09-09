@@ -113,18 +113,23 @@ def validate_enum(value: str, valid_values: Set[str], field_name: str) -> str:
 _DANGEROUS_PATTERNS = re.compile(r"[<>\"';]|--|\b(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC|UNION)\b", re.IGNORECASE)
 
 
-def sanitize_text_input(text: str, max_length: int = 5000) -> str:
+def sanitize_text_input(text: str, max_length: int = 5000, strict: bool = False) -> str:
     """
     Sanitize free-text user input:
     - Strip leading/trailing whitespace
     - Remove null bytes
     - Truncate to max_length
-    - Escape curly braces (template injection prevention)
+    - Optionally raise ValueError if dangerous patterns are detected (strict mode)
+
+    The strict=True mode is suitable for structured fields (names, policy IDs).
+    Leave strict=False for claim narratives which may legitimately contain keywords.
     """
     if not text:
         return ""
     clean = text.replace("\x00", "").strip()
     clean = clean[:max_length]
+    if strict and _DANGEROUS_PATTERNS.search(clean):
+        raise ValueError("Input contains disallowed characters or keywords.")
     return clean
 
 

@@ -9,6 +9,7 @@ import { ManualEditModal } from "@/components/claimant/ManualEditModal";
 import { ExtractedData } from "@/components/claimant/ExtractionPanel";
 import { ConversationTurn } from "@/components/claimant/ChatTranscript";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
+import { getAuthToken, clearAuthToken } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -267,7 +268,7 @@ export default function ClaimantPage() {
     if (!authToken || !selectedTicketId) return;
     if (isRecordingRef.current) stopVoiceRecording();
     setLoading(true);
-    setErrorBanner("");
+    setErrorBanner(""); // Clear any prior error when switching claims
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${selectedTicketId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -348,7 +349,7 @@ export default function ClaimantPage() {
 
   useEffect(() => {
     if (!router.isReady || hasInitializedRef.current) return;
-    const savedToken = localStorage.getItem("access_token");
+    const savedToken = getAuthToken();
     if (!savedToken) { router.push("/login"); return; }
     setToken(savedToken);
     hasInitializedRef.current = true;
@@ -366,7 +367,7 @@ export default function ClaimantPage() {
           initBlankChat();
         }
       })
-      .catch(() => { localStorage.removeItem("access_token"); router.push("/login"); });
+      .catch(() => { clearAuthToken(); router.push("/login"); });
   }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);
 
   useEffect(() => () => { try { wsRef.current?.close(); } catch {} stopVoiceRecording(); }, [stopVoiceRecording]);
@@ -490,7 +491,7 @@ export default function ClaimantPage() {
   const handleLogout = () => {
     if (isRecording) stopVoiceRecording();
     try { wsRef.current?.close(); } catch {}
-    localStorage.removeItem("access_token");
+    clearAuthToken();
     router.push("/login");
   };
 

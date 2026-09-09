@@ -19,7 +19,17 @@ from src.agents.state import ClaimState
 from src.utils.logger import app_logger
 
 logger = app_logger
-llm = get_configured_llm()
+_llm = None  # Lazy-initialized to avoid import failures when LLM backend is offline
+
+
+def _get_llm():
+    """Lazy-initialize the LLM to avoid blocking/failing at import time."""
+    global _llm
+    if _llm is None:
+        _llm = get_configured_llm()
+    return _llm
+
+
 T = TypeVar("T", bound=BaseModel)
 REQUIRED_FIELDS = list(COMMON_REQUIRED_FIELDS)
 UNKNOWN_SENTINEL = "UNKNOWN"
@@ -260,7 +270,7 @@ def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldCh
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
     raw = (state.get("claim_text") or "").strip(); state["last_user_utterance"] = raw; state["turn_number"] = int(state.get("turn_number") or 0)+1; state.setdefault("conversation_history",[]).append({"turn":state["turn_number"],"speaker":"user","text":raw}); state.setdefault("extracted_data",{}); state.setdefault("field_status",{}); state.setdefault("field_metadata",{}); state.setdefault("audit_log",[]); state["recently_extracted_fields"]=[]; state["extraction_changes"]=[]; state["_skip_all"]=False; state["_confirmation_pending"]=False; state["_rejection_active"]=False
     if not raw: state["last_intent"]="filler"; return state
-    awaiting = bool(state.get("awaiting_confirmation")); prompt = f"{SYSTEM_PROMPT}\nReference date: {date.today().isoformat()}\nCurrent authoritative facts: {json.dumps(state.get('extracted_data',{}),ensure_ascii=False,default=str)}\nRecent conversation:\n{_history_text(state)}\nLatest claimant utterance:\n{raw}"; patch = _invoke_structured(llm,prompt,ExtractionPatch) or ExtractionPatch(intent=_fallback_intent(raw,awaiting),changes=[]); state["last_intent"]=patch.intent; state["spoken_response"]=""
+    awaiting = bool(state.get("awaiting_confirmation")); prompt = f"{SYSTEM_PROMPT}\nReference date: {date.today().isoformat()}\nCurrent authoritative facts: {json.dumps(state.get('extracted_data',{}),ensure_ascii=False,default=str)}\nRecent conversation:\n{_history_text(state)}\nLatest claimant utterance:\n{raw}"; patch = _invoke_structured(_get_llm(),prompt,ExtractionPatch) or ExtractionPatch(intent=_fallback_intent(raw,awaiting),changes=[]); state["last_intent"]=patch.intent; state["spoken_response"]=""
     deterministic = _rule_changes(raw,state); deterministic_fields={c.field for c in deterministic}; model_changes=[c for c in patch.changes if c.field not in deterministic_fields]; all_changes=deterministic+model_changes
     for raw_change in all_changes:
         change=_validate_change(raw_change,state)

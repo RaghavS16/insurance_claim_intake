@@ -22,6 +22,7 @@ from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
 from src.utils.validators import validate_email, validate_full_name, validate_phone
 from src.utils.logger import app_logger
+from src.api.deps import get_current_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
@@ -85,7 +86,6 @@ class UpdatePolicyRequest(BaseModel):
 # ---------------------------------------------------------------------------
 def _resolve_admin(request: Request, db: Session) -> User:
     """Ensure caller is an authenticated user with ADMIN role."""
-    from src.api.main import get_current_user
     from fastapi.security import HTTPAuthorizationCredentials
 
     auth_header = request.headers.get("authorization", "")
@@ -474,7 +474,7 @@ def update_adjuster(
         db.refresh(adjuster)
     except Exception:
         db.rollback()
-        logger.exception(f"Failed to update adjuster {adjuster_id}")
+        logger.exception("Failed to update adjuster %s", adjuster_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update adjuster.",
@@ -524,7 +524,7 @@ def reset_adjuster_password(
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception(f"Failed to reset password for adjuster {adjuster_id}")
+        logger.exception("Failed to reset password for adjuster %s", adjuster_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset adjuster password.",
@@ -572,7 +572,7 @@ def delete_adjuster(
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception(f"Failed to delete adjuster {adjuster_id}")
+        logger.exception("Failed to delete adjuster %s", adjuster_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete adjuster.",
@@ -822,7 +822,7 @@ def update_policy(
         db.refresh(policy)
     except Exception:
         db.rollback()
-        logger.exception(f"Failed to update policy {policy_id_or_number}")
+        logger.exception("Failed to update policy %s", policy_id_or_number)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update policy in database.",
@@ -864,7 +864,7 @@ def delete_policy(
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception(f"Failed to delete policy {policy_id_or_number}")
+        logger.exception("Failed to delete policy %s", policy_id_or_number)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete policy from database.",

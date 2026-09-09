@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
+import { getAuthToken, clearAuthToken } from "../lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -9,7 +10,7 @@ export default function AdjusterPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem("access_token");
+    const savedToken = getAuthToken();
     if (!savedToken) {
       router.push("/login");
       return;
@@ -30,13 +31,13 @@ export default function AdjusterPage() {
         setCurrentUser(data);
       })
       .catch(() => {
-        localStorage.removeItem("access_token");
+        clearAuthToken();
         router.push("/login");
       });
   }, [router]);
 
   const handleLogout = () => {
-    localStorage.removeItem("access_token");
+    clearAuthToken();
     router.push("/login");
   };
 

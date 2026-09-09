@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
+import { getAuthToken, clearAuthToken } from "../lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -32,40 +33,8 @@ export default function LinkPolicyPage() {
   const [myPolicies, setMyPolicies] = useState<LinkedPolicy[]>([]);
   const [loadingPolicies, setLoadingPolicies] = useState(true);
 
-  // Initialize from query param if available
-  useEffect(() => {
-    if (policy && typeof policy === "string") {
-      setPolicyNumber(policy.toUpperCase());
-    }
-  }, [policy]);
-
-  // Authenticate user & load policies
-  useEffect(() => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Unauthorized");
-        return res.json();
-      })
-      .then((data) => {
-        setCurrentUser(data);
-        fetchMyPolicies(token);
-      })
-      .catch(() => {
-        localStorage.removeItem("access_token");
-        router.push("/login");
-      });
-  }, [router]);
-
   const fetchMyPolicies = async (token?: string) => {
-    const t = token || localStorage.getItem("access_token");
+    const t = token || getAuthToken();
     if (!t) return;
 
     try {
@@ -83,6 +52,38 @@ export default function LinkPolicyPage() {
     }
   };
 
+  // Initialize from query param if available
+  useEffect(() => {
+    if (policy && typeof policy === "string") {
+      setPolicyNumber(policy.toUpperCase());
+    }
+  }, [policy]);
+
+  // Authenticate user & load policies
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+
+    fetch(`${API_BASE}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Unauthorized");
+        return res.json();
+      })
+      .then((data) => {
+        setCurrentUser(data);
+        fetchMyPolicies(token);
+      })
+      .catch(() => {
+        clearAuthToken();
+        router.push("/login");
+      });
+  }, [router]);
+
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value.replace(/\D/g, "").slice(0, 4);
     setPhoneLast4(val);
@@ -93,7 +94,7 @@ export default function LinkPolicyPage() {
     setError("");
     setSuccessData(null);
 
-    const token = localStorage.getItem("access_token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;
@@ -129,15 +130,15 @@ export default function LinkPolicyPage() {
 
       setSuccessData(data);
       fetchMyPolicies(token);
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("access_token");
+    clearAuthToken();
     router.push("/login");
   };
 

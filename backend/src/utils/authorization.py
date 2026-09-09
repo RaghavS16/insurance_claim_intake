@@ -31,12 +31,13 @@ def get_claim_with_ownership(
 def enforce_claim_ownership(claim: Claim, current_user: User) -> None:
     """
     Enforce that a CLAIMANT user owns the given claim.
-    ADJUSTERs bypass this check (they can view any claim).
+    ADJUSTERs and ADMINs bypass this check — they can view and act on any claim.
 
     Raises HTTP 403 if the claimant does not own the claim.
     """
-    if current_user.role != "CLAIMANT":
-        return  # Adjusters can access any claim
+    # Non-claimant roles (ADJUSTER, ADMIN) have global access to claims
+    if current_user.role in ("ADJUSTER", "ADMIN"):
+        return
 
     user_id = str(current_user.id)
     claimant_id = str(claim.claimant_id) if claim.claimant_id else None

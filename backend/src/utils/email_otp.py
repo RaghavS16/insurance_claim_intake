@@ -48,11 +48,16 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> 
         f"If you didn't request this, you can safely ignore this email.\n"
     )
 
-    # Always log OTP in application logs for development transparency
-    logger.info("Generated Password Reset OTP for %s: %s", to_email, otp)
+    # Only log OTP plaintext in non-production environments (dev/test fallback transparency)
+    # NEVER log OTPs in production or staging to avoid credential leakage in logs
+    if settings.ENVIRONMENT not in ("production", "staging"):
+        logger.info("Generated Password Reset OTP for %s: %s (dev/test only)", to_email, otp)
+    else:
+        logger.info("Password reset OTP generated for %s", to_email)
 
     if not settings.SMTP_HOST:
-        logger.info("SMTP not configured — OTP for %s is: %s (dev/test fallback)", to_email, otp)
+        if settings.ENVIRONMENT not in ("production", "staging"):
+            logger.info("SMTP not configured — OTP for %s is: %s (dev/test fallback)", to_email, otp)
         return False
 
     from_email = settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL
