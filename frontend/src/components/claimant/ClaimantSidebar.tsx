@@ -105,7 +105,13 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const filteredClaims = claims.filter((c) => {
+  const startedClaims = claims.filter((c) => {
+    // Only include conversations that have at least one turn or are submitted/verified or have details
+    const hasInteraction = (c.turn_count && c.turn_count > 0) || c.status === "submitted" || c.status === "verified" || Boolean(c.event_description);
+    return Boolean(hasInteraction);
+  });
+
+  const filteredClaims = startedClaims.filter((c) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (

@@ -84,7 +84,6 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
         <button
           type="button"
           onClick={onToggleMic}
-          disabled={confirmed}
           title={isRecording ? "Mute Microphone" : "Start Speaking"}
           className={`w-16 h-16 rounded-full text-white flex items-center justify-center relative z-10 transition-all cursor-pointer shadow-md ${
             isRecording

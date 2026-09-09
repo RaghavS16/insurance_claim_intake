@@ -22,9 +22,20 @@ async def process_claimant_turn(
     turn_number: int | None = None,
 ) -> Dict[str, Any]:
     """Process one claimant turn and persist state plus both chat messages atomically."""
-    # Never rely on a caller-local turn counter. Voice sockets reconnect and text/voice
-    # can be mixed, so the database is the source of truth for ordering.
-    if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated", "submitted"}:
+    if claim.status == "submitted" or claim.conversation_status in {"submitted", "confirmed"}:
+        prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+        logical_turn = (prior_turns // 2) + 1
+        agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters. If you have questions or want to file another claim, click 'New Claim Intake' above or let me know!"
+        try:
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_reply))
+            db.commit()
+        except Exception:
+            db.rollback()
+        state = dict(getattr(claim, "pipeline_state", None) or {})
+        return {**state, "next_question": agent_reply, "message": agent_reply, "conversation_status": "confirmed"}
+
+    if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated"}:
         return dict(getattr(claim, "pipeline_state", None) or {})
 
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()

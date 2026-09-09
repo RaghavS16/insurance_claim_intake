@@ -35,33 +35,6 @@ const formatMessageTime = (ts?: number | string | null) => {
   }
 };
 
-const PROMPT_SUGGESTIONS = [
-  {
-    icon: "directions_car",
-    title: "Vehicle Accident",
-    subtitle: "Auto / Motor Claim",
-    text: "I was involved in a car accident on the expressway this morning. The front bumper and headlight are damaged.",
-  },
-  {
-    icon: "water_damage",
-    title: "Property / Home Damage",
-    subtitle: "Homeowners Claim",
-    text: "A water pipe burst in the upstairs bathroom causing ceiling leakage and floor damage.",
-  },
-  {
-    icon: "medical_services",
-    title: "Medical Treatment",
-    subtitle: "Health Claim",
-    text: "I had to visit the emergency clinic for acute gastroenteritis treatment yesterday.",
-  },
-  {
-    icon: "flight_takeoff",
-    title: "Travel / Luggage Loss",
-    subtitle: "Travel Claim",
-    text: "My checked baggage was delayed and damaged during my flight yesterday.",
-  },
-];
-
 export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   history,
   partialSegments,
@@ -124,43 +97,26 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   return (
     <div
       ref={chatContainerRef}
-      className="flex-1 overflow-y-auto p-4 md:p-8 space-y-5 scroll-smooth pb-48 relative bg-gradient-to-b from-[#f8fafc]/50 to-white"
+      className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-48 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${
+        isConversationEmpty
+          ? "flex flex-col items-center justify-center min-h-full overflow-hidden"
+          : "overflow-y-auto"
+      }`}
     >
-      {/* Empty State / Welcome Screen with Suggestions */}
+      {/* Empty State / Welcome Screen */}
       {isConversationEmpty && (
-        <div className="max-w-xl mx-auto my-6 text-center space-y-6 animate-fade-in">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white mx-auto shadow-md">
+        <div className="max-w-xl mx-auto text-center space-y-5 animate-fade-in -mt-8 md:-mt-12">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white mx-auto shadow-md">
             <span className="material-symbols-outlined text-3xl">smart_toy</span>
           </div>
           <div>
-            <h2 className="font-headline text-xl font-bold text-[#0f172a]">
+            <h2 className="font-headline text-xl md:text-2xl font-bold text-[#0f172a] tracking-tight">
               Start Your Insurance Claim Intake
             </h2>
-            <p className="text-xs md:text-sm text-slate-500 mt-1 max-w-md mx-auto">
+            <p className="text-xs md:text-sm text-slate-500 mt-2 max-w-md mx-auto leading-relaxed">
               Speak naturally or type your incident description. Our AI will automatically extract
               the necessary details, verify policy coverage, and prepare your claim.
             </p>
-          </div>
-
-          {/* Quick starter suggestion cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left pt-2">
-            {PROMPT_SUGGESTIONS.map((item, idx) => (
-              <div
-                key={idx}
-                onClick={() => onSelectPromptSuggestion?.(item.text)}
-                className="group p-3.5 rounded-xl border border-slate-200 bg-white hover:border-[#00647c] hover:shadow-sm cursor-pointer transition-all duration-200"
-              >
-                <div className="flex items-center gap-2 text-[#00647c] mb-1">
-                  <span className="material-symbols-outlined text-lg">{item.icon}</span>
-                  <span className="text-xs font-bold text-slate-800 group-hover:text-[#00647c] transition-colors">
-                    {item.title}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                  "{item.text}"
-                </p>
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -208,9 +164,8 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
                     <button
                       onClick={() => handleSpeakText(turn.text, idx)}
                       title={speakingIndex === idx ? "Stop reading" : "Read aloud"}
-                      className={`p-1 rounded hover:bg-slate-50 transition-colors ${
-                        speakingIndex === idx ? "text-[#00647c] animate-pulse" : "text-slate-400 hover:text-[#00647c]"
-                      }`}
+                      className={`p-1 rounded hover:bg-slate-50 transition-colors ${speakingIndex === idx ? "text-[#00647c] animate-pulse" : "text-slate-400 hover:text-[#00647c]"
+                        }`}
                     >
                       <span className="material-symbols-outlined text-[14px]">
                         {speakingIndex === idx ? "volume_off" : "volume_up"}

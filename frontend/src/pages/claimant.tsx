@@ -216,6 +216,24 @@ export default function ClaimantPage() {
     wsRef.current = ws;
   }, [handleWsMessage, stopVoiceRecording]);
 
+  const initBlankChat = useCallback(() => {
+    if (isRecordingRef.current) stopVoiceRecording();
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
+    setTicketId("");
+    localStorage.removeItem("active_claim_ticket_id");
+    setConversationStatus("not_started");
+    setExtractedData({});
+    setHistory([]);
+    setConfirmed(false);
+    setSubmittedMessage("");
+    setPartialSegments(new Map());
+    setErrorBanner("");
+    if (router.query.ticket || router.query.ticket_id) {
+      router.replace({ pathname: "/claimant" }, undefined, { shallow: true });
+    }
+  }, [router, stopVoiceRecording]);
+
   const applySession = useCallback((data: SessionPayload, authToken: string, fallbackMessage?: string) => {
     setTicketId(data.ticket_id);
     localStorage.setItem("active_claim_ticket_id", data.ticket_id);
@@ -265,29 +283,22 @@ export default function ClaimantPage() {
     }
   }, [applySession, router, stopVoiceRecording]);
 
-  const startNewSession = useCallback(async (authToken: string) => {
-    if (isRecordingRef.current) stopVoiceRecording();
-    try { wsRef.current?.close(); } catch {}
-    setLoading(true);
-    setErrorBanner("");
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/new-session`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) throw new Error("Failed to create new claim session.");
-      const data = await res.json();
-      setConfirmed(false);
-      setSubmittedMessage("");
-      applySession(data, authToken);
-      router.replace({ pathname: "/claimant", query: { ticket: data.ticket_id } }, undefined, { shallow: true });
-    } catch (err: any) {
-      setErrorBanner(err.message || "Could not start new intake.");
-    } finally {
-      setLoading(false);
-    }
-  }, [applySession, router, stopVoiceRecording]);
+  const ensureClaimSession = useCallback(async (authToken: string, policyNum?: string): Promise<string> => {
+    if (ticketId) return ticketId;
+    const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
+    const res = await fetch(`${API_BASE}/api/v1/claims/new-session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("Could not initialize claim intake.");
+    const data = await res.json();
+    setTicketId(data.ticket_id);
+    localStorage.setItem("active_claim_ticket_id", data.ticket_id);
+    connectWebSocket(data.ticket_id, authToken);
+    router.replace({ pathname: "/claimant", query: { ticket: data.ticket_id } }, undefined, { shallow: true });
+    return data.ticket_id;
+  }, [connectWebSocket, router, ticketId]);
 
   const handleDeleteClaim = useCallback(async (targetTicketId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -305,54 +316,12 @@ export default function ClaimantPage() {
       }
       fetchClaimsList(token);
       if (targetTicketId === ticketId) {
-        await startNewSession(token);
+        initBlankChat();
       }
     } catch (err: any) {
       setErrorBanner(err.message || "Could not delete claim.");
     }
-  }, [fetchClaimsList, startNewSession, ticketId, token]);
-
-  const restoreOrCreateSession = useCallback(async (authToken: string, explicitTicket?: string, policyNum?: string) => {
-    if (!authToken) return;
-    setLoading(true);
-    setErrorBanner("");
-    try {
-      if (explicitTicket) {
-        const res = await fetch(`${API_BASE}/api/v1/claims/${explicitTicket}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          applySession(data, authToken);
-          return;
-        }
-      }
-
-      const activeRes = await fetch(`${API_BASE}/api/v1/claims/active`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (activeRes.ok) {
-        const active = await activeRes.json();
-        if (active.active) {
-          applySession(active, authToken);
-          return;
-        }
-      }
-
-      const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
-      const res = await fetch(`${API_BASE}/api/v1/claims/voice-session`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      applySession(await res.json(), authToken);
-    } catch (err: any) {
-      setErrorBanner(`Unable to restore your claim session: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [applySession]);
+  }, [fetchClaimsList, initBlankChat, ticketId, token]);
 
   const handleExportTranscript = useCallback(async () => {
     if (!ticketId || !token) return;
@@ -388,19 +357,27 @@ export default function ClaimantPage() {
       .then(data => {
         if (data.role !== "CLAIMANT") { router.push(data.role === "ADMIN" ? "/admin" : "/adjuster"); return; }
         setUserName(data.full_name || "Claimant");
-        const initialPolicy = (router.query.policy || router.query.policy_id) as string | undefined;
         const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
         fetchClaimsList(savedToken);
         fetchLinkedPolicies(savedToken);
-        return restoreOrCreateSession(savedToken, initialTicket, initialPolicy);
+        if (initialTicket) {
+          return loadClaimByTicket(initialTicket, savedToken);
+        } else {
+          initBlankChat();
+        }
       })
       .catch(() => { localStorage.removeItem("access_token"); router.push("/login"); });
-  }, [router.isReady, router.query.policy, router.query.policy_id, router.query.ticket, router.query.ticket_id, restoreOrCreateSession, router, fetchClaimsList, fetchLinkedPolicies]);
+  }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);
 
   useEffect(() => () => { try { wsRef.current?.close(); } catch {} stopVoiceRecording(); }, [stopVoiceRecording]);
 
   const startVoiceRecording = async () => {
+    if (!token) return;
     try {
+      let activeTid = ticketId;
+      if (!activeTid) {
+        activeTid = await ensureClaimSession(token);
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -430,13 +407,17 @@ export default function ClaimantPage() {
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
     const rawText = customText || textInput;
-    if (!rawText.trim() || !ticketId || !token) return;
+    if (!rawText.trim() || !token) return;
     const text = rawText.trim();
     setTextInput("");
     setHistory(prev => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/text-turn`, {
+      let activeTid = ticketId;
+      if (!activeTid) {
+        activeTid = await ensureClaimSession(token);
+      }
+      const res = await fetch(`${API_BASE}/api/v1/claims/${activeTid}/text-turn`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -448,7 +429,7 @@ export default function ClaimantPage() {
       }
       setExtractedData(data.extracted_data || {});
       setConversationStatus(data.conversation_status || "collecting");
-      setConfirmed(Boolean(data.confirmed));
+      setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
       fetchClaimsList(token);
     } catch (err: any) {
       setErrorBanner(err.message || "Unable to process message.");
@@ -471,7 +452,6 @@ export default function ClaimantPage() {
       if (!res.ok) throw new Error(data.detail || "Failed to submit claim.");
       setSubmittedMessage(data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`);
       setConfirmed(true);
-      if (isRecording) stopVoiceRecording();
       fetchClaimsList(token);
     } catch (err: any) {
       setErrorBanner(err.message || "An error occurred while submitting your claim.");
@@ -526,7 +506,7 @@ export default function ClaimantPage() {
         activeTicketId={ticketId}
         loadingClaims={loadingClaims}
         onSelectClaim={(id) => loadClaimByTicket(id, token)}
-        onNewClaim={() => startNewSession(token)}
+        onNewClaim={initBlankChat}
         onDeleteClaim={handleDeleteClaim}
         onLogout={handleLogout}
       />
@@ -537,7 +517,7 @@ export default function ClaimantPage() {
           agentState={agentState}
           currentIncidentTitle={currentIncidentTitle}
           ticketId={ticketId}
-          onStartNewSession={() => startNewSession(token)}
+          onStartNewSession={initBlankChat}
           onExportTranscript={handleExportTranscript}
           loading={loading}
           errorBanner={errorBanner}
