@@ -1,4 +1,6 @@
 """Behavioral tests for natural claim intake."""
+from datetime import date, timedelta
+
 from src.agents.graph import build_conversation_graph
 
 
@@ -25,7 +27,7 @@ def test_free_form_multi_field_narration_extracts_all_supported_facts():
         claim_text="Yesterday I had a bike accident in Bengaluru. Policy MOT-5521. The front of my bike was damaged and repair will cost around ₹20,000."
     ))
     data = result["extracted_data"]
-    assert data["event_date"] == "2026-09-07"
+    assert data["event_date"] == (date.today() - timedelta(days=1)).isoformat()
     assert data["insurance_type"] == "motor"
     assert data["policy_id"] == "MOT-5521"
     assert data["estimated_claim_amount"] == 20000.0
@@ -45,7 +47,6 @@ def test_greeting_is_conversational_and_does_not_add_data():
     result = build_conversation_graph().invoke(_state(claim_text="Hello"))
     assert result["extracted_data"] == {}
     assert result["last_intent"] == "greeting"
-    assert "claim" not in result["extracted_data"]
 
 
 def test_process_question_without_polluting_claim():
@@ -100,7 +101,7 @@ def test_facts_already_extracted_are_not_reasked():
     graph = build_conversation_graph()
     first = graph.invoke(_state(claim_text="I had a bike accident yesterday."))
     second = graph.invoke({**first, "claim_text": "It happened in Bengaluru and the repair is around ₹20,000."})
-    assert second["extracted_data"]["event_date"] == "2026-09-07"
+    assert second["extracted_data"]["event_date"] == (date.today() - timedelta(days=1)).isoformat()
     assert second["extracted_data"]["event_location"] == "Bengaluru"
     assert second["extracted_data"]["estimated_claim_amount"] == 20000.0
     assert "event_date" not in second["missing_fields"]
