@@ -1,6 +1,7 @@
 """Shared, transaction-safe claim conversation turn processing."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict
 
@@ -21,11 +22,11 @@ async def process_claimant_turn(
     input_mode: str,
     turn_number: int | None = None,
 ) -> Dict[str, Any]:
-    """Process one claimant turn and persist state plus both chat messages atomically."""
+    """Process one claimant turn without blocking the event loop during LLM work."""
     if claim.status == "submitted" or claim.conversation_status in {"submitted", "confirmed"}:
         prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
         logical_turn = (prior_turns // 2) + 1
-        agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters. If you have questions or want to file another claim, click 'New Claim Intake' above or let me know!"
+        agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters."
         try:
             db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
             db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_reply))
@@ -42,7 +43,9 @@ async def process_claimant_turn(
     logical_turn = (prior_turns // 2) + 1
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     graph_input = {**prior_state, "claim_text": user_text, "ticket_id": claim.ticket_id, "input_mode": input_mode}
-    result = build_conversation_graph().invoke(graph_input)
+
+    # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
+    result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
     extracted = result.get("extracted_data", {}) or {}
 
     claim.pipeline_state = dict(result)
