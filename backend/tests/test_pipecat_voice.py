@@ -44,8 +44,7 @@ async def test_claim_agent_processor_forwards_interruption():
         db = MagicMock(); session_factory.return_value = db
         processor = ClaimAgentProcessor(claim)
         processor.push_frame = AsyncMock()
-        frame = InterruptionFrame()
-        await processor.process_frame(frame, FrameDirection.DOWNSTREAM)
+        await processor.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
         messages = [call.args[0] for call in processor.push_frame.await_args_list]
         assert any(isinstance(item, OutputTransportMessageFrame) and item.message["type"] == "barge_in" for item in messages)
         assert any(isinstance(item, InterruptionFrame) for item in messages)
@@ -67,13 +66,14 @@ async def test_claim_agent_processor_debounces_short_pauses_into_one_turn():
     with patch("src.voice.pipecat.SessionLocal") as session_factory, patch(
         "src.voice.pipecat.process_claimant_turn", new=AsyncMock(return_value=result)
     ) as process_turn:
+        db = MagicMock(); db.query.return_value.filter.return_value.first.return_value = claim
+        session_factory.return_value = db
         processor = ClaimAgentProcessor(claim)
         processor.push_frame = AsyncMock()
         await processor.process_frame(TranscriptionFrame(text="I had a bike accident"), FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0.15)
         await processor.process_frame(TranscriptionFrame(text="yesterday in Bengaluru"), FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0.70)
-        process_turn.assert_awaited_once()
         process_turn.assert_awaited_once_with(processor._db, claim, "I had a bike accident yesterday in Bengaluru", "voice")
         emitted = [call.args[0] for call in processor.push_frame.await_args_list]
         assert any(isinstance(item, OutputTransportMessageFrame) and item.message["type"] == "state_update" for item in emitted)
