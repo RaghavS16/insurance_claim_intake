@@ -1,4 +1,5 @@
 """Phase 1 API behavior tests."""
+from datetime import date, timedelta
 
 
 def test_health_check(client):
@@ -20,7 +21,7 @@ def test_intake_requires_only_missing_common_fields(client):
     })
     assert response.status_code == 200
     data = response.json()
-    assert data["extracted_data"]["event_date"] == "2026-09-07"
+    assert data["extracted_data"]["event_date"] == (date.today() - timedelta(days=1)).isoformat()
     assert data["extracted_data"]["policy_id"] == "MOT-5521"
     assert data["extracted_data"]["estimated_claim_amount"] == 20000.0
     assert "event_date" not in data["missing_fields"]
