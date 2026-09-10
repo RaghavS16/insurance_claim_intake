@@ -16,6 +16,18 @@ def _is_negative(text: str) -> bool:
     return bool(re.match(r"^(no|nope|wrong|not correct|incorrect|that's wrong|that is wrong)(?:[.!?, ]|$)", low))
 
 
+def _is_conversational_filler(text: str) -> bool:
+    """Return true for speech that is not a claim fact and should not advance a field."""
+    low = " ".join(text.strip().lower().split()).strip(" .!?,")
+    if low in nodes._SOCIAL_EXACT:
+        return True
+    return bool(re.fullmatch(
+        r"(?:you know|you know what|can you hear me|are you there|hello there|good morning|good afternoon|good evening|see you|see you soon|one moment|hold on|wait|just a second|give me a second|let me think|i'm thinking|im thinking|hmm+|uh+|um+|okay then|all right then|alright then)(?:[ .!?]*)",
+        low,
+        re.I,
+    ))
+
+
 def _incident_description_from_text(text: str, state) -> str | None:
     """Recover a grounded incident narrative without depending on Ollama."""
     if not nodes._INCIDENT_TERMS.search(text):
@@ -32,18 +44,12 @@ def _incident_description_from_text(text: str, state) -> str | None:
 
 def _requested_correction_field(text: str, state) -> str | None:
     low = text.lower()
-    if re.search(r"amount|cost|loss|repair|price|rupees?|inr|₹", low):
-        return "estimated_claim_amount"
-    if re.search(r"policy", low):
-        return "policy_id"
-    if re.search(r"location|place|where", low):
-        return "event_location"
-    if re.search(r"date|day|when", low):
-        return "event_date"
-    if re.search(r"insurance|motor|health|home|travel|cyber", low):
-        return "insurance_type"
-    if re.search(r"happened|accident|incident|damage|crash|collision", low):
-        return "event_description"
+    if re.search(r"amount|cost|loss|repair|price|rupees?|inr|₹", low): return "estimated_claim_amount"
+    if re.search(r"policy", low): return "policy_id"
+    if re.search(r"location|place|where", low): return "event_location"
+    if re.search(r"date|day|when", low): return "event_date"
+    if re.search(r"insurance|motor|health|home|travel|cyber", low): return "insurance_type"
+    if re.search(r"happened|accident|incident|damage|crash|collision", low): return "event_description"
     return state.get("next_question_field") if state.get("next_question_field") not in {None, "confirmation"} else None
 
 
@@ -63,6 +69,14 @@ def conversation_turn_processor(state):
     raw = str(state.get("claim_text") or "")
     state = nodes.conversation_turn_processor(state)
 
+    if _is_conversational_filler(raw) and not state.get("recently_extracted_fields"):
+        state["last_intent"] = "filler"
+        state["_skip_all"] = True
+        state["spoken_response"] = ""
+        state["next_question"] = "I'm listening. Take your time; continue when you're ready."
+        state["message"] = state["next_question"]
+        return state
+
     if not state.get("extracted_data", {}).get("event_description"):
         description = _incident_description_from_text(raw, state)
         if description:
@@ -78,8 +92,6 @@ def conversation_turn_processor(state):
                 "evidence": raw, "confidence": 0.95,
             })
 
-    # Never repeat the old confirmation when the claimant starts a correction
-    # but has not yet supplied the corrected value.
     if was_awaiting and not state.get("recently_extracted_fields"):
         if state.get("last_intent") == "confirmation" or _is_affirmative(raw):
             state["confirmed"] = True
