@@ -15,11 +15,7 @@ from typing import Any
 
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.audio.utils import pcm_to_wav
-from pipecat.frames.frames import (
-    ErrorFrame, Frame, InputAudioRawFrame, InterruptionFrame,
-    InterimTranscriptionFrame, OutputAudioRawFrame, OutputTransportMessageFrame,
-    TranscriptionFrame, TTSStoppedFrame, TTSAudioRawFrame, TTSSpeakFrame,
-)
+from pipecat.frames.frames import ErrorFrame, Frame, InputAudioRawFrame, InterruptionFrame, InterimTranscriptionFrame, OutputAudioRawFrame, OutputTransportMessageFrame, TranscriptionFrame, TTSStoppedFrame, TTSAudioRawFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -72,12 +68,9 @@ class PCM16WebSocketSerializer(FrameSerializer):
 
 class WebRTCVADAnalyzer(VADAnalyzer):
     def __init__(self, aggressiveness: int = 1, *, sample_rate: int = 16000):
-        # A short silence is not necessarily the end of a claimant's thought.
-        super().__init__(sample_rate=sample_rate, params=VADParams(confidence=0.5, start_secs=0.08, stop_secs=0.65, min_volume=0.0))
+        super().__init__(sample_rate=sample_rate, params=VADParams(confidence=0.5, start_secs=0.08, stop_secs=0.45, min_volume=0.0))
         self._vad = webrtcvad.Vad(max(0, min(3, aggressiveness)))
-
     def num_frames_required(self) -> int: return int(self.sample_rate * 0.02)
-
     def voice_confidence(self, buffer: bytes) -> float:
         try: return 1.0 if self._vad.is_speech(buffer, self.sample_rate) else 0.0
         except Exception: return 0.0
@@ -95,16 +88,12 @@ class PiperNativeTTSService(TTSService):
     def __init__(self, *, model_path: str, config_path: str | None = None, **kwargs: Any):
         super().__init__(settings=TTSSettings(model=model_path, voice=None, language=None), **kwargs)
         self._model_path = model_path; self._config_path = config_path or f"{model_path}.json"; self._voice: Any = None
-
     async def setup(self, setup):
         await super().setup(setup)
         try:
             from piper import PiperVoice
-            if os.path.exists(self._model_path):
-                self._voice = await asyncio.to_thread(PiperVoice.load, self._model_path, self._config_path)
-                logger.info("Loaded native Piper TTS model from %s", self._model_path)
+            if os.path.exists(self._model_path): self._voice = await asyncio.to_thread(PiperVoice.load, self._model_path, self._config_path)
         except Exception as exc: logger.warning("Could not preload native Piper model: %s", exc)
-
     async def run_tts(self, text: str, context_id: str):
         if not self._voice:
             yield ErrorFrame(error=f"Piper ONNX model not available at {self._model_path}"); yield TTSStoppedFrame(context_id=context_id); return
@@ -121,102 +110,76 @@ class PiperNativeTTSService(TTSService):
             while True:
                 item = await queue.get()
                 if item is sentinel: break
-                if isinstance(item, Exception):
-                    logger.error("Native Piper synthesis failed: %s", item); yield ErrorFrame(error=f"Native Piper synthesis failed: {type(item).__name__}"); break
-                audio, sample_rate, channels = item
-                yield TTSAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=channels, context_id=context_id)
+                if isinstance(item, Exception): yield ErrorFrame(error=f"Native Piper synthesis failed: {type(item).__name__}"); break
+                audio, sample_rate, channels = item; yield TTSAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=channels, context_id=context_id)
         finally: yield TTSStoppedFrame(context_id=context_id)
 
 
 class PiperHTTPSettings(TTSSettings): pass
-
-
 class PiperHTTPService(TTSService):
     Settings = PiperHTTPSettings
     def __init__(self, *, base_url: str, voice: str | None = None, **kwargs: Any):
         super().__init__(settings=self.Settings(model=None, voice=voice, language=None), **kwargs); self._base_url = base_url.rstrip("/"); self._session = None
-    async def setup(self, setup):
-        await super().setup(setup); import aiohttp; self._session = aiohttp.ClientSession()
+    async def setup(self, setup): await super().setup(setup); import aiohttp; self._session = aiohttp.ClientSession()
     async def cleanup(self):
         if self._session and not self._session.closed: await self._session.close()
         await super().cleanup()
     async def run_tts(self, text: str, context_id: str):
-        if not self._session:
-            yield ErrorFrame(error="Piper HTTP session is not initialized"); yield TTSStoppedFrame(context_id=context_id); return
+        if not self._session: yield ErrorFrame(error="Piper HTTP session is not initialized"); yield TTSStoppedFrame(context_id=context_id); return
         try:
             payload = {"text": text}
             if self._settings.voice: payload["voice"] = self._settings.voice
             async with self._session.post(self._base_url, json=payload) as response:
-                if response.status != 200:
-                    yield ErrorFrame(error=f"Piper HTTP server returned {response.status}")
+                if response.status != 200: yield ErrorFrame(error=f"Piper HTTP server returned {response.status}")
                 else:
                     wav_bytes = await response.read()
                     with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
                         audio = wav_file.readframes(wav_file.getnframes()); sample_rate = wav_file.getframerate(); channels = wav_file.getnchannels()
                     yield TTSAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=channels, context_id=context_id)
-        except Exception as exc:
-            logger.exception("Piper HTTP synthesis failed"); yield ErrorFrame(error=f"Piper HTTP synthesis failed: {type(exc).__name__}")
+        except Exception as exc: yield ErrorFrame(error=f"Piper HTTP synthesis failed: {type(exc).__name__}")
         finally: yield TTSStoppedFrame(context_id=context_id)
 
 
 class ClaimAgentProcessor(FrameProcessor):
-    """Bridge Pipecat frames to the persistent claim domain."""
-    FINAL_DEBOUNCE_SECONDS = 0.70
-
+    FINAL_DEBOUNCE_SECONDS = 0.55
     def __init__(self, claim: Claim, *, input_mode: str = "voice"):
-        super().__init__(); self._db = SessionLocal(); self._ticket_id = claim.ticket_id; self._input_mode = input_mode
-        self._segment_number = 0; self._turn_lock = asyncio.Lock(); self._pending_text = ""; self._pending_at = 0.0; self._debounce_task: asyncio.Task | None = None
-
+        super().__init__(); self._db = SessionLocal(); self._ticket_id = claim.ticket_id; self._input_mode = input_mode; self._segment_number = 0; self._turn_lock = asyncio.Lock(); self._pending_text = ""; self._pending_at = 0.0; self._debounce_task: asyncio.Task | None = None
     async def cleanup(self):
         if self._debounce_task and not self._debounce_task.done(): self._debounce_task.cancel()
         self._db.close(); await super().cleanup()
-
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, InterruptionFrame):
             if self._debounce_task and not self._debounce_task.done(): self._debounce_task.cancel()
-            self._pending_text = ""
-            await self.push_frame(OutputTransportMessageFrame(message={"type":"barge_in"}), direction); await self.push_frame(frame, direction); return
+            self._pending_text = ""; await self.push_frame(OutputTransportMessageFrame(message={"type":"barge_in"}), direction); await self.push_frame(frame, direction); return
         if isinstance(frame, InterimTranscriptionFrame):
-            self._segment_number += 1
-            await self.push_frame(OutputTransportMessageFrame(message={"type":"transcript","speaker":"claimant","text":frame.text,"is_final":False,"segment_id":f"claimant-{self._segment_number}"}), direction); await self.push_frame(frame, direction); return
+            self._segment_number += 1; await self.push_frame(OutputTransportMessageFrame(message={"type":"transcript","speaker":"claimant","text":frame.text,"is_final":False,"segment_id":f"claimant-{self._segment_number}"}), direction); await self.push_frame(frame, direction); return
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            self._pending_text = f"{self._pending_text} {frame.text.strip()}".strip()
-            self._pending_at = time.monotonic()
-            if not self._debounce_task or self._debounce_task.done():
-                self._debounce_task = asyncio.create_task(self._flush_after_pause(direction))
+            self._pending_text = f"{self._pending_text} {frame.text.strip()}".strip(); self._pending_at = time.monotonic()
+            if not self._debounce_task or self._debounce_task.done(): self._debounce_task = asyncio.create_task(self._flush_after_pause(direction))
             return
         await self.push_frame(frame, direction)
-
     async def _flush_after_pause(self, direction: FrameDirection):
         try:
             while self._pending_text:
                 wait = self.FINAL_DEBOUNCE_SECONDS - (time.monotonic() - self._pending_at)
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                    continue
+                if wait > 0: await asyncio.sleep(wait); continue
                 async with self._turn_lock:
                     text = self._pending_text.strip(); self._pending_text = ""
                     if not text: return
                     await self._handle_final_transcript(text, direction)
                 if not self._pending_text: return
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.exception("Debounced voice turn failed")
-
+        except asyncio.CancelledError: return
+        except Exception: logger.exception("Debounced voice turn failed")
     async def _handle_final_transcript(self, text: str, direction: FrameDirection):
         segment_id = f"claimant-{self._segment_number or 1}"
-        await self.push_frame(OutputTransportMessageFrame(message={"type":"transcript","speaker":"claimant","text":text,"is_final":True,"segment_id":segment_id}), direction)
-        await self.push_frame(OutputTransportMessageFrame(message={"type":"agent_state","state":"thinking"}), direction)
+        await self.push_frame(OutputTransportMessageFrame(message={"type":"transcript","speaker":"claimant","text":text,"is_final":True,"segment_id":segment_id}), direction); await self.push_frame(OutputTransportMessageFrame(message={"type":"agent_state","state":"thinking"}), direction)
         claim = self._db.query(Claim).filter(Claim.ticket_id == self._ticket_id).first()
         if not claim:
             await self.push_frame(OutputTransportMessageFrame(message={"type":"error","message":"Claim session is no longer available."}), direction); return
-        try:
-            result = await process_claimant_turn(self._db, claim, text, self._input_mode)
+        try: result = await process_claimant_turn(self._db, claim, text, self._input_mode)
         except Exception:
-            logger.exception("Claim turn failed")
-            await self.push_frame(OutputTransportMessageFrame(message={"type":"error","message":"I couldn't process that turn. Please try again."}), direction); return
+            logger.exception("Claim turn failed"); await self.push_frame(OutputTransportMessageFrame(message={"type":"error","message":"I couldn't process that turn. Please try again."}), direction); return
         await self.push_frame(OutputTransportMessageFrame(message={"type":"state_update","extracted_data":result.get("extracted_data",{}) or {},"missing_fields":result.get("missing_fields",[]),"field_status":result.get("field_status",{}),"awaiting_confirmation":result.get("awaiting_confirmation",False),"confirmed":result.get("confirmed",False),"conversation_status":result.get("conversation_status")}), direction)
         agent_text = result.get("next_question") or result.get("message","")
         if agent_text:
@@ -226,13 +189,10 @@ class ClaimAgentProcessor(FrameProcessor):
 def build_voice_pipeline(transport: BaseTransport, claim: Claim, *, stt_model: str | None = None, stt_device: str | None = None, stt_compute_type: str | None = None, vad_aggressiveness: int | None = None, piper_model_path: str | None = None, piper_url: str | None = None, piper_voice: str | None = None) -> PipelineWorker:
     model = stt_model or settings.STT_MODEL_SIZE; device = stt_device or settings.STT_DEVICE; compute_type = stt_compute_type or settings.STT_COMPUTE_TYPE; vad_level = settings.VAD_AGGRESSIVENESS if vad_aggressiveness is None else vad_aggressiveness
     vad = VADProcessor(vad_analyzer=WebRTCVADAnalyzer(vad_level))
-    try:
-        stt = WhisperSTTService(device=device, compute_type=compute_type, settings=WhisperSTTService.Settings(model=model, language=settings.STT_LANGUAGE))
+    try: stt = WhisperSTTService(device=device, compute_type=compute_type, settings=WhisperSTTService.Settings(model=model, language=settings.STT_LANGUAGE))
     except Exception as exc:
-        logger.warning("Whisper initialization failed on %s/%s: %s; using CPU fallback", device, compute_type, exc)
-        stt = WhisperSTTService(device="cpu", compute_type="default", settings=WhisperSTTService.Settings(model=model, language=settings.STT_LANGUAGE))
-    agent = ClaimAgentProcessor(claim)
-    resolved_model = _find_piper_model_path(piper_model_path or settings.PIPER_MODEL_PATH)
+        logger.warning("Whisper initialization failed on %s/%s: %s; using CPU fallback", device, compute_type, exc); stt = WhisperSTTService(device="cpu", compute_type="default", settings=WhisperSTTService.Settings(model=model, language=settings.STT_LANGUAGE))
+    agent = ClaimAgentProcessor(claim); resolved_model = _find_piper_model_path(piper_model_path or settings.PIPER_MODEL_PATH)
     if resolved_model: tts = PiperNativeTTSService(model_path=resolved_model)
     elif piper_url or settings.PIPER_HTTP_URL: tts = PiperHTTPService(base_url=piper_url or settings.PIPER_HTTP_URL or "http://localhost:5000/synthesize", voice=piper_voice or settings.PIPER_VOICE)
     else: raise RuntimeError("No Piper TTS configuration is available")
