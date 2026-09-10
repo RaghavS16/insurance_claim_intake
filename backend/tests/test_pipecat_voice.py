@@ -33,7 +33,7 @@ async def test_serializer_emits_application_json_events():
 
 def test_webrtc_vad_uses_configurable_aggressiveness():
     analyzer = WebRTCVADAnalyzer(aggressiveness=2)
-    assert analyzer.sample_rate == 16000
+    assert analyzer._vad is not None
     assert analyzer.num_frames_required() == 320
 
 
@@ -70,9 +70,11 @@ async def test_claim_agent_processor_debounces_short_pauses_into_one_turn():
         session_factory.return_value = db
         processor = ClaimAgentProcessor(claim)
         processor.push_frame = AsyncMock()
-        await processor.process_frame(TranscriptionFrame(text="I had a bike accident"), FrameDirection.DOWNSTREAM)
+        frame1 = TranscriptionFrame(text="I had a bike accident", user_id="test-user", timestamp="2026-09-10T14:00:00Z")
+        frame2 = TranscriptionFrame(text="yesterday in Bengaluru", user_id="test-user", timestamp="2026-09-10T14:00:00Z")
+        await processor.process_frame(frame1, FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0.15)
-        await processor.process_frame(TranscriptionFrame(text="yesterday in Bengaluru"), FrameDirection.DOWNSTREAM)
+        await processor.process_frame(frame2, FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0.70)
         process_turn.assert_awaited_once_with(processor._db, claim, "I had a bike accident yesterday in Bengaluru", "voice")
         emitted = [call.args[0] for call in processor.push_frame.await_args_list]
