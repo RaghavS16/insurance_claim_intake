@@ -1,4 +1,4 @@
-"""Deterministic conversation-state guard for confirmation/rejection."""
+"""Deterministic conversation-state guard for confirmation/rejection and conversational turns."""
 from __future__ import annotations
 
 import re
@@ -17,19 +17,39 @@ def _is_negative(text: str) -> bool:
 
 
 def _is_conversational_filler(text: str) -> bool:
-    """Return true for speech that is not a claim fact and should not advance a field."""
     low = " ".join(text.strip().lower().split()).strip(" .!?,")
     if low in nodes._SOCIAL_EXACT:
         return True
     return bool(re.fullmatch(
-        r"(?:you know|you know what|can you hear me|are you there|hello there|good morning|good afternoon|good evening|see you|see you soon|one moment|hold on|wait|just a second|give me a second|let me think|i'm thinking|im thinking|hmm+|uh+|um+|okay then|all right then|alright then)(?:[ .!?]*)",
+        r"(?:you know|you know what|can you hear me(?:\s+(?:right|clearly))?|are you there|hello there|good morning|good afternoon|good evening|see you|see you soon|one moment|hold on|wait|just a second|give me a second|let me think|i'm thinking|im thinking|hmm+|uh+|um+|okay then|all right then|alright then)(?:[ .!?]*)",
         low,
         re.I,
     ))
 
 
+def _is_audio_check(text: str) -> bool:
+    low = " ".join(text.strip().lower().split())
+    return bool(re.search(r"\b(?:can|could)\s+you\s+hear\s+me\b", low) or re.search(r"\b(?:are|can)\s+you\s+hearing\s+me\b", low) or re.search(r"\b(?:is|are)\s+(?:the\s+)?audio\s+(?:working|on)\b", low))
+
+
+def _is_unrelated_question(text: str) -> bool:
+    low = " ".join(text.strip().lower().split()).strip(" .!?,")
+    if not re.search(r"\?\s*$|^(what|why|how|when|where|who|whose|which|can|could|would|will|do|does|did|is|are|am|was|were)\b", low, re.I):
+        return False
+    # Claim-related questions should continue through the claim engine.
+    claim_terms = r"policy|claim|insurance|incident|accident|damage|loss|repair|coverage|document|hospital|vehicle|bike|car|motor|health|travel|cyber|home"
+    return not re.search(rf"\b(?:{claim_terms})\b", low, re.I)
+
+
+def _conversation_only_response(raw: str) -> str | None:
+    if _is_audio_check(raw):
+        return "Yes, I can hear you clearly. Go ahead."
+    if _is_unrelated_question(raw):
+        return "I’m here to help with your insurance claim. I don’t have enough context for that question, but you can continue whenever you’re ready."
+    return None
+
+
 def _incident_description_from_text(text: str, state) -> str | None:
-    """Recover a grounded incident narrative without depending on Ollama."""
     if not nodes._INCIDENT_TERMS.search(text):
         return None
     location = nodes._deterministic_location(text)
@@ -65,8 +85,20 @@ def _correction_prompt(field: str | None) -> str:
 
 
 def conversation_turn_processor(state):
-    was_awaiting = bool(state.get("awaiting_confirmation"))
     raw = str(state.get("claim_text") or "")
+    # Handle conversational turns before extraction. A question to the assistant is
+    # not an answer to the currently missing claim field.
+    conversation_reply = _conversation_only_response(raw)
+    if conversation_reply:
+        state = nodes.conversation_turn_processor(state)
+        state["last_intent"] = "question" if _is_unrelated_question(raw) else "filler"
+        state["_skip_all"] = True
+        state["spoken_response"] = ""
+        state["next_question"] = conversation_reply
+        state["message"] = conversation_reply
+        return state
+
+    was_awaiting = bool(state.get("awaiting_confirmation"))
     state = nodes.conversation_turn_processor(state)
 
     if _is_conversational_filler(raw) and not state.get("recently_extracted_fields"):
