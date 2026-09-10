@@ -16,10 +16,60 @@ def _is_negative(text: str) -> bool:
     return bool(re.match(r"^(no|nope|wrong|not correct|incorrect|that's wrong|that is wrong)(?:[.!?, ]|$)", low))
 
 
+def _incident_description_from_text(text: str, state) -> str | None:
+    """Recover a grounded incident narrative without depending on Ollama."""
+    if not nodes._INCIDENT_TERMS.search(text):
+        return None
+
+    location = nodes._deterministic_location(text)
+    candidates = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if nodes._INCIDENT_TERMS.search(sentence):
+            candidates.append(sentence)
+    candidate = " ".join(candidates).strip() or text
+    candidate = nodes._strip_incident_noise(candidate)
+    if location:
+        candidate = re.sub(
+            rf"\s+(?:in|at|near)\s+{re.escape(location)}(?=\b|[,.!?])",
+            "",
+            candidate,
+            flags=re.I,
+        )
+    candidate = re.sub(r"\s+(?:and|but)\s*$", "", candidate, flags=re.I).strip(" ,.-")
+    if len(candidate) < 4 or not nodes._INCIDENT_TERMS.search(candidate):
+        return None
+    return candidate
+
+
 def conversation_turn_processor(state):
     was_awaiting = bool(state.get("awaiting_confirmation"))
     raw = str(state.get("claim_text") or "")
     state = nodes.conversation_turn_processor(state)
+
+    # The deterministic extractor intentionally does not force descriptions from
+    # every utterance. When the latest turn is an actual incident narration,
+    # recover only the incident-bearing clauses so Phase 1 remains deterministic
+    # even when the local LLM is unavailable in CI.
+    if not state.get("extracted_data", {}).get("event_description"):
+        description = _incident_description_from_text(raw, state)
+        if description:
+            state.setdefault("extracted_data", {})["event_description"] = description
+            state.setdefault("field_status", {})["event_description"] = "provided"
+            state.setdefault("field_metadata", {})["event_description"] = {
+                "status": "provided",
+                "source_turn": state.get("turn_number", 0),
+                "confidence": 0.95,
+                "evidence": raw,
+            }
+            state.setdefault("recently_extracted_fields", []).append("event_description")
+            state.setdefault("extraction_changes", []).append({
+                "field": "event_description",
+                "operation": "set",
+                "value": description,
+                "evidence": raw,
+                "confidence": 0.95,
+            })
+
     if was_awaiting and not state.get("recently_extracted_fields"):
         if state.get("last_intent") == "confirmation" or _is_affirmative(raw):
             state["confirmed"] = True
