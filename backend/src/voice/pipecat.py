@@ -70,7 +70,8 @@ class WebRTCVADAnalyzer(VADAnalyzer):
     def __init__(self, aggressiveness: int = 1, *, sample_rate: int = 16000):
         super().__init__(sample_rate=sample_rate, params=VADParams(confidence=0.5, start_secs=0.08, stop_secs=0.45, min_volume=0.0))
         self._vad = webrtcvad.Vad(max(0, min(3, aggressiveness)))
-    def num_frames_required(self) -> int: return int(self.sample_rate * 0.02)
+        self._frame_samples = int(sample_rate * 0.02)
+    def num_frames_required(self) -> int: return self._frame_samples
     def voice_confidence(self, buffer: bytes) -> float:
         try: return 1.0 if self._vad.is_speech(buffer, self.sample_rate) else 0.0
         except Exception: return 0.0
