@@ -25,8 +25,8 @@ Rules:
 - If the claimant supplied several facts, acknowledge the useful information together; do not ask for facts already known.
 - If information is missing, ask only for the smallest useful set of missing baseline details. Group related details when
   that sounds natural, rather than asking one field per turn. Do not enumerate fields like a form.
-- If all baseline facts are present and confirmation is pending, give a short human-readable recap and ask for one
-  confirmation. Do not introduce new questions.
+- If all baseline facts are present, do not ask another intake question. If confirmation is pending, use the grounded
+  recap supplied by the application.
 - If the claimant is simply thinking, pausing, thanking you, greeting you, or making process/social conversation, respond
   to that intent instead of forcing an intake question. Keep the response short for voice.
 - Do not mention internal state, fields, schemas, extraction, LangGraph, agents, prompts, or "missing fields".
@@ -47,20 +47,20 @@ _FIELD_LABELS = {
 
 
 def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
-    """Safe fallback when the response model is unavailable or returns unusable text."""
+    """Safe, non-form-like fallback when the response model is unavailable."""
     if not missing:
         return "I have the claim details I need. Is everything correct?"
     labels = [_FIELD_LABELS[field] for field in missing[:3]]
     if len(missing) >= 5 and not data:
         return (
-            "Tell me what happened, when and where it happened, what type of insurance you have, "
-            "your policy number, and the approximate loss or repair cost."
+            "Tell me whatever you know about what happened, when and where it happened, your insurance type, "
+            "policy number, and approximate loss or repair cost."
         )
     if len(labels) == 1:
-        return f"And what about {labels[0]}?"
+        return f"Whenever you're ready, tell me {labels[0]}."
     if len(labels) == 2:
-        return f"And what about {labels[0]} and {labels[1]}?"
-    return f"And what about {labels[0]}, {labels[1]}, and {labels[2]}?"
+        return f"Whenever you're ready, tell me {labels[0]} and {labels[1]}."
+    return f"Whenever you're ready, tell me {labels[0]}, {labels[1]}, and {labels[2]}."
 
 
 def _message_text(result: Any) -> str:
@@ -87,7 +87,7 @@ def _response_is_usable(response: str, missing: list[str], data: dict[str, Any])
     if any(token in low for token in ("json", "schema", "langgraph", "extracted_data", "missing_fields")):
         return False
 
-    # Prevent a model response from accidentally asking for a fact that is already authoritative.
+    # Prevent the response model from asking for a fact that is already authoritative.
     supplied_markers = {
         "policy_id": ("policy number", "policy id", "policy no"),
         "event_date": ("when the incident", "incident date", "date of the incident"),
@@ -137,11 +137,15 @@ def _response_planner(state: ClaimState) -> ClaimState:
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
 
-    # The model decides the wording and conversational move. The deterministic fallback is only
-    # used when the model is unavailable or tries to violate the state constraints.
-    state["next_question_field"] = (
-        "confirmation" if state.get("awaiting_confirmation") else (missing[0] if missing else "confirmation")
-    )
+    # Confirmation is deliberately grounded and deterministic: the model must not invent or
+    # rephrase claim facts at the point where the claimant is asked to verify them.
+    if state.get("awaiting_confirmation"):
+        state["next_question_field"] = "confirmation"
+        state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
+        state["message"] = state["next_question"]
+        return state
+
+    state["next_question_field"] = missing[0] if missing else "confirmation"
     state["next_question"] = _model_response(state)
     state["message"] = state["next_question"]
     return state
