@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
+import { ClaimantSidebar, ClaimSummary } from "@/components/claimant/ClaimantSidebar";
 import { getAuthToken, clearAuthToken } from "../lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -22,6 +23,8 @@ export default function LinkPolicyPage() {
   const { policy } = router.query;
 
   const [currentUser, setCurrentUser] = useState<{ id: string; full_name: string; email: string; role: string } | null>(null);
+  const [claimsList, setClaimsList] = useState<ClaimSummary[]>([]);
+  const [loadingClaims, setLoadingClaims] = useState(false);
   const [policyNumber, setPolicyNumber] = useState("");
   const [policyholderName, setPolicyholderName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
@@ -33,10 +36,29 @@ export default function LinkPolicyPage() {
   const [myPolicies, setMyPolicies] = useState<LinkedPolicy[]>([]);
   const [loadingPolicies, setLoadingPolicies] = useState(true);
 
+  const fetchClaimsList = async (token?: string) => {
+    const t = token || getAuthToken();
+    if (!t) return;
+    setLoadingClaims(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/claims`, {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setClaimsList(Array.isArray(data) ? data : (data.items || []));
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingClaims(false);
+    }
+  };
+
   const fetchMyPolicies = async (token?: string) => {
     const t = token || getAuthToken();
     if (!t) return;
-
+    setLoadingPolicies(true);
     try {
       const res = await fetch(`${API_BASE}/api/v1/policies/my-policies`, {
         headers: { Authorization: `Bearer ${t}` },
@@ -59,7 +81,7 @@ export default function LinkPolicyPage() {
     }
   }, [policy]);
 
-  // Authenticate user & load policies
+  // Authenticate user & load policies and claims
   useEffect(() => {
     const token = getAuthToken();
     if (!token) {
@@ -75,8 +97,13 @@ export default function LinkPolicyPage() {
         return res.json();
       })
       .then((data) => {
+        if (data.role !== "CLAIMANT") {
+          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
+          return;
+        }
         setCurrentUser(data);
         fetchMyPolicies(token);
+        fetchClaimsList(token);
       })
       .catch(() => {
         clearAuthToken();
@@ -142,130 +169,99 @@ export default function LinkPolicyPage() {
     router.push("/login");
   };
 
+  const handleSelectClaim = (ticketId: string) => {
+    router.push(`/claimant?ticket=${ticketId}`);
+  };
+
+  const handleNewClaim = () => {
+    router.push("/claimant");
+  };
+
   return (
-    <div className="bg-[#f7f9fb] text-[#191c1e] font-body antialiased min-h-screen flex selection:bg-[#b7eaff] selection:text-[#001f28]">
-      {/* Desktop Side Navigation Shell */}
-      <nav className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#f8fafc] border-r border-[#e2e8f0] py-6 px-4 z-40 select-none">
-        <div className="mb-6 px-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white shadow-xs">
-              <span className="material-symbols-outlined text-[20px]">shield_with_heart</span>
-            </div>
-            <div>
-              <h1 className="font-headline text-base font-bold text-[#0f172a] tracking-tight leading-tight">
-                InsureClaimAI
-              </h1>
-              <p className="font-label text-[10px] text-[#64748b] uppercase tracking-wider font-semibold">
-                Autonomous Intake
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-1">
-          <Link
-            href="/claimant"
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-600 hover:text-[#00647c] hover:bg-white transition-all text-xs font-semibold"
-          >
-            <span className="material-symbols-outlined text-lg">chat_bubble</span>
-            <span>Active Intake & History</span>
-          </Link>
-          <Link
-            href="/link-policy"
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#00647c] font-bold bg-white border border-[#00647c]/20 shadow-xs text-xs"
-          >
-            <span className="material-symbols-outlined text-lg text-[#00647c]">link</span>
-            <span>Link Policy</span>
-          </Link>
-        </div>
-
-        {/* User Card in Nav */}
-        <div className="mt-auto p-3 border-t border-[#e2e8f0] bg-white rounded-xl flex items-center justify-between shadow-2xs">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00647c] to-[#0284c7] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-              {currentUser?.full_name?.charAt(0) || "U"}
-            </div>
-            <div className="flex flex-col truncate">
-              <span className="text-xs text-slate-800 font-semibold truncate leading-tight">
-                {currentUser?.full_name || "User"}
-              </span>
-              <span className="text-[10px] text-slate-400 capitalize">Policyholder</span>
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            title="Sign out"
-            className="text-slate-400 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-lg">logout</span>
-          </button>
-        </div>
-      </nav>
+    <div className="bg-[#f8fafc] text-[#0f172a] font-body antialiased min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
+      {/* Unified Claimant Sidebar */}
+      <ClaimantSidebar
+        userName={currentUser?.full_name || "Claimant"}
+        claims={claimsList}
+        activeRoute="link-policy"
+        loadingClaims={loadingClaims}
+        onSelectClaim={handleSelectClaim}
+        onNewClaim={handleNewClaim}
+        onLogout={handleLogout}
+      />
 
       {/* Main Content Area */}
-      <main className="flex-1 md:ml-64 w-full relative pb-24 md:pb-8 bg-white min-h-screen">
-        {/* Top App Bar */}
-        <header className="w-full top-0 sticky bg-white/90 backdrop-blur-md border-b border-[#e0e3e5] z-30 px-6 py-4 flex justify-between items-center max-w-7xl mx-auto">
-          <div className="md:hidden flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#00647c] text-2xl">waves</span>
-            <h1 className="font-headline text-lg font-bold text-[#191c1e] tracking-tight">InsureClaimAI</h1>
-          </div>
-
-          <div className="hidden md:flex flex-1 items-center gap-2 text-[#505f76]">
-            <Link href="/claimant" className="font-label text-xs hover:text-[#00647c] transition-colors">
-              Claimant Portal
+      <main className="flex-1 md:ml-64 flex flex-col min-h-screen bg-[#f8fafc] overflow-y-auto">
+        {/* Top Header Bar matching ClaimantTopBar style */}
+        <header className="px-4 md:px-8 py-3.5 border-b border-[#e2e8f0] bg-white sticky top-0 z-30 flex justify-between items-center shrink-0">
+          <div className="flex items-center gap-2 text-slate-500">
+            <Link
+              href="/claimant"
+              className="font-label text-xs hover:text-[#00647c] transition-colors flex items-center gap-1 font-medium"
+            >
+              <span className="material-symbols-outlined text-sm">forum</span>
+              <span>Claimant Portal</span>
             </Link>
-            <span className="material-symbols-outlined text-xs">chevron_right</span>
-            <span className="font-label text-xs text-[#191c1e] font-semibold">Link Policy</span>
+            <span className="material-symbols-outlined text-xs text-slate-400">chevron_right</span>
+            <span className="font-label text-xs text-[#0f172a] font-bold">Link Policy</span>
           </div>
 
           <div className="flex items-center gap-2">
             <Link
               href="/claimant"
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#f7f9fb] hover:bg-[#eceef0] border border-[#bdc8ce] text-[#505f76] hover:text-[#00647c] transition-colors flex items-center gap-1"
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-[#00647c] transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
             >
-              <span className="material-symbols-outlined text-sm">arrow_back</span>
-              <span>Back to Intake</span>
+              <span className="material-symbols-outlined text-sm">chat_bubble</span>
+              <span>Back to Intake Chat</span>
             </Link>
           </div>
         </header>
 
-        {/* Page Canvas */}
-        <div className="px-6 md:px-12 max-w-7xl mx-auto py-8">
+        {/* Page Content Canvas */}
+        <div className="px-4 md:px-8 lg:px-10 max-w-6xl mx-auto py-8 w-full">
+          {/* Header Banner */}
           <div className="mb-8">
-            <h2 className="font-headline text-2xl md:text-3xl font-bold text-[#191c1e] mb-1.5">Verify Your Coverage</h2>
-            <p className="font-body text-sm text-[#505f76] max-w-2xl leading-relaxed">
-              Connect your existing policy to manage claims, view documents, and access intelligent voice assistance seamlessly.
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#00647c]/10 text-[#00647c] text-xs font-semibold mb-2">
+              <span className="material-symbols-outlined text-sm">shield</span>
+              <span>Policyholder Verification</span>
+            </div>
+            <h1 className="font-headline text-2xl md:text-3xl font-bold text-[#0f172a] tracking-tight">
+              Link Your Insurance Policy
+            </h1>
+            <p className="font-body text-xs md:text-sm text-slate-500 mt-1 max-w-2xl leading-relaxed">
+              Authenticate your coverage details to unlock instant automated claim triage, zero-wait voice filing, and real-time dossier tracking.
             </p>
           </div>
 
           {/* Main Layout Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left Column: Verification Form */}
-            <div className="lg:col-span-7 space-y-6">
-              <div className="bg-white border border-[#bdc8ce] rounded-2xl p-6 md:p-8 shadow-sm">
+            <div className="lg:col-span-7">
+              <div className="bg-white border border-[#e2e8f0] rounded-2xl p-6 md:p-8 shadow-xs">
                 {error && (
-                  <div className="mb-5 p-3.5 bg-[#ffdad6] border border-[#ba1a1a]/30 rounded-lg text-xs text-[#93000a] flex items-start gap-2">
-                    <span className="material-symbols-outlined text-base text-[#ba1a1a]">error</span>
+                  <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5 animate-fade-in">
+                    <span className="material-symbols-outlined text-base text-rose-600 mt-0.5">error</span>
                     <div>
                       <p className="font-semibold">Verification Failed</p>
-                      <p className="mt-0.5">{error}</p>
+                      <p className="mt-0.5 text-rose-700">{error}</p>
                     </div>
                   </div>
                 )}
 
                 {successData ? (
-                  <div className="p-6 bg-[#F1F5F9] border border-[#0891B2]/40 rounded-xl text-xs text-[#191c1e] flex flex-col gap-4">
+                  <div className="p-6 bg-slate-50 border border-[#00647c]/30 rounded-2xl text-xs text-[#0f172a] flex flex-col gap-4 animate-fade-in">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#0891B2]/10 text-[#0891B2] flex items-center justify-center text-xl shrink-0">
-                        <span className="material-symbols-outlined fill" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                      <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-xl shrink-0 shadow-xs">
+                        <span className="material-symbols-outlined fill" style={{ fontVariationSettings: "'FILL' 1" }}>
+                          verified
+                        </span>
                       </div>
                       <div>
-                        <h3 className="text-sm font-bold text-[#191c1e]">
-                          {successData.already_linked ? "Policy Already Linked" : "Policy Successfully Linked!"}
+                        <h3 className="text-sm font-bold text-[#0f172a]">
+                          {successData.already_linked ? "Policy Already Linked" : "Policy Successfully Connected!"}
                         </h3>
-                        <p className="text-[#505f76] text-xs mt-0.5">
-                          Policy <span className="font-mono font-bold text-[#00647c]">{successData.policy_number}</span> {successData.policyholder_name ? `(${successData.policyholder_name})` : ""} is verified and ready for claims intake.
+                        <p className="text-slate-500 text-xs mt-0.5">
+                          Policy <span className="font-mono font-bold text-[#00647c]">#{successData.policy_number}</span> {successData.policyholder_name ? `(${successData.policyholder_name})` : ""} is verified and active.
                         </p>
                       </div>
                     </div>
@@ -273,9 +269,10 @@ export default function LinkPolicyPage() {
                     <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
                       <Link
                         href={`/claimant?policy=${successData.policy_number}`}
-                        className="w-full sm:flex-1 py-2.5 px-4 rounded-lg bg-[#0891B2] hover:bg-[#007f9d] text-white font-label font-semibold text-center text-xs shadow-sm transition-colors"
+                        className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-[#00647c] hover:bg-[#004e61] text-white font-label font-semibold text-center text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        Start Voice Claim Intake
+                        <span className="material-symbols-outlined text-sm">record_voice_over</span>
+                        <span>Start Claim Intake</span>
                       </Link>
                       <button
                         onClick={() => {
@@ -285,7 +282,7 @@ export default function LinkPolicyPage() {
                           setDateOfBirth("");
                           setPhoneLast4("");
                         }}
-                        className="w-full sm:w-auto py-2.5 px-4 rounded-lg bg-white border border-[#bdc8ce] text-[#505f76] hover:text-[#191c1e] text-xs font-semibold transition-colors cursor-pointer"
+                        className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-[#00647c] hover:bg-slate-50 text-xs font-semibold transition-colors cursor-pointer"
                       >
                         Link Another
                       </button>
@@ -294,11 +291,11 @@ export default function LinkPolicyPage() {
                 ) : (
                   <form onSubmit={handleSubmit} className="space-y-5" id="policy-link-form">
                     <div>
-                      <label className="font-label text-xs font-medium text-[#505f76] block mb-1.5" htmlFor="policy-number">
-                        Policy Number *
+                      <label className="font-label text-xs font-semibold text-slate-700 block mb-1.5" htmlFor="policy-number">
+                        Policy Number <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative">
-                        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#505f76] text-[20px]">
+                        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
                           badge
                         </span>
                         <input
@@ -308,18 +305,20 @@ export default function LinkPolicyPage() {
                           placeholder="e.g. POL-8492-AX or MOT-5521"
                           value={policyNumber}
                           onChange={(e) => setPolicyNumber(e.target.value.toUpperCase())}
-                          className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg py-2.5 pl-[42px] pr-3.5 font-body text-sm text-[#191c1e] placeholder:text-[#6e797e] font-mono uppercase tracking-wide"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 font-body text-xs md:text-sm text-slate-900 placeholder:text-slate-400 font-mono uppercase tracking-wide focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c] transition-all"
                         />
                       </div>
-                      <span className="text-[11px] text-[#505f76] mt-1 block">Found on your policy schedule or insurance document</span>
+                      <span className="text-[11px] text-slate-400 mt-1 block">
+                        Found on your insurance certificate, schedule, or email receipt
+                      </span>
                     </div>
 
                     <div>
-                      <label className="font-label text-xs font-medium text-[#505f76] block mb-1.5" htmlFor="policyholder-name">
-                        Policyholder Full Name *
+                      <label className="font-label text-xs font-semibold text-slate-700 block mb-1.5" htmlFor="policyholder-name">
+                        Policyholder Full Name <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative">
-                        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#505f76] text-[20px]">
+                        <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
                           person
                         </span>
                         <input
@@ -329,19 +328,21 @@ export default function LinkPolicyPage() {
                           placeholder="e.g. John Doe or Sarah Jenkins"
                           value={policyholderName}
                           onChange={(e) => setPolicyholderName(e.target.value)}
-                          className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg py-2.5 pl-[42px] pr-3.5 font-body text-sm text-[#191c1e] placeholder:text-[#6e797e]"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 font-body text-xs md:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c] transition-all"
                         />
                       </div>
-                      <span className="text-[11px] text-[#505f76] mt-1 block">Must match the registered policyholder name</span>
+                      <span className="text-[11px] text-slate-400 mt-1 block">
+                        Must match the primary named insured on policy records
+                      </span>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="font-label text-xs font-medium text-[#505f76] block mb-1.5" htmlFor="dob">
-                          Policyholder Date of Birth *
+                        <label className="font-label text-xs font-semibold text-slate-700 block mb-1.5" htmlFor="dob">
+                          Date of Birth <span className="text-rose-500">*</span>
                         </label>
                         <div className="relative">
-                          <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#505f76] text-[20px]">
+                          <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
                             calendar_month
                           </span>
                           <input
@@ -350,17 +351,17 @@ export default function LinkPolicyPage() {
                             required
                             value={dateOfBirth}
                             onChange={(e) => setDateOfBirth(e.target.value)}
-                            className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg py-2.5 pl-[42px] pr-3.5 font-body text-sm text-[#191c1e]"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 font-body text-xs md:text-sm text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c] transition-all"
                           />
                         </div>
                       </div>
 
                       <div>
-                        <label className="font-label text-xs font-medium text-[#505f76] block mb-1.5" htmlFor="phone-last-4">
-                          Phone Number (Last 4 Digits) *
+                        <label className="font-label text-xs font-semibold text-slate-700 block mb-1.5" htmlFor="phone-last-4">
+                          Phone Last 4 Digits <span className="text-rose-500">*</span>
                         </label>
                         <div className="relative">
-                          <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#505f76] text-[20px]">
+                          <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
                             dialpad
                           </span>
                           <input
@@ -371,20 +372,21 @@ export default function LinkPolicyPage() {
                             placeholder="1234"
                             value={phoneLast4}
                             onChange={handlePhoneChange}
-                            className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg py-2.5 pl-[42px] pr-3.5 font-body text-sm text-[#191c1e] placeholder:text-[#6e797e] font-mono tracking-widest"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 font-body text-xs md:text-sm text-slate-900 placeholder:text-slate-400 font-mono tracking-widest focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c] transition-all"
                           />
                         </div>
                       </div>
                     </div>
 
-                    <div className="pt-2 flex items-center justify-between">
-                      <span className="font-label text-xs text-[#505f76] flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[15px] text-[#00647c]">lock</span> Secure 256-bit Verification
+                    <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <span className="font-label text-xs text-slate-500 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-emerald-600">lock</span>
+                        <span>Encrypted & Verified via InsureClaimAI Core</span>
                       </span>
                       <button
                         type="submit"
                         disabled={loading}
-                        className="bg-[#00647c] hover:bg-[#007f9d] text-white font-label text-xs font-semibold px-5 py-2.5 rounded-lg transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
+                        className="w-full sm:w-auto bg-[#00647c] hover:bg-[#004e61] text-white font-label text-xs font-semibold px-5 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-xs disabled:opacity-50 cursor-pointer active:scale-[0.99]"
                       >
                         {loading ? (
                           <>
@@ -393,8 +395,8 @@ export default function LinkPolicyPage() {
                           </>
                         ) : (
                           <>
-                            <span>Verify & Link Policy</span>
-                            <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                            <span>Verify & Connect Policy</span>
+                            <span className="material-symbols-outlined text-base">arrow_forward</span>
                           </>
                         )}
                       </button>
@@ -404,56 +406,93 @@ export default function LinkPolicyPage() {
               </div>
             </div>
 
-            {/* Right Column: Info Panel */}
+            {/* Right Column: Information & Trust Panel */}
             <div className="lg:col-span-5">
-              <div className="bg-[#f2f4f6] border border-[#e0e3e5] rounded-2xl p-6 md:p-8 h-full flex flex-col justify-center">
-                <div className="w-12 h-12 rounded-full bg-[#d0e1fb] flex items-center justify-center mb-4 text-[#0891B2]">
-                  <span className="material-symbols-outlined text-[24px]">verified_user</span>
+              <div className="bg-white border border-[#e2e8f0] rounded-2xl p-6 md:p-8 space-y-5 shadow-xs">
+                <div className="w-11 h-11 rounded-xl bg-[#00647c]/10 text-[#00647c] flex items-center justify-center">
+                  <span className="material-symbols-outlined text-2xl">verified_user</span>
                 </div>
-                <h3 className="font-headline text-lg font-bold text-[#191c1e] mb-2">Why Do I Need to Link My Policy?</h3>
-                <p className="font-body text-sm text-[#505f76] mb-4 leading-relaxed">
-                  Linking authenticates your identity and ensures your sensitive claim data remains strictly confidential. Once verified, you will unlock full access to:
-                </p>
-                <ul className="space-y-3">
-                  <li className="flex items-start gap-2.5">
-                    <span className="material-symbols-outlined text-[#00647c] text-[18px] mt-0.5">check_circle</span>
-                    <span className="font-body text-xs text-[#3e484d] leading-normal">Real-time claim status tracking and auto-routing</span>
-                  </li>
-                  <li className="flex items-start gap-2.5">
-                    <span className="material-symbols-outlined text-[#00647c] text-[18px] mt-0.5">check_circle</span>
-                    <span className="font-body text-xs text-[#3e484d] leading-normal">Instant digital document verification and deductible calculation</span>
-                  </li>
-                  <li className="flex items-start gap-2.5">
-                    <span className="material-symbols-outlined text-[#00647c] text-[18px] mt-0.5">check_circle</span>
-                    <span className="font-body text-xs text-[#3e484d] leading-normal">Personalized AI voice assistance with seamless incident extraction</span>
-                  </li>
-                </ul>
+                <div>
+                  <h3 className="font-headline text-base md:text-lg font-bold text-[#0f172a]">
+                    Why Link Your Policy?
+                  </h3>
+                  <p className="font-body text-xs text-slate-500 mt-1 leading-relaxed">
+                    Connecting your policy allows our autonomous intake agent to instantly retrieve coverage limits, calculate deductibles, and speed up settlement workflows.
+                  </p>
+                </div>
+
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  <div className="flex items-start gap-2.5">
+                    <span className="material-symbols-outlined text-emerald-600 text-[18px] shrink-0 mt-0.5">
+                      check_circle
+                    </span>
+                    <div>
+                      <p className="font-semibold text-xs text-slate-800">Zero-Wait Voice Intake</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        File claims naturally via conversational voice without manually entering repetitive policy numbers.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5">
+                    <span className="material-symbols-outlined text-emerald-600 text-[18px] shrink-0 mt-0.5">
+                      check_circle
+                    </span>
+                    <div>
+                      <p className="font-semibold text-xs text-slate-800">Coverage & Deductible Pre-Check</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Real-time verification ensures that incident details match active policy limits and clauses.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5">
+                    <span className="material-symbols-outlined text-emerald-600 text-[18px] shrink-0 mt-0.5">
+                      check_circle
+                    </span>
+                    <div>
+                      <p className="font-semibold text-xs text-slate-800">Direct Adjuster Routing</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Submissions are immediately routed to specialized adjusters with full incident dossiers.
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Below Form: My Linked Policies */}
-          <div className="mt-12 pt-8 border-t border-[#e0e3e5]">
+          {/* Connected Policies Section */}
+          <div className="mt-10 pt-8 border-t border-[#e2e8f0]">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-headline text-xl font-bold text-[#191c1e]">My Linked Policies</h3>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#d0e1fb] text-[#54647a]">
-                {myPolicies.length} {myPolicies.length === 1 ? "Policy" : "Policies"} Connected
+              <div>
+                <h2 className="font-headline text-lg md:text-xl font-bold text-[#0f172a]">
+                  Connected Policies
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Policies linked to your profile ready for immediate claim intake
+                </p>
+              </div>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-200/80 text-slate-700 font-mono">
+                {myPolicies.length} {myPolicies.length === 1 ? "Policy" : "Policies"}
               </span>
             </div>
 
             {loadingPolicies ? (
-              <div className="p-8 text-center text-xs text-[#505f76] animate-pulse">Loading linked policies...</div>
+              <div className="p-8 text-center text-xs text-slate-400 bg-white border border-[#e2e8f0] rounded-2xl flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-[#00647c] border-t-transparent rounded-full animate-spin" />
+                <span>Loading your linked policies...</span>
+              </div>
             ) : myPolicies.length === 0 ? (
-              <div className="bg-[#f7f9fb] border border-dashed border-[#bdc8ce] rounded-2xl p-12 flex flex-col items-center justify-center text-center">
-                <div className="w-20 h-20 mb-4 relative">
-                  <div className="absolute inset-0 bg-[#d0e1fb]/50 rounded-full animate-pulse opacity-60"></div>
-                  <div className="absolute inset-1.5 bg-white rounded-full shadow-sm flex items-center justify-center border border-[#e0e3e5]">
-                    <span className="material-symbols-outlined text-[#505f76] text-[28px]">folder_off</span>
-                  </div>
+              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-10 flex flex-col items-center justify-center text-center">
+                <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
+                  <span className="material-symbols-outlined text-3xl">folder_off</span>
                 </div>
-                <h4 className="font-headline text-lg font-bold text-[#191c1e] mb-1">No Policies Linked Yet</h4>
-                <p className="font-body text-xs text-[#505f76] max-w-sm leading-relaxed">
-                  Use the secure form above to link your first InsureClaimAI policy and unlock your digital voice intake experience.
+                <h4 className="font-headline text-sm font-bold text-slate-800 mb-1">
+                  No Policies Connected Yet
+                </h4>
+                <p className="font-body text-xs text-slate-500 max-w-sm leading-relaxed">
+                  Use the verification form above to link your first policy and start filing claims instantly.
                 </p>
               </div>
             ) : (
@@ -461,33 +500,37 @@ export default function LinkPolicyPage() {
                 {myPolicies.map((p) => (
                   <div
                     key={p.policy_number}
-                    className="bg-white border border-[#bdc8ce] rounded-xl p-5 shadow-sm hover:border-[#0891B2] transition-colors flex flex-col justify-between"
+                    className="bg-white border border-[#e2e8f0] hover:border-[#00647c]/50 rounded-2xl p-5 shadow-xs transition-all duration-200 flex flex-col justify-between group"
                   >
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-mono text-sm font-bold text-[#00647c]">{p.policy_number}</span>
-                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#d0e1fb] text-[#54647a]">
+                        <span className="font-mono text-xs font-bold text-[#00647c] bg-[#00647c]/10 px-2 py-0.5 rounded">
+                          #{p.policy_number}
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
                           {p.policy_type?.replace("_", " ")}
                         </span>
                       </div>
-                      <p className="text-xs text-[#505f76] mb-1">
-                        Holder: <span className="font-medium text-[#191c1e]">{p.policyholder_name || "Self"}</span>
+                      <p className="text-xs text-slate-600 mt-2">
+                        Holder: <span className="font-semibold text-slate-800">{p.policyholder_name || "Self"}</span>
                       </p>
-                      <div className="text-xs text-[#505f76] flex justify-between mt-2 pt-2 border-t border-[#f2f4f6]">
-                        <span>Coverage: ₹{p.coverage_amount?.toLocaleString()}</span>
-                        <span>Exp: {p.expiry_date}</span>
+                      <div className="text-xs text-slate-500 flex justify-between mt-2.5 pt-2.5 border-t border-slate-100">
+                        <span>Coverage: ₹{p.coverage_amount?.toLocaleString("en-IN") || "N/A"}</span>
+                        <span>Exp: {p.expiry_date || "Active"}</span>
                       </div>
                     </div>
-                    <div className="mt-4 pt-3 border-t border-[#e0e3e5] flex items-center justify-between">
-                      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> Verified Active
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span> Verified Active
                       </span>
                       <Link
                         href={`/claimant?policy=${p.policy_number}`}
-                        className="text-xs font-semibold text-[#0891B2] hover:underline flex items-center gap-0.5"
+                        className="text-xs font-semibold text-[#00647c] group-hover:text-[#004e61] flex items-center gap-1 transition-colors"
                       >
                         <span>File Claim</span>
-                        <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                        <span className="material-symbols-outlined text-sm transition-transform group-hover:translate-x-0.5">
+                          arrow_forward
+                        </span>
                       </Link>
                     </div>
                   </div>
@@ -500,3 +543,4 @@ export default function LinkPolicyPage() {
     </div>
   );
 }
+

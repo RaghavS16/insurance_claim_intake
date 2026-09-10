@@ -1,4 +1,4 @@
-import React, { RefObject, useState, useEffect } from "react";
+import React, { RefObject, useState, useEffect, useRef } from "react";
 import { ConversationTurn } from "./ChatTranscript";
 
 interface TranscriptSegment {
@@ -20,9 +20,11 @@ interface ClaimantChatAreaProps {
   confirmed: boolean;
   submittedMessage: string;
   chatContainerRef: RefObject<HTMLDivElement | null>;
+  textMode?: boolean;
   linkedPolicies?: Array<{ policy_number: string; policy_type: string; coverage_amount?: number }>;
   onSelectPromptSuggestion?: (text: string) => void;
   onExportTranscript?: () => void;
+  onScrollChange?: (isScrolledUp: boolean) => void;
 }
 
 const formatMessageTime = (ts?: number | string | null) => {
@@ -45,30 +47,35 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   linkedPolicies = [],
   onSelectPromptSuggestion,
   onExportTranscript,
+  onScrollChange,
 }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Monitor scroll position to show/hide scroll-to-bottom button
+  // Monitor scroll position to notify parent
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
 
     const handleScroll = () => {
-      const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
-      setShowScrollBottom(isUp);
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      onScrollChange?.(distanceFromBottom > 100);
     };
 
-    el.addEventListener("scroll", handleScroll);
+    el.addEventListener("scroll", handleScroll, { passive: true });
     return () => el.removeEventListener("scroll", handleScroll);
-  }, [chatContainerRef]);
+  }, [chatContainerRef, onScrollChange]);
 
-  const scrollToBottom = () => {
+  // Auto-scroll when new messages arrive if user is near bottom
+  useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  };
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 280;
+    if (isNearBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [history.length, partialSegments.size, agentState, chatContainerRef]);
 
   const handleCopyText = (text: string, idx: number) => {
     navigator.clipboard.writeText(text);
@@ -97,11 +104,10 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   return (
     <div
       ref={chatContainerRef}
-      className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-48 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${
-        isConversationEmpty
+      className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
           ? "flex flex-col items-center justify-center min-h-full overflow-hidden"
           : "overflow-y-auto"
-      }`}
+        }`}
     >
       {/* Empty State / Welcome Screen */}
       {isConversationEmpty && (
@@ -128,7 +134,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
         if (isAgent) {
           return (
-            <div key={`msg-${idx}`} className="flex gap-3 max-w-[85%] group animate-fade-in">
+            <div key={`msg-${idx}`} className="flex gap-3 max-w-[88%] md:max-w-[80%] group animate-fade-in">
               {/* Agent Avatar */}
               <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#00647c] to-[#0891B2] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
                 <span className="material-symbols-outlined text-base">smart_toy</span>
@@ -146,7 +152,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
                 {/* Agent Bubble */}
                 <div className="relative bg-[#f1f5f9] text-[#0f172a] p-4 rounded-2xl rounded-tl-xs border border-slate-200/80 shadow-xs">
-                  <p className="font-body text-sm leading-relaxed whitespace-pre-line">
+                  <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
                     {turn.text}
                   </p>
 
@@ -205,7 +211,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
           return (
             <div
               key={`msg-${idx}`}
-              className="flex gap-3 max-w-[85%] ml-auto justify-end group animate-fade-in"
+              className="flex gap-3 max-w-[88%] md:max-w-[80%] ml-auto justify-end group animate-fade-in"
             >
               <div className="flex flex-col gap-1 items-end min-w-0">
                 <div className="flex items-center gap-2">
@@ -217,7 +223,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
                 {/* User Bubble */}
                 <div className="relative bg-gradient-to-r from-[#00647c] to-[#004e61] text-white p-4 rounded-2xl rounded-tr-xs shadow-xs">
-                  <p className="font-body text-sm leading-relaxed whitespace-pre-line">
+                  <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
                     {turn.text}
                   </p>
 
@@ -249,7 +255,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
       {Array.from(partialSegments.values()).map((seg) => (
         <div
           key={seg.segment_id}
-          className="flex gap-3 max-w-[85%] ml-auto justify-end opacity-90 animate-pulse"
+          className="flex gap-3 max-w-[88%] md:max-w-[80%] ml-auto justify-end opacity-90 animate-pulse"
         >
           <div className="flex flex-col gap-1 items-end">
             <span className="font-label text-xs text-[#0891B2] font-semibold flex items-center gap-1">
@@ -257,7 +263,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
               Transcribing audio...
             </span>
             <div className="bg-[#00647c]/90 text-white p-3.5 rounded-2xl rounded-tr-xs border border-[#0891B2] shadow-sm">
-              <p className="font-body text-sm italic">{seg.text}</p>
+              <p className="font-body text-xs md:text-sm italic">{seg.text}</p>
             </div>
           </div>
         </div>
@@ -282,45 +288,13 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
         </div>
       )}
 
-      {/* Claim Submission Success Banner */}
-      {confirmed && (
-        <div className="p-4 bg-emerald-50 border border-emerald-500/30 rounded-2xl text-emerald-900 text-xs flex items-center justify-between gap-4 shadow-sm animate-fade-in">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <span className="material-symbols-outlined text-2xl">verified</span>
-            </div>
-            <div>
-              <h4 className="font-bold text-sm text-emerald-900">Claim Successfully Submitted</h4>
-              <p className="mt-0.5 text-emerald-700">
-                {submittedMessage || "Your claim has been verified and registered for adjuster review."}
-              </p>
-            </div>
-          </div>
-          {onExportTranscript && (
-            <button
-              onClick={onExportTranscript}
-              className="flex items-center gap-1 px-3 py-1.5 bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 rounded-lg text-xs font-semibold shadow-2xs transition-colors shrink-0 cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-sm">download</span>
-              <span>Export Dossier</span>
-            </button>
-          )}
-        </div>
-      )}
 
-      {/* Floating Scroll to Bottom Button */}
-      {showScrollBottom && (
-        <button
-          onClick={scrollToBottom}
-          className="fixed bottom-28 left-1/2 -translate-x-1/2 md:left-[calc(50%+8rem)] z-20 flex items-center gap-1.5 bg-white text-slate-700 hover:text-[#00647c] border border-slate-200 shadow-md hover:shadow-lg rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 animate-bounce cursor-pointer"
-        >
-          <span className="material-symbols-outlined text-sm">arrow_downward</span>
-          <span>Scroll to latest</span>
-        </button>
-      )}
+      {/* Explicit Anchor for smooth and accurate scroll to latest */}
+      <div ref={messagesEndRef} className="h-1 w-full shrink-0" aria-hidden="true" />
 
-      {/* Bottom Spacer */}
+      {/* Bottom Spacer for fixed VoiceConsole */}
       <div className="h-44 w-full shrink-0 pointer-events-none" aria-hidden="true" />
     </div>
   );
 };
+
