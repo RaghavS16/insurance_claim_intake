@@ -30,11 +30,30 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
     return requested_model
 
 
+class ClaimChatOpenAI(ChatOpenAI):
+    """OpenAI-compatible chat model with tool/function structured output by default.
+
+    The project extraction schema contains flexible values and provider-backed OpenAI
+    JSON-schema response_format rejects that shape. Function calling supports the same
+    Pydantic extraction contract without requiring the provider's strict response schema.
+    """
+
+    def with_structured_output(self, schema=None, *, method="function_calling", include_raw=False, strict=None, tools=None, **kwargs):
+        return super().with_structured_output(
+            schema,
+            method=method,
+            include_raw=include_raw,
+            strict=strict,
+            tools=tools,
+            **kwargs,
+        )
+
+
 def get_configured_llm() -> BaseChatModel:
     provider = (settings.LLM_PROVIDER or "ollama").lower().strip()
     timeout = settings.LLM_TIMEOUT_SECONDS
     if provider in ("cloud", "openai", "openrouter", "dashscope", "together"):
-        return ChatOpenAI(
+        return ClaimChatOpenAI(
             model=settings.CLOUD_LLM_MODEL,
             api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
             base_url=settings.CLOUD_LLM_BASE_URL,
