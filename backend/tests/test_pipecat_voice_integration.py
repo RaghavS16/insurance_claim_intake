@@ -24,7 +24,7 @@ def test_pipeline_contains_transport_vad_stt_agent_and_tts():
 
     assert worker is not None
     stt_cls.assert_called_once()
-    tts_cls.assert_called_once_with(base_url="http://localhost:5000", voice=None)
+    tts_cls.assert_called_once_with(base_url="http://localhost:5000", voice="en_US-lessac-medium")
     transport.input.assert_called_once()
     transport.output.assert_called_once()
 
@@ -73,5 +73,3 @@ def test_llm_factory_instantiates_configured_provider():
         cloud_llm = get_configured_llm()
         assert isinstance(cloud_llm, ChatOpenAI)
         assert getattr(cloud_llm, "model_name", "") == "Qwen/Qwen3.5-27B"
-
-

@@ -67,6 +67,7 @@ export default function ClaimantPage() {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -84,17 +85,31 @@ export default function ClaimantPage() {
   const scrollToBottom = useCallback((force = false) => {
     const container = chatContainerRef.current;
     if (!container) return;
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 300;
-    if (force || nearBottom) setTimeout(() => container.scrollTo({ top: container.scrollHeight, behavior: "smooth" }), 50);
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 350;
+    if (force || nearBottom) {
+      setTimeout(() => {
+        container.scrollTo({ top: container.scrollHeight + 500, behavior: "smooth" });
+      }, 50);
+    }
   }, []);
-  useEffect(() => { scrollToBottom(true); }, [history.length, partialSegments.size, scrollToBottom]);
+
+  const handleScrollToBottom = useCallback(() => {
+    setShowScrollBottom(false);
+    scrollToBottom(true);
+  }, [scrollToBottom]);
+
+  useEffect(() => {
+    scrollToBottom(true);
+  }, [history.length, partialSegments.size, scrollToBottom]);
 
   const getPlaybackContext = useCallback(() => {
     if (!playbackContextRef.current || playbackContextRef.current.state === "closed") {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       playbackContextRef.current = new AudioCtx();
     }
-    if (playbackContextRef.current.state === "suspended") playbackContextRef.current.resume().catch(() => {});
+    if (playbackContextRef.current.state === "suspended") {
+      playbackContextRef.current.resume().catch(() => {});
+    }
     return playbackContextRef.current;
   }, []);
 
@@ -102,17 +117,23 @@ export default function ClaimantPage() {
     audioBlobQueueRef.current.push(blob);
     const playNext = async () => {
       if (isPlayingRef.current || !audioBlobQueueRef.current.length) return;
-      const next = audioBlobQueueRef.current.shift(); if (!next) return;
+      const next = audioBlobQueueRef.current.shift();
+      if (!next) return;
       isPlayingRef.current = true;
       try {
         const ctx = getPlaybackContext();
         const buffer = await ctx.decodeAudioData(await next.arrayBuffer());
-        const source = ctx.createBufferSource(); source.buffer = buffer; source.connect(ctx.destination); activeSourceRef.current = source;
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        activeSourceRef.current = source;
         setAgentState("speaking");
         source.onended = () => {
           isPlayingRef.current = false;
           if (activeSourceRef.current === source) activeSourceRef.current = null;
-          if (!audioBlobQueueRef.current.length) setAgentState(isRecordingRef.current ? "listening" : "idle");
+          if (!audioBlobQueueRef.current.length) {
+            setAgentState(isRecordingRef.current ? "listening" : "idle");
+          }
           playNext();
         };
         source.start(0);
@@ -134,12 +155,9 @@ export default function ClaimantPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        const items = Array.isArray(data) ? data : (data.items || []);
-        setClaimsList(items);
+        setClaimsList(Array.isArray(data) ? data : (data.items || []));
       }
-    } catch {
-      // ignore network errors silently
-    } finally {
+    } catch {} finally {
       setLoadingClaims(false);
     }
   }, []);
@@ -164,28 +182,63 @@ export default function ClaimantPage() {
       return;
     }
     let msg: Record<string, any>;
-    try { msg = JSON.parse(event.data); } catch { return; }
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
     if (msg.type === "barge_in") {
-      try { activeSourceRef.current?.stop(); } catch {}
+      try {
+        activeSourceRef.current?.stop();
+      } catch {}
       activeSourceRef.current = null;
       audioBlobQueueRef.current = [];
       isPlayingRef.current = false;
+      setAgentState(isRecordingRef.current ? "listening" : "idle");
       setPartialSegments(new Map());
       return;
     }
-    if (msg.type === "agent_state") { setAgentState(msg.state); return; }
+    if (msg.type === "agent_state") {
+      setAgentState(msg.state);
+      return;
+    }
     if (msg.type === "transcript") {
-      const speaker = msg.speaker as string, segmentId = msg.segment_id as string, text = msg.text as string, isFinal = msg.is_final as boolean;
+      const speaker = msg.speaker as string,
+        segmentId = msg.segment_id as string,
+        text = msg.text as string,
+        isFinal = msg.is_final as boolean;
       if (!text) return;
       if (!isFinal) {
-        setPartialSegments(prev => {
+        setPartialSegments((prev) => {
           const next = new Map(prev);
-          next.set(segmentId, { segment_id: segmentId, sequence: msg.sequence || 0, speaker: speaker === "agent" ? "agent" : "user", text, is_final: false, global_seq: msg.global_seq, timestamp: msg.timestamp });
+          next.set(segmentId, {
+            segment_id: segmentId,
+            sequence: msg.sequence || 0,
+            speaker: speaker === "agent" ? "agent" : "user",
+            text,
+            is_final: false,
+            global_seq: msg.global_seq,
+            timestamp: msg.timestamp,
+          });
           return next;
         });
       } else {
-        setPartialSegments(prev => { const next = new Map(prev); next.delete(segmentId); return next; });
-        setHistory(prev => [...prev, { turn: prev.length + 1, speaker: speaker === "agent" ? "agent" : "user", text, segment_id: segmentId, global_seq: msg.global_seq, timestamp: msg.timestamp || Date.now() }]);
+        setPartialSegments((prev) => {
+          const next = new Map(prev);
+          next.delete(segmentId);
+          return next;
+        });
+        setHistory((prev) => [
+          ...prev,
+          {
+            turn: prev.length + 1,
+            speaker: speaker === "agent" ? "agent" : "user",
+            text,
+            segment_id: segmentId,
+            global_seq: msg.global_seq,
+            timestamp: msg.timestamp || Date.now(),
+          },
+        ]);
       }
       return;
     }
@@ -198,28 +251,52 @@ export default function ClaimantPage() {
   }, [enqueueAudio]);
 
   const stopVoiceRecording = useCallback(() => {
-    try { workletNodeRef.current?.port.postMessage({ command: "stop" }); workletNodeRef.current?.disconnect(); } catch {}
+    try {
+      workletNodeRef.current?.port.postMessage({ command: "stop" });
+      workletNodeRef.current?.disconnect();
+    } catch {}
     workletNodeRef.current = null;
-    try { audioContextRef.current?.close(); } catch {}
+    try {
+      audioContextRef.current?.close();
+    } catch {}
     audioContextRef.current = null;
-    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setIsRecording(false);
     setAgentState("idle");
   }, []);
 
+  const stopAssistantAudio = useCallback(() => {
+    try {
+      activeSourceRef.current?.stop();
+    } catch {}
+    activeSourceRef.current = null;
+    audioBlobQueueRef.current = [];
+    isPlayingRef.current = false;
+    setAgentState(isRecordingRef.current ? "listening" : "idle");
+  }, []);
+
   const connectWebSocket = useCallback((currentTicketId: string, currentToken: string) => {
-    try { wsRef.current?.close(); } catch {}
-    const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`);
+    try {
+      wsRef.current?.close();
+    } catch {}
+    const ws = new WebSocket(
+      `${API_BASE.replace(/^http/, "ws")}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`
+    );
     ws.binaryType = "blob";
     ws.onmessage = handleWsMessage;
-    ws.onclose = () => { if (isRecordingRef.current) stopVoiceRecording(); };
+    ws.onclose = () => {
+      if (isRecordingRef.current) stopVoiceRecording();
+    };
     wsRef.current = ws;
   }, [handleWsMessage, stopVoiceRecording]);
 
   const initBlankChat = useCallback(() => {
     if (isRecordingRef.current) stopVoiceRecording();
-    try { wsRef.current?.close(); } catch {}
+    stopAssistantAudio();
+    try {
+      wsRef.current?.close();
+    } catch {}
     wsRef.current = null;
     setTicketId("");
     localStorage.removeItem("active_claim_ticket_id");
@@ -233,7 +310,7 @@ export default function ClaimantPage() {
     if (router.query.ticket || router.query.ticket_id) {
       router.replace({ pathname: "/claimant" }, undefined, { shallow: true });
     }
-  }, [router, stopVoiceRecording]);
+  }, [router, stopAssistantAudio, stopVoiceRecording]);
 
   const applySession = useCallback((data: SessionPayload, authToken: string, fallbackMessage?: string) => {
     setTicketId(data.ticket_id);
@@ -242,7 +319,7 @@ export default function ClaimantPage() {
     setExtractedData(data.extracted_data || {});
     setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
     setPartialSegments(new Map());
-    const saved = (data.conversation || []).map(t => ({
+    const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
       speaker: t.speaker,
       text: t.text,
@@ -251,12 +328,14 @@ export default function ClaimantPage() {
     if (saved.length) {
       setHistory(saved);
     } else if (fallbackMessage || data.initial_message) {
-      setHistory([{
-        turn: 1,
-        speaker: "agent",
-        text: data.initial_message || fallbackMessage || "Tell me what happened, in your own words. I'll collect the details as we go.",
-        timestamp: Date.now(),
-      }]);
+      setHistory([
+        {
+          turn: 1,
+          speaker: "agent",
+          text: data.initial_message || fallbackMessage || "Tell me what happened, in your own words. I'll collect the details as we go.",
+          timestamp: Date.now(),
+        },
+      ]);
     } else {
       setHistory([]);
     }
@@ -268,7 +347,7 @@ export default function ClaimantPage() {
     if (!authToken || !selectedTicketId) return;
     if (isRecordingRef.current) stopVoiceRecording();
     setLoading(true);
-    setErrorBanner(""); // Clear any prior error when switching claims
+    setErrorBanner("");
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${selectedTicketId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -289,7 +368,10 @@ export default function ClaimantPage() {
     const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
     const res = await fetch(`${API_BASE}/api/v1/claims/new-session`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error("Could not initialize claim intake.");
@@ -305,7 +387,6 @@ export default function ClaimantPage() {
     e.stopPropagation();
     if (!token || !targetTicketId) return;
     if (!window.confirm(`Discard draft for claim #${targetTicketId}?`)) return;
-
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${targetTicketId}`, {
         method: "DELETE",
@@ -316,9 +397,7 @@ export default function ClaimantPage() {
         throw new Error(errData.detail || "Unable to delete claim.");
       }
       fetchClaimsList(token);
-      if (targetTicketId === ticketId) {
-        initBlankChat();
-      }
+      if (targetTicketId === ticketId) initBlankChat();
     } catch (err: any) {
       setErrorBanner(err.message || "Could not delete claim.");
     }
@@ -350,37 +429,58 @@ export default function ClaimantPage() {
   useEffect(() => {
     if (!router.isReady || hasInitializedRef.current) return;
     const savedToken = getAuthToken();
-    if (!savedToken) { router.push("/login"); return; }
+    if (!savedToken) {
+      router.push("/login");
+      return;
+    }
     setToken(savedToken);
     hasInitializedRef.current = true;
-    fetch(`${API_BASE}/api/v1/auth/me`, { headers: { Authorization: `Bearer ${savedToken}` } })
-      .then(r => { if (!r.ok) throw new Error("Session expired"); return r.json(); })
-      .then(data => {
-        if (data.role !== "CLAIMANT") { router.push(data.role === "ADMIN" ? "/admin" : "/adjuster"); return; }
+    fetch(`${API_BASE}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${savedToken}` },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error("Session expired");
+        return r.json();
+      })
+      .then((data) => {
+        if (data.role !== "CLAIMANT") {
+          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
+          return;
+        }
         setUserName(data.full_name || "Claimant");
         const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
         fetchClaimsList(savedToken);
         fetchLinkedPolicies(savedToken);
-        if (initialTicket) {
-          return loadClaimByTicket(initialTicket, savedToken);
-        } else {
-          initBlankChat();
-        }
+        if (initialTicket) return loadClaimByTicket(initialTicket, savedToken);
+        else initBlankChat();
       })
-      .catch(() => { clearAuthToken(); router.push("/login"); });
+      .catch(() => {
+        clearAuthToken();
+        router.push("/login");
+      });
   }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);
 
-  useEffect(() => () => { try { wsRef.current?.close(); } catch {} stopVoiceRecording(); }, [stopVoiceRecording]);
+  useEffect(() => () => {
+    try {
+      wsRef.current?.close();
+    } catch {}
+    stopVoiceRecording();
+    stopAssistantAudio();
+  }, [stopVoiceRecording, stopAssistantAudio]);
 
   const startVoiceRecording = async () => {
     if (!token) return;
     try {
       let activeTid = ticketId;
-      if (!activeTid) {
-        activeTid = await ensureClaimSession(token);
-      }
+      if (!activeTid) activeTid = await ensureClaimSession(token);
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
       streamRef.current = stream;
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -388,9 +488,13 @@ export default function ClaimantPage() {
       await audioCtx.audioWorklet.addModule("/audio-processor.js");
       const source = audioCtx.createMediaStreamSource(stream);
       let worklet: AudioWorkletNode;
-      try { worklet = new AudioWorkletNode(audioCtx, "audio-processor"); } catch { worklet = new AudioWorkletNode(audioCtx, "pcm16-processor"); }
+      try {
+        worklet = new AudioWorkletNode(audioCtx, "audio-processor");
+      } catch {
+        worklet = new AudioWorkletNode(audioCtx, "pcm16-processor");
+      }
       workletNodeRef.current = worklet;
-      worklet.port.onmessage = event => {
+      worklet.port.onmessage = (event) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(event.data instanceof ArrayBuffer ? event.data : event.data?.buffer);
         }
@@ -403,7 +507,8 @@ export default function ClaimantPage() {
       setErrorBanner(`Microphone access error: ${err.message}`);
     }
   };
-  const toggleMic = () => isRecording ? stopVoiceRecording() : startVoiceRecording();
+
+  const toggleMic = () => (isRecording ? stopVoiceRecording() : startVoiceRecording());
 
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
@@ -411,22 +516,26 @@ export default function ClaimantPage() {
     if (!rawText.trim() || !token) return;
     const text = rawText.trim();
     setTextInput("");
-    setHistory(prev => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
+    setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");
     try {
       let activeTid = ticketId;
-      if (!activeTid) {
-        activeTid = await ensureClaimSession(token);
-      }
+      if (!activeTid) activeTid = await ensureClaimSession(token);
       const res = await fetch(`${API_BASE}/api/v1/claims/${activeTid}/text-turn`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ text }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Unable to process message.");
       if (data.agent_message) {
-        setHistory(prev => [...prev, { turn: prev.length + 1, speaker: "agent", text: data.agent_message, timestamp: Date.now() }]);
+        setHistory((prev) => [
+          ...prev,
+          { turn: prev.length + 1, speaker: "agent", text: data.agent_message, timestamp: Date.now() },
+        ]);
       }
       setExtractedData(data.extracted_data || {});
       setConversationStatus(data.conversation_status || "collecting");
@@ -446,12 +555,17 @@ export default function ClaimantPage() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ confirmed: true }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to submit claim.");
-      setSubmittedMessage(data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`);
+      setSubmittedMessage(
+        data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`
+      );
       setConfirmed(true);
       fetchClaimsList(token);
     } catch (err: any) {
@@ -475,7 +589,10 @@ export default function ClaimantPage() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ [editingField]: parsedVal }),
       });
       if (!res.ok) throw new Error("Could not save this correction.");
@@ -490,7 +607,10 @@ export default function ClaimantPage() {
 
   const handleLogout = () => {
     if (isRecording) stopVoiceRecording();
-    try { wsRef.current?.close(); } catch {}
+    stopAssistantAudio();
+    try {
+      wsRef.current?.close();
+    } catch {}
     clearAuthToken();
     router.push("/login");
   };
@@ -505,6 +625,7 @@ export default function ClaimantPage() {
         userName={userName}
         claims={claimsList}
         activeTicketId={ticketId}
+        activeRoute="claimant"
         loadingClaims={loadingClaims}
         onSelectClaim={(id) => loadClaimByTicket(id, token)}
         onNewClaim={initBlankChat}
@@ -535,8 +656,9 @@ export default function ClaimantPage() {
               submittedMessage={submittedMessage}
               chatContainerRef={chatContainerRef}
               linkedPolicies={linkedPolicies}
-              onSelectPromptSuggestion={(text) => handleSendText(undefined, text)}
+              onSelectPromptSuggestion={(txt) => handleSendText(undefined, txt)}
               onExportTranscript={handleExportTranscript}
+              onScrollChange={(isUp) => setShowScrollBottom(isUp)}
             />
 
             <VoiceConsole
@@ -547,11 +669,10 @@ export default function ClaimantPage() {
               setTextInput={setTextInput}
               onSendText={(e) => handleSendText(e)}
               onToggleMic={toggleMic}
-              onStopAudio={() => {
-                if (isRecording) stopVoiceRecording();
-                if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-              }}
+              onStopAudio={stopAssistantAudio}
               confirmed={confirmed}
+              showScrollBottom={showScrollBottom}
+              onScrollToBottom={handleScrollToBottom}
             />
           </div>
 
@@ -559,7 +680,7 @@ export default function ClaimantPage() {
             extractedData={extractedData}
             linkedPolicies={linkedPolicies}
             onOpenEdit={handleOpenEdit}
-            onSelectPolicy={(num) => handleSendText(undefined, num)}
+            onSelectPolicy={() => {}}
             onSubmitClaim={handleSubmitClaim}
             submittingClaim={submittingClaim}
             confirmed={confirmed}
@@ -578,3 +699,4 @@ export default function ClaimantPage() {
     </div>
   );
 }
+

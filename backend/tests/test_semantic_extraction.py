@@ -97,5 +97,5 @@ def test_confirmation_summary_is_grounded_and_not_transcript_length():
     })
     assert "XYZ123" in text
     assert "Chennai" in text
-    assert "12000" in text
+    assert "12,000" in text
     assert len(text.split()) < 40
