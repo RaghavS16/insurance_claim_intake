@@ -78,27 +78,24 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             setActiveTab("policies");
             if (mobileOpen) setMobileOpen(false);
           }}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 cursor-pointer outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
-            activeTab === "policies"
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 cursor-pointer outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${activeTab === "policies"
               ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
               : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
-          }`}
+            }`}
         >
           <span
-            className={`material-symbols-outlined text-[18px] ${
-              activeTab === "policies" ? "text-[#00647c]" : "text-slate-400"
-            }`}
+            className={`material-symbols-outlined text-[18px] ${activeTab === "policies" ? "text-[#00647c]" : "text-slate-400"
+              }`}
           >
             policy
           </span>
           <span className="flex-1 text-left">Policy Management</span>
           {policiesCount !== undefined && (
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                activeTab === "policies"
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${activeTab === "policies"
                   ? "bg-[#00647c]/10 text-[#00647c]"
                   : "bg-slate-200/80 text-slate-600"
-              }`}
+                }`}
             >
               {policiesCount}
             </span>
@@ -111,27 +108,24 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             setActiveTab("adjusters");
             if (mobileOpen) setMobileOpen(false);
           }}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 cursor-pointer outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
-            activeTab === "adjusters"
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 cursor-pointer outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${activeTab === "adjusters"
               ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
               : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
-          }`}
+            }`}
         >
           <span
-            className={`material-symbols-outlined text-[18px] ${
-              activeTab === "adjusters" ? "text-[#00647c]" : "text-slate-400"
-            }`}
+            className={`material-symbols-outlined text-[18px] ${activeTab === "adjusters" ? "text-[#00647c]" : "text-slate-400"
+              }`}
           >
             badge
           </span>
           <span className="flex-1 text-left">Adjuster Accounts</span>
           {adjustersCount !== undefined && (
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                activeTab === "adjusters"
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${activeTab === "adjusters"
                   ? "bg-[#00647c]/10 text-[#00647c]"
                   : "bg-slate-200/80 text-slate-600"
-              }`}
+                }`}
             >
               {adjustersCount}
             </span>
@@ -149,8 +143,8 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             {currentUser?.name
               ? currentUser.name.charAt(0).toUpperCase()
               : currentUser?.email
-              ? currentUser.email.charAt(0).toUpperCase()
-              : "A"}
+                ? currentUser.email.charAt(0).toUpperCase()
+                : "A"}
           </div>
           <div className="flex flex-col truncate">
             <span className="text-xs text-slate-800 font-semibold truncate leading-tight">
@@ -187,24 +181,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           <span className="material-symbols-outlined text-[#00647c] text-xl">admin_panel_settings</span>
           <span>InsureClaimAI</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          {onAddPolicy && (
-            <button
-              onClick={onAddPolicy}
-              className="flex items-center gap-1 bg-[#00647c] text-white px-2.5 py-1 rounded-lg text-xs font-semibold outline-none focus:outline-none focus-visible:outline-none focus:ring-0"
-            >
-              <span className="material-symbols-outlined text-sm">add</span>
-              <span>Add</span>
-            </button>
-          )}
-          <button
-            onClick={onLogout}
-            title="Sign out"
-            className="text-slate-500 hover:text-red-600 p-1.5 rounded-md hover:bg-slate-100 outline-none focus:outline-none focus-visible:outline-none focus:ring-0"
-          >
-            <span className="material-symbols-outlined text-lg">logout</span>
-          </button>
-        </div>
+
       </header>
 
       {/* Mobile Drawer Backdrop */}
@@ -217,9 +194,8 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
 
       {/* Mobile Drawer Container */}
       <div
-        className={`md:hidden fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-in-out ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`md:hidden fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-in-out ${mobileOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
       >
         {sidebarContent}
       </div>

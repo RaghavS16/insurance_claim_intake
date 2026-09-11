@@ -68,6 +68,7 @@ export default function ClaimantPage() {
   const [editValue, setEditValue] = useState("");
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [mobileTab, setMobileTab] = useState<"chat" | "details">("chat");
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -619,6 +620,13 @@ export default function ClaimantPage() {
     ? `${(SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] || extractedData.insurance_type} Claim`
     : "New Claim Intake";
 
+  const pendingCount = [
+    !extractedData.policy_id,
+    !extractedData.insurance_type,
+    !extractedData.event_date,
+    !extractedData.estimated_claim_amount,
+  ].filter(Boolean).length;
+
   return (
     <div className="bg-[#f8fafc] text-[#0f172a] font-body antialiased min-h-screen flex flex-col md:flex-row selection:bg-[#b7eaff] selection:text-[#001f28]">
       <ClaimantSidebar
@@ -627,8 +635,14 @@ export default function ClaimantPage() {
         activeTicketId={ticketId}
         activeRoute="claimant"
         loadingClaims={loadingClaims}
-        onSelectClaim={(id) => loadClaimByTicket(id, token)}
-        onNewClaim={initBlankChat}
+        onSelectClaim={(id) => {
+          setMobileTab("chat");
+          loadClaimByTicket(id, token);
+        }}
+        onNewClaim={() => {
+          setMobileTab("chat");
+          initBlankChat();
+        }}
         onDeleteClaim={handleDeleteClaim}
         onLogout={handleLogout}
       />
@@ -639,15 +653,26 @@ export default function ClaimantPage() {
           agentState={agentState}
           currentIncidentTitle={currentIncidentTitle}
           ticketId={ticketId}
-          onStartNewSession={initBlankChat}
+          onStartNewSession={() => {
+            setMobileTab("chat");
+            initBlankChat();
+          }}
           onExportTranscript={handleExportTranscript}
           loading={loading}
           errorBanner={errorBanner}
           onDismissError={() => setErrorBanner("")}
+          mobileTab={mobileTab}
+          onTabChange={setMobileTab}
+          pendingCount={pendingCount}
         />
 
         <div className="flex flex-1 overflow-hidden flex-col lg:flex-row h-full">
-          <div className="flex-1 flex flex-col h-full relative bg-white overflow-hidden">
+          {/* Chat & Voice Console Area */}
+          <div
+            className={`flex-1 flex-col h-full relative bg-white overflow-hidden ${
+              mobileTab === "chat" ? "flex" : "hidden lg:flex"
+            }`}
+          >
             <ClaimantChatArea
               history={history}
               partialSegments={partialSegments}
@@ -676,16 +701,23 @@ export default function ClaimantPage() {
             />
           </div>
 
-          <CollectedDetailsPanel
-            extractedData={extractedData}
-            linkedPolicies={linkedPolicies}
-            onOpenEdit={handleOpenEdit}
-            onSelectPolicy={() => {}}
-            onSubmitClaim={handleSubmitClaim}
-            submittingClaim={submittingClaim}
-            confirmed={confirmed}
-            ticketId={ticketId}
-          />
+          {/* Collected Details Panel */}
+          <div
+            className={`h-full overflow-hidden ${
+              mobileTab === "details" ? "flex flex-col flex-1" : "hidden lg:flex lg:flex-col"
+            }`}
+          >
+            <CollectedDetailsPanel
+              extractedData={extractedData}
+              linkedPolicies={linkedPolicies}
+              onOpenEdit={handleOpenEdit}
+              onSelectPolicy={() => {}}
+              onSubmitClaim={handleSubmitClaim}
+              submittingClaim={submittingClaim}
+              confirmed={confirmed}
+              ticketId={ticketId}
+            />
+          </div>
         </div>
       </main>
 

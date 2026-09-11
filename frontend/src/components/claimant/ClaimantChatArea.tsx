@@ -105,15 +105,17 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
     <div
       ref={chatContainerRef}
       className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
-          ? "flex flex-col items-center justify-center min-h-full overflow-hidden"
-          : "overflow-y-auto"
+        ? "flex flex-col items-center justify-center min-h-full overflow-y-auto"
+        : "overflow-y-auto"
         }`}
     >
       {/* Empty State / Welcome Screen */}
       {isConversationEmpty && (
-        <div className="max-w-xl mx-auto text-center space-y-5 animate-fade-in -mt-8 md:-mt-12">
+        <div className="max-w-xl mx-auto text-center space-y-4 md:space-y-5 animate-fade-in my-auto py-4">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white mx-auto shadow-md">
-            <span className="material-symbols-outlined text-3xl">auto_awesome</span>
+            <span className="material-symbols-outlined text-3xl leading-none select-none flex items-center justify-center">
+              auto_awesome
+            </span>
           </div>
           <div>
             <h2 className="font-headline text-xl md:text-2xl font-bold text-[#0f172a] tracking-tight">
@@ -137,7 +139,9 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
             <div key={`msg-${idx}`} className="flex gap-3 max-w-[88%] md:max-w-[80%] group animate-fade-in">
               {/* Agent Avatar */}
               <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#00647c] to-[#0891B2] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
-                <span className="material-symbols-outlined text-base">auto_awesome</span>
+                <span className="material-symbols-outlined text-[15px] leading-none select-none flex items-center justify-center">
+                  auto_awesome
+                </span>
               </div>
 
               <div className="flex flex-col gap-1 min-w-0">
@@ -244,7 +248,9 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
               {/* User Avatar */}
               <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center shrink-0 shadow-xs mt-0.5">
-                <span className="material-symbols-outlined text-base">person</span>
+                <span className="material-symbols-outlined text-[16px] leading-none select-none flex items-center justify-center">
+                  person
+                </span>
               </div>
             </div>
           );
@@ -273,7 +279,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
       {agentState === "thinking" && (
         <div className="flex gap-3 max-w-[85%] animate-fade-in">
           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#00647c] to-[#0891B2] text-white flex items-center justify-center shrink-0 shadow-xs">
-            <span className="material-symbols-outlined text-base animate-spin">
+            <span className="material-symbols-outlined text-[16px] leading-none select-none flex items-center justify-center animate-spin">
               progress_activity
             </span>
           </div>

@@ -49,6 +49,47 @@ export const AdminPolicyTable: React.FC<AdminPolicyTableProps> = ({
   onOpenCreatePolicy,
   onOpenEditPolicy,
 }) => {
+  const handleDownloadCSV = () => {
+    if (!filteredPolicies.length) return;
+
+    const headers = [
+      "Policy Number",
+      "Policyholder Name",
+      "Policy Type",
+      "Coverage Amount (INR)",
+      "Deductible (INR)",
+      "Effective Date",
+      "Expiry Date",
+      "Status",
+      "Link Status",
+      "Phone",
+      "Date of Birth",
+    ];
+
+    const rows = filteredPolicies.map((p) => [
+      `"${p.policy_number || ""}"`,
+      `"${(p.policyholder_name || "").replace(/"/g, '""')}"`,
+      `"${p.policy_type || ""}"`,
+      p.coverage_amount ?? "",
+      p.deductible ?? "",
+      `"${p.effective_date || ""}"`,
+      `"${p.expiry_date || ""}"`,
+      `"${p.is_active ? "Active" : "Inactive"}"`,
+      `"${p.is_linked ? "Linked" : "Unlinked"}"`,
+      `"${p.policyholder_phone || ""}"`,
+      `"${p.policyholder_dob || ""}"`,
+    ]);
+
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `filtered_policies_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-[#e0e3e5] flex flex-col shadow-sm overflow-hidden">
       <div className="p-4 md:p-6 border-b border-[#e0e3e5] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -61,11 +102,17 @@ export const AdminPolicyTable: React.FC<AdminPolicyTableProps> = ({
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button
-            onClick={onOpenCreatePolicy}
-            className="bg-[#0891B2] hover:bg-[#007f9d] text-white font-label text-xs font-semibold px-3.5 py-1.5 rounded-full transition-colors flex items-center gap-1 shadow-sm cursor-pointer"
+            onClick={handleDownloadCSV}
+            disabled={filteredPolicies.length === 0}
+            title={
+              filteredPolicies.length === 0
+                ? "No policies match the filter"
+                : `Download ${filteredPolicies.length} filtered policies as CSV`
+            }
+            className="bg-[#00647c] hover:bg-[#004e61] disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-label text-xs font-semibold px-3.5 py-1.5 rounded-full transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
           >
-            <span className="material-symbols-outlined text-sm">add</span>
-            <span>Add Policy</span>
+            <span className="material-symbols-outlined text-sm">download</span>
+            <span>Download CSV</span>
           </button>
           <div className="relative w-full sm:w-56">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#505f76] text-[18px]">

@@ -10,6 +10,9 @@ interface ClaimantTopBarProps {
   loading: boolean;
   errorBanner?: string;
   onDismissError?: () => void;
+  mobileTab?: "chat" | "details";
+  onTabChange?: (tab: "chat" | "details") => void;
+  pendingCount?: number;
 }
 
 export const ClaimantTopBar: React.FC<ClaimantTopBarProps> = ({
@@ -22,6 +25,9 @@ export const ClaimantTopBar: React.FC<ClaimantTopBarProps> = ({
   loading,
   errorBanner,
   onDismissError,
+  mobileTab = "chat",
+  onTabChange,
+  pendingCount = 0,
 }) => {
   const [copiedTicket, setCopiedTicket] = useState(false);
 
@@ -43,9 +49,8 @@ export const ClaimantTopBar: React.FC<ClaimantTopBarProps> = ({
                 Claim Conversation
               </span>
               <span
-                className={`w-2 h-2 rounded-full ${
-                  isRecording ? "bg-cyan-500 animate-ping" : "bg-emerald-500"
-                }`}
+                className={`w-2 h-2 rounded-full ${isRecording ? "bg-cyan-500 animate-ping" : "bg-emerald-500"
+                  }`}
               />
               {agentState !== "idle" && (
                 <span className="text-[11px] text-cyan-600 font-semibold capitalize">
@@ -73,8 +78,41 @@ export const ClaimantTopBar: React.FC<ClaimantTopBarProps> = ({
           </div>
         </div>
 
-        {/* Action Controls */}
+        {/* Action Controls & Responsive Tab Switcher */}
         <div className="flex items-center gap-2">
+          {/* Mobile/Tablet Screen View Switcher (< lg) */}
+          {onTabChange && (
+            <div className="flex lg:hidden items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+              <button
+                type="button"
+                onClick={() => onTabChange("chat")}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${mobileTab === "chat"
+                  ? "bg-white text-[#00647c] shadow-2xs font-bold"
+                  : "text-slate-600 hover:text-slate-900"
+                  }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">forum</span>
+                <span>Chat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onTabChange("details")}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${mobileTab === "details"
+                  ? "bg-white text-[#00647c] shadow-2xs font-bold"
+                  : "text-slate-600 hover:text-slate-900"
+                  }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">fact_check</span>
+                <span>Details</span>
+                {pendingCount > 0 && (
+                  <span className="bg-[#00647c]/10 text-[#00647c] text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
+
           {onExportTranscript && ticketId && (
             <button
               onClick={onExportTranscript}
@@ -85,15 +123,6 @@ export const ClaimantTopBar: React.FC<ClaimantTopBarProps> = ({
               <span className="hidden sm:inline">Export</span>
             </button>
           )}
-
-          <button
-            onClick={onStartNewSession}
-            disabled={loading}
-            className="flex items-center gap-1.5 text-white bg-[#00647c] hover:bg-[#004e61] transition-colors px-3 py-1.5 rounded-lg text-xs font-label font-semibold cursor-pointer shadow-xs active:scale-[0.98]"
-          >
-            <span className="material-symbols-outlined text-base">add</span>
-            <span>New Claim</span>
-          </button>
         </div>
       </div>
 

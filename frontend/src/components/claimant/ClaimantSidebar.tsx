@@ -137,8 +137,8 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
       {/* Brand Header */}
       <div className="p-4 pb-3 border-b border-[#e2e8f0]/80">
         <div className="flex items-center justify-between">
-          <Link href="/claimant" className="flex items-center gap-2.5 group">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white shadow-xs transition-transform group-hover:scale-105">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white shadow-xs">
               <span className="material-symbols-outlined text-[20px]">shield_with_heart</span>
             </div>
             <div>
@@ -149,7 +149,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                 Autonomous Intake
               </p>
             </div>
-          </Link>
+          </div>
           {mobileOpen && (
             <button
               onClick={() => setMobileOpen(false)}
@@ -180,27 +180,24 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         <Link
           href="/claimant"
           onClick={() => { if (mobileOpen) setMobileOpen(false); }}
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
-            currentActiveRoute === "claimant"
-              ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
-              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
-          }`}
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${currentActiveRoute === "claimant"
+            ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
+            : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
+            }`}
         >
           <span
-            className={`material-symbols-outlined text-[18px] ${
-              currentActiveRoute === "claimant" ? "text-[#00647c]" : "text-slate-400"
-            }`}
+            className={`material-symbols-outlined text-[18px] ${currentActiveRoute === "claimant" ? "text-[#00647c]" : "text-slate-400"
+              }`}
           >
             forum
           </span>
           <span className="flex-1">Claim Intake & Chat</span>
           {startedClaims.length > 0 && (
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                currentActiveRoute === "claimant"
-                  ? "bg-[#00647c]/10 text-[#00647c]"
-                  : "bg-slate-200/80 text-slate-600"
-              }`}
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${currentActiveRoute === "claimant"
+                ? "bg-[#00647c]/10 text-[#00647c]"
+                : "bg-slate-200/80 text-slate-600"
+                }`}
             >
               {startedClaims.length}
             </span>
@@ -210,16 +207,14 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         <Link
           href="/link-policy"
           onClick={() => { if (mobileOpen) setMobileOpen(false); }}
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
-            currentActiveRoute === "link-policy"
-              ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
-              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
-          }`}
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${currentActiveRoute === "link-policy"
+            ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
+            : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
+            }`}
         >
           <span
-            className={`material-symbols-outlined text-[18px] ${
-              currentActiveRoute === "link-policy" ? "text-[#00647c]" : "text-slate-400"
-            }`}
+            className={`material-symbols-outlined text-[18px] ${currentActiveRoute === "link-policy" ? "text-[#00647c]" : "text-slate-400"
+              }`}
           >
             link
           </span>
@@ -290,26 +285,23 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                       onSelectClaim(claim.ticket_id);
                       if (mobileOpen) setMobileOpen(false);
                     }}
-                    className={`group relative flex flex-col gap-1 p-2.5 rounded-xl cursor-pointer transition-all duration-150 border ${
-                      isActive
-                        ? "bg-white border-[#00647c]/30 shadow-xs ring-1 ring-[#00647c]/15"
-                        : "bg-transparent border-transparent hover:bg-white/80 hover:border-slate-200/80"
-                    }`}
+                    className={`group relative flex flex-col gap-1 p-2.5 rounded-xl cursor-pointer transition-all duration-150 border ${isActive
+                      ? "bg-white border-[#00647c]/30 shadow-xs ring-1 ring-[#00647c]/15"
+                      : "bg-transparent border-transparent hover:bg-white/80 hover:border-slate-200/80"
+                      }`}
                   >
                     {/* Top Row: Icon + Title + Status */}
                     <div className="flex items-center justify-between gap-1.5">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span
-                          className={`material-symbols-outlined text-sm shrink-0 ${
-                            isActive ? "text-[#00647c]" : "text-slate-400 group-hover:text-slate-600"
-                          }`}
+                          className={`material-symbols-outlined text-sm shrink-0 ${isActive ? "text-[#00647c]" : "text-slate-400 group-hover:text-slate-600"
+                            }`}
                         >
                           {icon}
                         </span>
                         <span
-                          className={`text-xs font-semibold truncate ${
-                            isActive ? "text-[#00647c]" : "text-slate-800"
-                          }`}
+                          className={`text-xs font-semibold truncate ${isActive ? "text-[#00647c]" : "text-slate-800"
+                            }`}
                         >
                           {claim.insurance_type
                             ? `${claim.insurance_type.toUpperCase()} Claim`
@@ -400,23 +392,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
           <span className="material-symbols-outlined text-[#00647c] text-xl">shield_with_heart</span>
           <span>InsureClaimAI</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => {
-              onNewClaim();
-            }}
-            className="flex items-center gap-1 bg-[#00647c] text-white px-2.5 py-1 rounded-lg text-xs font-semibold"
-          >
-            <span className="material-symbols-outlined text-sm">add</span>
-            <span>New</span>
-          </button>
-          <button
-            onClick={onLogout}
-            className="text-slate-500 hover:text-red-600 p-1.5 rounded-md hover:bg-slate-100"
-          >
-            <span className="material-symbols-outlined text-lg">logout</span>
-          </button>
-        </div>
+
       </header>
 
       {/* Mobile Drawer Backdrop */}
@@ -429,9 +405,8 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
 
       {/* Mobile Drawer Container */}
       <div
-        className={`md:hidden fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-in-out ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`md:hidden fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-in-out ${mobileOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
       >
         {sidebarContent}
       </div>
