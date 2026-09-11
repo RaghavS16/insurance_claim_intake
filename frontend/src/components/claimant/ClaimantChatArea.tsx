@@ -113,7 +113,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
       {isConversationEmpty && (
         <div className="max-w-xl mx-auto text-center space-y-5 animate-fade-in -mt-8 md:-mt-12">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#00647c] to-[#0891B2] flex items-center justify-center text-white mx-auto shadow-md">
-            <span className="material-symbols-outlined text-3xl">smart_toy</span>
+            <span className="material-symbols-outlined text-3xl">auto_awesome</span>
           </div>
           <div>
             <h2 className="font-headline text-xl md:text-2xl font-bold text-[#0f172a] tracking-tight">
@@ -137,7 +137,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
             <div key={`msg-${idx}`} className="flex gap-3 max-w-[88%] md:max-w-[80%] group animate-fade-in">
               {/* Agent Avatar */}
               <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#00647c] to-[#0891B2] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
-                <span className="material-symbols-outlined text-base">smart_toy</span>
+                <span className="material-symbols-outlined text-base">auto_awesome</span>
               </div>
 
               <div className="flex flex-col gap-1 min-w-0">
