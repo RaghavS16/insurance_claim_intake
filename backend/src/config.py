@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: str = "no-reply@insurance-claims.local"
+    SMTP_FROM_NAME: str = "InsureClaim AI"
     SMTP_USE_TLS: bool = True
     OTP_LENGTH: int = Field(6, ge=4, le=8)
     OTP_EXPIRY_MINUTES: int = Field(10, ge=1, le=60)

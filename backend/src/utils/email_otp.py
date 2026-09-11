@@ -9,6 +9,7 @@ import secrets
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from typing import Optional
 
 from src.config import settings
@@ -61,12 +62,13 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> 
         return False
 
     from_email = settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL
+    from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
     smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
     smtp_username = (settings.SMTP_USERNAME or "").strip()
 
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = from_email
+    msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
 
     try:

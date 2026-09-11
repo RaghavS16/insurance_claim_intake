@@ -189,3 +189,27 @@ def test_verify_otp_expired(client: TestClient, db: Session):
     })
     assert res.status_code == 400
     assert "Invalid or expired code" in res.json()["detail"]
+
+
+def test_send_otp_email_sender_name_insureclaim_ai(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from src.config import settings
+    from src.utils.email_otp import send_otp_email
+
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "raghavradhakrishnan.d@gmail.com")
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "secret")
+    monkeypatch.setattr(settings, "SMTP_FROM_NAME", "InsureClaim AI")
+
+    mock_smtp_instance = MagicMock()
+    with patch("smtplib.SMTP", return_value=mock_smtp_instance) as mock_smtp_cls:
+        mock_smtp_instance.__enter__.return_value = mock_smtp_instance
+        success = send_otp_email("user@example.com", "123456", "Test User")
+        assert success is True
+
+        # Verify sendmail was called and inspect the MIME message payload
+        args, kwargs = mock_smtp_instance.sendmail.call_args
+        from_addr, to_addrs, raw_msg = args
+        assert "From: InsureClaim AI <raghavradhakrishnan.d@gmail.com>" in raw_msg
+        assert "Subject: Your InsureClaimAI password reset code" in raw_msg
