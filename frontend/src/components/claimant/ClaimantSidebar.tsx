@@ -180,10 +180,10 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         <Link
           href="/claimant"
           onClick={() => { if (mobileOpen) setMobileOpen(false); }}
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 ${
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
             currentActiveRoute === "claimant"
               ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
-              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50"
+              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
           }`}
         >
           <span
@@ -210,10 +210,10 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         <Link
           href="/link-policy"
           onClick={() => { if (mobileOpen) setMobileOpen(false); }}
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 ${
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
             currentActiveRoute === "link-policy"
               ? "bg-white text-[#00647c] font-bold border border-[#00647c]/20 shadow-2xs"
-              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50"
+              : "text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"
           }`}
         >
           <span

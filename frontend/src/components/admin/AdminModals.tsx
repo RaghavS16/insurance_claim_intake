@@ -125,7 +125,7 @@ export const AddPolicyModal: React.FC<AddPolicyModalProps> = ({
             <label className="font-label text-xs text-[#505f76] block mb-1">Phone Number</label>
             <input
               type="text"
-              placeholder="e.g. 5551234567"
+              placeholder="e.g. +91 98765 43210"
               value={newPolicyPhone}
               onChange={(e) => setNewPolicyPhone(e.target.value)}
               className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
@@ -308,6 +308,7 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
             <label className="font-label text-xs text-[#505f76] block mb-1">Phone Number</label>
             <input
               type="text"
+              placeholder="e.g. +91 98765 43210"
               value={editPolicyPhone}
               onChange={(e) => setEditPolicyPhone(e.target.value)}
               className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"
@@ -462,7 +463,7 @@ export const EditAdjusterModal: React.FC<EditAdjusterModalProps> = ({
             <input
               type="tel"
               required
-              placeholder="+1 (555) 234-5678"
+              placeholder="+91 98765 43210"
               value={editPhone}
               onChange={(e) => setEditPhone(e.target.value)}
               className="input-minimal w-full bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"

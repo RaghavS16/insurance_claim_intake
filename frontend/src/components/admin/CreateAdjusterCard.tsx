@@ -120,7 +120,7 @@ export const CreateAdjusterCard: React.FC<CreateAdjusterCardProps> = ({
             id="phoneNumber"
             type="tel"
             required
-            placeholder="+1 (555) 234-5678"
+            placeholder="+91 98765 43210"
             value={newAdjusterPhone}
             onChange={(e) => setNewAdjusterPhone(e.target.value)}
             className="input-minimal bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg px-3.5 py-2 text-xs text-[#191c1e]"

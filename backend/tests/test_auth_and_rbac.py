@@ -23,6 +23,7 @@ def test_auth_and_rbac_flow(client: TestClient):
     signup_data_escalated = {
         "full_name": "Hack Adjuster",
         "email": "hack_adjuster@example.com",
+        "phone": "+919876543210",
         "password": "AdjusterPassword123!",
         "confirm_password": "AdjusterPassword123!",
         "role": "ADJUSTER" # Escalation attempt
@@ -32,6 +33,16 @@ def test_auth_and_rbac_flow(client: TestClient):
     user_data_esc = res.json()
     # It must still be CLAIMANT, not ADJUSTER!
     assert user_data_esc["role"] == "CLAIMANT"
+
+    # 2b. Missing phone is rejected (phone is mandatory)
+    signup_no_phone = {
+        "full_name": "No Phone User",
+        "email": "no_phone@example.com",
+        "password": "Password123!",
+        "confirm_password": "Password123!"
+    }
+    res_no_phone = client.post("/api/v1/auth/signup", json=signup_no_phone)
+    assert res_no_phone.status_code == 422
 
     # 3. Duplicate email is rejected
     res = client.post("/api/v1/auth/signup", json=signup_data)
@@ -104,6 +115,7 @@ def test_auth_and_rbac_flow(client: TestClient):
     signup_b = {
         "full_name": "Claimant B",
         "email": "claimant_b@example.com",
+        "phone": "+919876543211",
         "password": "ClaimantPassword123!",
         "confirm_password": "ClaimantPassword123!"
     }

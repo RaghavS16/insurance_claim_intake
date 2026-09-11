@@ -181,12 +181,12 @@ def _init_db_and_seeds():
 
                 # 2. Seed adjusters roster if empty
                 canonical_adjusters = [
-                    ("motor", "Priya Sharma", "priya.motor@insure.co", "+1 (555) 234-0101"),
-                    ("home", "Rohan Mehta", "rohan.home@insure.co", "+1 (555) 234-0102"),
-                    ("health", "Dr. Anita Roy", "anita.health@insure.co", "+1 (555) 234-0103"),
-                    ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+1 (555) 234-0104"),
-                    ("travel", "Vikram Sen", "vikram.travel@insure.co", "+1 (555) 234-0105"),
-                    ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+1 (555) 234-0106"),
+                    ("motor", "Priya Sharma", "priya.motor@insure.co", "+91 98450 10101"),
+                    ("home", "Rohan Mehta", "rohan.home@insure.co", "+91 98450 10102"),
+                    ("health", "Dr. Anita Roy", "anita.health@insure.co", "+91 98450 10103"),
+                    ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+91 98450 10104"),
+                    ("travel", "Vikram Sen", "vikram.travel@insure.co", "+91 98450 10105"),
+                    ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+91 98450 10106"),
                 ]
                 for spec, name, email, phone in canonical_adjusters:
                     existing_adj = db.query(Adjuster).filter(Adjuster.email == email).first()
@@ -204,9 +204,9 @@ def _init_db_and_seeds():
 
                 # 3. Seed canonical users (Admin, Adjusters, Claimant)
                 canonical_users = [
-                    ("System Admin", "admin@insure.co", "+1 (555) 000-0001", "AdminPassword123!", "ADMIN"),
-                    ("Test Admin", "admin@test.com", "+1 (555) 000-0002", "AdminPassword123!", "ADMIN"),
-                    ("John Doe", "john@test.com", "1234", "ClaimantPassword123!", "CLAIMANT"),
+                    ("System Admin", "admin@insure.co", "+91 98000 00001", "AdminPassword123!", "ADMIN"),
+                    ("Test Admin", "admin@test.com", "+91 98000 00002", "AdminPassword123!", "ADMIN"),
+                    ("John Doe", "john@test.com", "9876541234", "ClaimantPassword123!", "CLAIMANT"),
                 ]
                 # Add adjusters to canonical users
                 for spec, name, email, phone in canonical_adjusters:

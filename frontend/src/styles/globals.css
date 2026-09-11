@@ -75,5 +75,13 @@ body { background-color: #f7f9fb; color: #191c1e; font-family: 'Plus Jakarta San
 @keyframes move-wave { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
 .input-minimal { transition: all 0.2s ease; } .input-minimal:focus { outline: none; border-color: #0891B2; box-shadow: 0 0 0 1px #0891B2; }
 
+/* Global Focus Outline Reset to eliminate browser black outline */
+button, a, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus, button:focus-visible, a:focus, a:focus-visible {
+  outline: none !important;
+}
+
 /* Legacy policy chips are intentionally disabled; policy_id is collected conversationally. */
 .flex.flex-wrap.gap-2.pt-1.animate-fade-in { display: none !important; }

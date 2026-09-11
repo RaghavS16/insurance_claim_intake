@@ -88,12 +88,12 @@ def _seed_db(db):
             ))
 
     test_adjusters = [
-        ("motor",         "Priya Sharma",   "priya@insure.co", "+1-555-0101"),
-        ("home",          "Rohan Mehta",    "rohan@insure.co", "+1-555-0102"),
-        ("health",        "Dr. Anita Roy",  "anita@insure.co", "+1-555-0103"),
-        ("senior_health", "Dr. V. Rao",     "rao@insure.co",   "+1-555-0104"),
-        ("travel",        "Vikram Sen",     "vikram@insure.co", "+1-555-0105"),
-        ("cyber",         "Neha Kapoor",    "neha@insure.co",  "+1-555-0106"),
+        ("motor",         "Priya Sharma",   "priya@insure.co", "+91 98450 10101"),
+        ("home",          "Rohan Mehta",    "rohan@insure.co", "+91 98450 10102"),
+        ("health",        "Dr. Anita Roy",  "anita@insure.co", "+91 98450 10103"),
+        ("senior_health", "Dr. V. Rao",     "rao@insure.co",   "+91 98450 10104"),
+        ("travel",        "Vikram Sen",     "vikram@insure.co", "+91 98450 10105"),
+        ("cyber",         "Neha Kapoor",    "neha@insure.co",  "+91 98450 10106"),
     ]
 
     for spec, name, email, phone in test_adjusters:

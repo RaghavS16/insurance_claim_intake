@@ -90,7 +90,7 @@ export const CsvDropzone: React.FC<CsvDropzoneProps> = ({
 
         <div className="mt-4 pt-4 border-t border-[#e6e8ea] w-full flex justify-end">
           <a
-            href="data:text/csv;charset=utf-8,policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,policyholder_name,policyholder_dob,policyholder_phone%0APOL-8492-AX,motor,250000,1000,2023-01-01,2026-12-31,Sarah Jenkins,1990-05-15,5550192834%0APOL-3321-HM,home,400000,2000,2023-03-01,2027-03-01,Michael Chang,1985-08-20,5558471029"
+            href="data:text/csv;charset=utf-8,policy_number,policy_type,coverage_amount,deductible,effective_date,expiry_date,policyholder_name,policyholder_dob,policyholder_phone%0APOL-8492-AX,motor,250000,1000,2023-01-01,2026-12-31,Sarah Jenkins,1990-05-15,9876543210%0APOL-3321-HM,home,400000,2000,2023-03-01,2027-03-01,Michael Chang,1985-08-20,9812345678"
             download="policy_template.csv"
             className="text-[#0891B2] hover:underline font-label text-xs flex items-center gap-1 z-20"
           >

@@ -541,6 +541,9 @@ export default function AdminPage() {
         setActiveTab={setActiveTab}
         currentUser={currentUser}
         onLogout={handleLogout}
+        policiesCount={policies.length}
+        adjustersCount={adjusters.length}
+        onAddPolicy={() => setShowAddPolicyModal(true)}
       />
 
       {/* Main Content Area */}

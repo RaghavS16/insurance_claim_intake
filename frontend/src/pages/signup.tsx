@@ -19,8 +19,8 @@ export default function SignupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim() || !email.trim() || !password.trim() || !confirmPassword.trim()) {
-      setError("Please fill in all required fields.");
+    if (!fullName.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
+      setError("Please fill in all required fields (Full Name, Email, Phone Number, Password, and Confirm Password).");
       return;
     }
     if (password !== confirmPassword) {
@@ -46,7 +46,7 @@ export default function SignupPage() {
         body: JSON.stringify({
           full_name: fullName.trim(),
           email: email.trim(),
-          phone: phone.trim() || null,
+          phone: phone.trim(),
           password,
           confirm_password: confirmPassword,
         }),
@@ -141,13 +141,14 @@ export default function SignupPage() {
             {/* Phone Number */}
             <div className="flex flex-col">
               <label className="font-label text-xs font-medium text-[#505f76] mb-1" htmlFor="phone">
-                Phone Number (Optional)
+                Phone Number *
               </label>
               <input
                 id="phone"
                 name="phone"
                 type="tel"
-                placeholder="+91 9876543210"
+                required
+                placeholder="+91 98765 43210"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 className="input-minimal bg-[#f7f9fb] border border-[#bdc8ce] rounded-lg px-3.5 py-2.5 font-body text-sm text-[#191c1e] placeholder:text-[#6e797e]"

@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 class SignUpRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., min_length=3, max_length=254)
-    phone: Optional[str] = Field(None, max_length=20)
+    phone: str = Field(..., min_length=5, max_length=20, description="Mandatory phone number")
     password: str = Field(..., min_length=8, max_length=128)
     confirm_password: str = Field(..., min_length=8, max_length=128)
 
@@ -68,6 +68,8 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         clean_email = validate_email(payload.email)
         validate_password_strength(payload.password)
         clean_phone = validate_phone(payload.phone)
+        if not clean_phone:
+            raise ValueError("Phone number is required.")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
