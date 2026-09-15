@@ -392,6 +392,8 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         raise HTTPException(status_code=400, detail="Please confirm the claim details in the conversation before submitting.")
     missing = state.get("missing_fields") or []
     dynamic_missing = state.get("dynamic_missing") or []
+    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"}:
+        raise HTTPException(status_code=503, detail="Claim-specific policy requirements are temporarily unavailable. Please retry before submitting.")
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
     missing_evidence_items = missing_evidence(state)
