@@ -114,6 +114,17 @@ def assign_claim(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_
     c.pipeline_state=state; c.status="pending_adjuster"; db.commit()
     return {"success":True,"already_assigned":False,"claim":_item(c,a)}
 
+@router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
+def evidence_url(ticket_id:str,evidence_id:str,user:User=Depends(require_role(["ADJUSTER","ADMIN"])),db:Session=Depends(get_db)):
+    claim=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
+    if not claim: raise HTTPException(status_code=404,detail="Claim not found.")
+    if not _can_access_claim(claim,user): raise HTTPException(status_code=403,detail="This claim is not assigned to you.")
+    state=dict(claim.pipeline_state or {})
+    item=next((e for e in state.get("evidence",[]) if str(e.get("id"))==evidence_id),None)
+    if not item or not item.get("s3_key"): raise HTTPException(status_code=404,detail="Evidence object not found.")
+    from src.storage.s3 import presigned_get
+    return {"url":presigned_get(item["s3_key"]),"expires_in":900}
+
 @router.get("/claims/{ticket_id}/copilot")
 def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
