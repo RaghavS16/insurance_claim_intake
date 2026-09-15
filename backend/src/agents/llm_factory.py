@@ -59,14 +59,14 @@ def get_configured_llm() -> BaseChatModel:
     if provider in ("cloud", "openai", "openrouter", "dashscope", "together"):
         kwargs = dict(
             model=settings.CLOUD_LLM_MODEL,
-            api_key=settings.CLOUD_LLM_API_KEY || "not-needed",
+            api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
             base_url=settings.CLOUD_LLM_BASE_URL,
             temperature=0,
             max_tokens=700,
             max_retries=1,
             timeout=timeout,
         )
-        if "openrouter.ai" in (settings.CLOUD_LLM_BASE_URL || ""):
+        if "openrouter.ai" in (settings.CLOUD_LLM_BASE_URL or ""):
             kwargs["extra_body"] = {
                 "models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
                 or _DEFAULT_CLOUD_FALLBACK_MODELS
