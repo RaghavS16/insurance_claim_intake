@@ -100,7 +100,12 @@ def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
     claims=q.order_by(Claim.updated_at.desc()).all()
     if user.role=="ADJUSTER":
         adjuster=db.query(Adjuster).filter(Adjuster.email==user.email).first()
-        claims=[c for c in claims if adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(adjuster.id)]
+        assigned_ids=set()
+        if adjuster:
+            assigned_ids={str(x.claim_id) for x in db.query(ClaimAssignment).filter(
+                ClaimAssignment.adjuster_id==adjuster.id, ClaimAssignment.is_active.is_(True)
+            ).all()}
+        claims=[c for c in claims if str(c.id) in assigned_ids or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(adjuster.id))]
     return {"items":[_item(c) for c in claims],"total":len(claims)}
 
 @router.get("/claims/{ticket_id}")
