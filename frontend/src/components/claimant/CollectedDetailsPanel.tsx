@@ -4,8 +4,8 @@ import { ExtractedData } from "./ExtractionPanel";
 
 interface CollectedDetailsPanelProps {
   extractedData: ExtractedData;
-  linkedPolicies?: any[];
-  onOpenEdit: (field: string, currentVal: any) => void;
+  linkedPolicies?: unknown[];
+  onOpenEdit: (field: string, currentVal: unknown) => void;
   onSelectPolicy?: (policyNumber: string) => void;
   onSubmitClaim: () => void;
   submittingClaim: boolean;
@@ -41,7 +41,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
           <div className="flex items-center gap-2 pl-1"><span className="material-symbols-outlined text-[#64748b] text-[20px]">verified_user</span><span className="font-body text-sm text-[#0f172a] font-semibold font-mono">{extractedData.policy_id || <span className="text-[#94a3b8] font-normal italic">Not specified yet</span>}</span></div>
         </div>
 
-        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs"><div className="flex justify-between items-start"><span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">Insurance Type</span><button onClick={() => onOpenEdit("insurance_type", extractedData.insurance_type)} className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"><span className="material-symbols-outlined text-[16px]">edit</span></button></div><div className="flex items-center gap-2"><span className="material-symbols-outlined text-[#00647c] text-[20px]">category</span><span className="font-body text-sm text-[#0f172a] font-semibold capitalize">{extractedData.insurance_type ? ((SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] || extractedData.insurance_type) : <span className="text-[#94a3b8] font-normal italic">Pending classification...</span>}</span></div></div>
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs"><div className="flex justify-between items-start"><span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">Insurance Type</span><button onClick={() => onOpenEdit("insurance_type", extractedData.insurance_type)} className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"><span className="material-symbols-outlined text-[16px]">edit</span></button></div><div className="flex items-center gap-2"><span className="material-symbols-outlined text-[#00647c] text-[20px]">category</span><span className="font-body text-sm text-[#0f172a] font-semibold capitalize">{extractedData.insurance_type ? ((SUPPORTED_INSURANCE_TYPES as Record<string, string>)[extractedData.insurance_type] || extractedData.insurance_type) : <span className="text-[#94a3b8] font-normal italic">Pending classification...</span>}</span></div></div>
 
         <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-2 shadow-xs"><div className="flex justify-between items-start"><span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">Incident Date</span><button onClick={() => onOpenEdit("event_date", extractedData.event_date)} className="text-[#00647c] hover:text-[#004e61] p-0.5 rounded cursor-pointer"><span className="material-symbols-outlined text-[16px]">edit</span></button></div><div className="flex items-center gap-2"><span className="material-symbols-outlined text-[#64748b] text-[20px]">calendar_today</span><span className="font-body text-sm text-[#0f172a] font-semibold">{extractedData.event_date || <span className="text-[#94a3b8] font-normal italic">Waiting for date...</span>}</span></div></div>
 

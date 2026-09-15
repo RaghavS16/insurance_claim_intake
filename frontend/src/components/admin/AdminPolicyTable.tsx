@@ -46,7 +46,6 @@ export const AdminPolicyTable: React.FC<AdminPolicyTableProps> = ({
   policySortOrder,
   setPolicySortOrder,
   loadingPolicies,
-  onOpenCreatePolicy,
   onOpenEditPolicy,
 }) => {
   const handleDownloadCSV = () => {
