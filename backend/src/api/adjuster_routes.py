@@ -83,7 +83,7 @@ def claim_file(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     return {"claim":_item(c),"extracted_data":state.get("extracted_data",{}),
             "conversation":[{"speaker":"Claimant" if t.speaker in {"user","claimant"} else "Agent","text":t.text,"turn":t.turn_number} for t in turns],
-            "requirements":state.get("dynamic_requirements",[]),"missing_requirements":state.get("dynamic_missing",[]),
+            "requirements":state.get("dynamic_requirements",[]),"missing_requirements":state.get("dynamic_missing",[]),"missing_evidence":state.get("missing_evidence",[]),
             "evidence":state.get("evidence",[]),"policy_verification":state.get("policy_verification",{}),
             "knowledge_sources":state.get("knowledge_sources",[]),"copilot":state.get("copilot",{})}
 
