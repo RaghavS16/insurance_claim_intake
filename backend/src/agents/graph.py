@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from src.agents import nodes
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
+from src.agents.dynamic_requirements import build_dynamic_context, unresolved_requirements
 
 
 _RESPONSE_SYSTEM_PROMPT = """You are the conversation planner for a voice-first insurance claim assistant.
@@ -130,6 +131,19 @@ def _model_response(state: ClaimState) -> str:
     return _natural_fallback(missing, data)
 
 
+def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
+    """Add claim-type requirements after baseline type is known; never creates fixed questions."""
+    if state.get("_skip_all"):
+        return state
+    data = state.get("extracted_data", {})
+    if data.get("insurance_type"):
+        ctx = build_dynamic_context(state)
+        state["dynamic_requirements"] = ctx.get("requirements", [])
+        state["knowledge_sources"] = ctx.get("sources", [])
+        state["unresolved_requirements"] = unresolved_requirements(state)
+    return state
+
+
 def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
@@ -156,6 +170,7 @@ def _build_conversation_graph():
     graph.add_node("conversation_turn_processor", conversation_turn_processor)
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
+    graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
     graph.add_node("next_question_generator", _response_planner)
     graph.set_entry_point("conversation_turn_processor")
     graph.add_conditional_edges(
@@ -164,7 +179,8 @@ def _build_conversation_graph():
         {"continue": "claim_extractor", "done": END},
     )
     graph.add_edge("claim_extractor", "mandatory_field_checker")
-    graph.add_edge("mandatory_field_checker", "next_question_generator")
+    graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
+    graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
     graph.add_edge("next_question_generator", END)
     return graph.compile()
 
