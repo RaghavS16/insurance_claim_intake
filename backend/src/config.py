@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
     CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
     CLOUD_LLM_API_KEY: Optional[str] = None
+    EMBEDDING_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
+    EMBEDDING_MODEL: str = "qwen/qwen3-embedding-0.6b"
+    EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
+
+    AWS_REGION: str = "ap-south-1"
+    S3_BUCKET: Optional[str] = None
+    S3_KNOWLEDGE_PREFIX: str = "knowledge"
+    S3_EVIDENCE_PREFIX: str = "claims"
+    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 
     STT_MODEL_SIZE: str = "small"
