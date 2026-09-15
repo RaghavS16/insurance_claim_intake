@@ -186,7 +186,10 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
         incident_date=c.event_date,
         query=c.event_description or "",
     )
-    if not state.get("copilot"):
+    if not context.get("available"):
+        return {"ticket_id":ticket_id,"analysis":None,"status":"grounding_unavailable","error":"Authoritative claim knowledge is unavailable; Copilot will not generate an ungrounded recommendation.","sources":[]}
+    state=dict(c.pipeline_state or {})
+    if True:
         prompt=(
             "Act as an insurance adjuster copilot. Give advisory analysis only; never make the final legal or coverage decision. "
             "Use only claim facts and retrieved evidence. State uncertainty when evidence is insufficient. "
@@ -209,7 +212,7 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
 
 # Production workflow endpoints: decisions, notes, audit and normalized assignments.
 from pydantic import BaseModel, Field
-from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent
+from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis
 from src.database.claim_workflow import transition_claim
 
 class DecisionRequest(BaseModel):
