@@ -30,6 +30,9 @@ class ClaimState(TypedDict, total=False):
     unknown_fields: List[str]
     current_field_hint: Optional[str]
     clarification_request: Optional[str]
+    dynamic_requirements: List[Dict[str, Any]]
+    dynamic_missing: List[Dict[str, Any]]
+    knowledge_context: Dict[str, Any]
 
     _skip_all: bool
     _skip_extraction: bool
