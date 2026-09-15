@@ -326,7 +326,7 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
 
 def _confirmation_summary(data: Dict[str, Any]) -> str:
     label = SUPPORTED_INSURANCE_TYPES.get(data.get("insurance_type"), str(data.get("insurance_type"))) if data.get("insurance_type") else ""; date_text = str(data.get("event_date") or ""); location = str(data.get("event_location") or ""); amount = data.get("estimated_claim_amount"); policy = data.get("policy_id"); description = str(data.get("event_description") or "").strip().rstrip(".")
-    lead = f"I have your {label.lower() if label else 'claim'}"; details = []
+    lead = f"I have your {label.lower() if label else 'claim'} claim"; details = []
     if description: lead += f" for {description}"
     if date_text: details.append(f"on {date_text}")
     if location: details.append(f"in {location}")
