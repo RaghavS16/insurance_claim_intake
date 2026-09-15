@@ -17,7 +17,7 @@ class IngestRequest(BaseModel):
     effective_to:str|None=None
 
 @router.post("/documents")
-def add_document(payload:IngestRequest,user:User=Depends(require_role(["ADMIN","ADJUSTER"]))):
+def add_document(payload:IngestRequest,user:User=Depends(require_role(["ADJUSTER"]))):
     try:
         return ingest_document(content=payload.text.encode("utf-8"),filename=payload.source_name,document_type=payload.document_type,insurance_type=payload.insurance_type,policy_number=payload.policy_number,effective_from=payload.effective_from,effective_to=payload.effective_to,uploaded_by=str(user.id))
     except Exception as exc:
