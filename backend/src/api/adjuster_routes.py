@@ -157,3 +157,91 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
         except Exception:
             return {"ticket_id":ticket_id,"analysis":None,"status":"unavailable","error":"AI provider is temporarily unavailable. Retry Copilot shortly.","sources":[*context.get("policy",[]),*context.get("regulations",[])]}
     return {"ticket_id":ticket_id,"analysis":state.get("copilot"),"status":"ready" if state.get("copilot") else "unavailable","sources":state.get("knowledge_sources",[])}
+
+
+# Production workflow endpoints: decisions, notes, audit and normalized assignments.
+from pydantic import BaseModel, Field
+from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent
+from src.database.claim_workflow import transition_claim
+
+class DecisionRequest(BaseModel):
+    decision: str = Field(..., pattern="^(approve|partial_approve|reject|request_evidence|escalate)$")
+    rationale: str = Field(..., min_length=10, max_length=10000)
+    approved_amount: float | None = Field(None, ge=0)
+
+class NoteRequest(BaseModel):
+    note: str = Field(..., min_length=1, max_length=10000)
+    visibility: str = Field("internal", pattern="^(internal|claimant)$")
+
+@router.get("/claims/{ticket_id}/assignment")
+def get_normalized_assignment(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    _ensure_assigned_adjuster(claim, current_user, db)
+    a = db.execute(select(ClaimAssignment).where(
+        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
+    )).scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="No active assignment exists.")
+    return {"id": a.id, "claim_id": a.claim_id, "adjuster_id": a.adjuster_id,
+            "assigned_at": a.assigned_at.isoformat(), "reason": a.reason}
+
+@router.post("/claims/{ticket_id}/decision")
+def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    adjuster = _ensure_assigned_adjuster(claim, current_user, db)
+    decision_map = {
+        "approve": "approved", "partial_approve": "partially_approved",
+        "reject": "rejected", "request_evidence": "pending_evidence", "escalate": "escalated",
+    }
+    target = decision_map[payload.decision]
+    try:
+        transition_claim(db, claim, target, str(current_user.id), payload.rationale)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    row = ClaimDecision(
+        claim_id=str(claim.id), adjuster_id=str(adjuster.id), decision=payload.decision,
+        rationale=payload.rationale, approved_amount=payload.approved_amount,
+        ai_recommendation_json=(claim.pipeline_state or {}).get("copilot") or {},
+    )
+    db.add(row)
+    db.add(ClaimAuditEvent(
+        claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="decision_recorded",
+        new_value_json={"decision": payload.decision, "approved_amount": payload.approved_amount},
+        reason=payload.rationale,
+    ))
+    db.commit()
+    return {"decision_id": row.id, "claim_id": claim.ticket_id, "decision": payload.decision,
+            "status": claim.status, "rationale": payload.rationale}
+
+@router.post("/claims/{ticket_id}/notes")
+def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    _ensure_assigned_adjuster(claim, current_user, db)
+    note = ClaimNote(claim_id=str(claim.id), author_user_id=str(current_user.id),
+                     note=payload.note, visibility=payload.visibility)
+    db.add(note)
+    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id),
+                           event_type="note_added", new_value_json={"note_id": note.id}))
+    db.commit()
+    return {"id": note.id, "created_at": note.created_at.isoformat(), "visibility": note.visibility}
+
+@router.get("/claims/{ticket_id}/audit")
+def get_claim_audit(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    _ensure_assigned_adjuster(claim, current_user, db)
+    rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id).order_by(ClaimAuditEvent.created_at.asc()).all()
+    return [{"id": r.id, "event_type": r.event_type, "actor_user_id": r.actor_user_id,
+             "old_value": r.old_value_json, "new_value": r.new_value_json,
+             "reason": r.reason, "created_at": r.created_at.isoformat()} for r in rows]
