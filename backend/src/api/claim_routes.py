@@ -386,7 +386,8 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     dynamic_missing = state.get("dynamic_missing") or []
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
-    if missing_evidence: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
+    missing_evidence_items = missing_evidence(state)
+    if missing_evidence_items: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
@@ -420,56 +421,33 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
 
 @router.post("/{ticket_id}/evidence")
-async def upload_claim_evidence(
-    ticket_id: str,
-    request: Request,
-    file: UploadFile = File(...),
-    evidence_key: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    """Store claimant evidence against the active claim and expose only metadata to the client."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found.")
-    enforce_claim_ownership(claim, current_user)
-    if claim.status not in ("draft", "pending_confirmation"):
-        raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="A file is required.")
-    allowed = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}
+async def upload_claim_evidence(ticket_id:str,request:Request,file:UploadFile=File(...),evidence_key:Optional[str]=None,db:Session=Depends(get_db)):
+    """Upload claimant evidence to S3 and persist claim-safe metadata."""
+    current_user=_resolve_user(request,db)
+    claim=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
+    if not claim: raise HTTPException(status_code=404,detail="Claim not found.")
+    enforce_claim_ownership(claim,current_user)
+    if claim.status not in ("draft","pending_confirmation"): raise HTTPException(status_code=400,detail="Evidence can only be uploaded while intake is in progress.")
+    if not file.filename: raise HTTPException(status_code=400,detail="A file is required.")
+    allowed={".pdf",".jpg",".jpeg",".png",".webp",".doc",".docx",".txt"}
     from pathlib import Path
-    import uuid as _uuid
-    ext = Path(file.filename).suffix.lower()
-    if ext not in allowed:
-        raise HTTPException(status_code=400, detail="Unsupported evidence format.")
-    content = await file.read()
-    if len(content) > settings.MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="Evidence file is too large.")
-    root = Path(settings.UPLOAD_DIR) / "claims" / ticket_id / "evidence"
-    root.mkdir(parents=True, exist_ok=True)
-    stored = root / f"{_uuid.uuid4().hex}{ext}"
-    stored.write_bytes(content)
-    state = dict(claim.pipeline_state or {})
-    evidence = list(state.get("evidence") or [])
-    if not evidence_key:
-        outstanding = missing_evidence(state)
-        evidence_key = outstanding[0].get("key") if outstanding else None
-    item = {
-        "id": stored.stem,
-        "name": file.filename,
-        "stored_name": stored.name,
-        "evidence_key": evidence_key,
-        "content_type": file.content_type or "application/octet-stream",
-        "size": len(content),
-        "status": "uploaded",
-        "review": "pending",
-    }
-    evidence.append(item)
-    state["evidence"] = evidence
-    claim.pipeline_state = state
-    db.commit()
-    return {"success": True, "evidence": item, "evidence_items": evidence}
+    ext=Path(file.filename).suffix.lower()
+    if ext not in allowed: raise HTTPException(status_code=400,detail="Unsupported evidence format.")
+    content=await file.read()
+    if len(content)>settings.MAX_UPLOAD_SIZE_BYTES: raise HTTPException(status_code=413,detail="Evidence file is too large.")
+    state=dict(claim.pipeline_state or {})
+    evidence=list(state.get("evidence") or [])
+    outstanding=missing_evidence(state)
+    if not evidence_key and outstanding: evidence_key=outstanding[0].get("key")
+    from src.storage.s3 import put_bytes
+    try:
+        s3=put_bytes(content,prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/evidence",filename=file.filename,content_type=file.content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=502,detail=f"Evidence storage is unavailable: {exc}")
+    item={"id":str(uuid.uuid4()),"name":file.filename,"s3_uri":s3["uri"],"s3_key":s3["key"],"evidence_key":evidence_key,"content_type":file.content_type or "application/octet-stream","size":len(content),"status":"uploaded","review":"pending"}
+    evidence.append(item); state["evidence"]=evidence; state["missing_evidence"]=missing_evidence(state)
+    claim.pipeline_state=state; db.commit()
+    return {"success":True,"evidence":item,"evidence_items":evidence,"missing_evidence":state["missing_evidence"]}
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
