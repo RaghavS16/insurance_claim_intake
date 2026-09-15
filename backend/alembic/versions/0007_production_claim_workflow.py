@@ -10,6 +10,7 @@ def upgrade():
         sa.Column("reason",sa.Text()),sa.Column("is_active",sa.Boolean(),nullable=False,server_default=sa.true()),sa.Column("assigned_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()),sa.Column("unassigned_at",sa.DateTime(timezone=True)))
     op.create_index("ix_claim_assignments_claim_active","claim_assignments",["claim_id","is_active"])
     op.create_index("ix_claim_assignments_adjuster_active","claim_assignments",["adjuster_id","is_active"])
+    op.create_index("uq_claim_assignments_one_active","claim_assignments",["claim_id"],unique=True,postgresql_where=sa.text("is_active = true"))
     op.create_table("claim_requirements",
         sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("requirement_key",sa.String(150),nullable=False),sa.Column("label",sa.String(500),nullable=False),sa.Column("question_hint",sa.Text()),
