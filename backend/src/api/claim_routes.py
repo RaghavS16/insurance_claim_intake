@@ -7,7 +7,7 @@ resumed after navigation, browser refresh, or a disconnected voice socket.
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -410,6 +410,57 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
             "assigned_adjuster": {"id": str(assigned.id), "name": assigned.name, "specialization": assigned.specialization},
             "message": f"Claim #{ticket_id} has been verified, confirmed, and assigned to {assigned.name}."}
 
+
+
+
+@router.post("/{ticket_id}/evidence")
+async def upload_claim_evidence(
+    ticket_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    evidence_key: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Store claimant evidence against the active claim and expose only metadata to the client."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation"):
+        raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+    allowed = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}
+    from pathlib import Path
+    import uuid as _uuid
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported evidence format.")
+    content = await file.read()
+    if len(content) > settings.MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+    root = Path(settings.UPLOAD_DIR) / "claims" / ticket_id / "evidence"
+    root.mkdir(parents=True, exist_ok=True)
+    stored = root / f"{_uuid.uuid4().hex}{ext}"
+    stored.write_bytes(content)
+    state = dict(claim.pipeline_state or {})
+    evidence = list(state.get("evidence") or [])
+    item = {
+        "id": stored.stem,
+        "name": file.filename,
+        "stored_name": stored.name,
+        "evidence_key": evidence_key,
+        "content_type": file.content_type or "application/octet-stream",
+        "size": len(content),
+        "status": "uploaded",
+        "review": "pending",
+    }
+    evidence.append(item)
+    state["evidence"] = evidence
+    claim.pipeline_state = state
+    db.commit()
+    return {"success": True, "evidence": item, "evidence_items": evidence}
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
