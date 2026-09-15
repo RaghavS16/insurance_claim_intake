@@ -12,7 +12,7 @@ export interface ExtractedData {
 
 interface ExtractionPanelProps {
   extractedData: ExtractedData;
-  onEditField?: (fieldKey: string, currentValue: unknown) => void;
+  onEditField?: (fieldKey: string, currentValue: any) => void;
   confidence?: number;
 }
 
@@ -27,7 +27,7 @@ export const ExtractionPanel: React.FC<ExtractionPanelProps> = ({
       label: "Insurance Type",
       icon: "category",
       value: extractedData.insurance_type
-        ? (SUPPORTED_INSURANCE_TYPES as Record<string, string>)[extractedData.insurance_type] || extractedData.insurance_type
+        ? (SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] || extractedData.insurance_type
         : null,
     },
     {

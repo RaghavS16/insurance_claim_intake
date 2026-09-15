@@ -44,24 +44,17 @@ interface SessionPayload {
   resumed?: boolean;
 }
 
-export interface LinkedPolicyItem {
-  policy_number: string;
-  policy_type: string;
-  coverage_amount?: number;
-  [key: string]: unknown;
-}
-
 export default function ClaimantPage() {
   const router = useRouter();
-  const [token] = useState<string>(() => (typeof window !== "undefined" ? getAuthToken() || "" : ""));
+  const [token, setToken] = useState("");
   const [userName, setUserName] = useState("");
   const [ticketId, setTicketId] = useState("");
-  const [, setConversationStatus] = useState("not_started");
+  const [conversationStatus, setConversationStatus] = useState("not_started");
   const [agentState, setAgentState] = useState("idle");
   const [extractedData, setExtractedData] = useState<ExtractedData>({});
   const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [claimsList, setClaimsList] = useState<ClaimSummary[]>([]);
-  const [linkedPolicies, setLinkedPolicies] = useState<LinkedPolicyItem[]>([]);
+  const [linkedPolicies, setLinkedPolicies] = useState<any[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [textMode, setTextMode] = useState(false);
@@ -71,6 +64,7 @@ export default function ClaimantPage() {
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
+  const [missingEvidence, setMissingEvidence] = useState<any[]>([]);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -89,10 +83,7 @@ export default function ClaimantPage() {
   const isPlayingRef = useRef(false);
   const isRecordingRef = useRef(false);
   const hasInitializedRef = useRef(false);
-
-  useEffect(() => {
-    isRecordingRef.current = isRecording;
-  }, [isRecording]);
+  isRecordingRef.current = isRecording;
 
   const scrollToBottom = useCallback((force = false) => {
     const container = chatContainerRef.current;
@@ -116,9 +107,7 @@ export default function ClaimantPage() {
 
   const getPlaybackContext = useCallback(() => {
     if (!playbackContextRef.current || playbackContextRef.current.state === "closed") {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       playbackContextRef.current = new AudioCtx();
     }
     if (playbackContextRef.current.state === "suspended") {
@@ -195,19 +184,7 @@ export default function ClaimantPage() {
       else if (event.data instanceof ArrayBuffer) enqueueAudio(new Blob([event.data], { type: "audio/wav" }));
       return;
     }
-    let msg: {
-      type: string;
-      state?: string;
-      speaker?: string;
-      segment_id?: string;
-      text?: string;
-      is_final?: boolean;
-      sequence?: number;
-      global_seq?: number;
-      timestamp?: number;
-      extracted_data?: ExtractedData;
-      confirmed?: boolean;
-    };
+    let msg: Record<string, any>;
     try {
       msg = JSON.parse(event.data);
     } catch {
@@ -225,14 +202,14 @@ export default function ClaimantPage() {
       return;
     }
     if (msg.type === "agent_state") {
-      setAgentState(msg.state || "idle");
+      setAgentState(msg.state);
       return;
     }
     if (msg.type === "transcript") {
-      const speaker = msg.speaker || "agent",
-        segmentId = msg.segment_id || "",
-        text = msg.text || "",
-        isFinal = Boolean(msg.is_final);
+      const speaker = msg.speaker as string,
+        segmentId = msg.segment_id as string,
+        text = msg.text as string,
+        isFinal = msg.is_final as boolean;
       if (!text) return;
       if (!isFinal) {
         setPartialSegments((prev) => {
@@ -270,6 +247,7 @@ export default function ClaimantPage() {
     }
     if (msg.type === "state_update") {
       setExtractedData(msg.extracted_data || {});
+      setConversationStatus(msg.conversation_status || "collecting");
       setConfirmed(Boolean(msg.confirmed));
       return;
     }
@@ -381,8 +359,8 @@ export default function ClaimantPage() {
       const data = await res.json();
       applySession(data, authToken);
       router.replace({ pathname: "/claimant", query: { ticket: selectedTicketId } }, undefined, { shallow: true });
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Failed to load claim.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Failed to load claim.");
     } finally {
       setLoading(false);
     }
@@ -423,8 +401,8 @@ export default function ClaimantPage() {
       }
       fetchClaimsList(token);
       if (targetTicketId === ticketId) initBlankChat();
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Could not delete claim.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not delete claim.");
     }
   }, [fetchClaimsList, initBlankChat, ticketId, token]);
 
@@ -446,8 +424,8 @@ export default function ClaimantPage() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Failed to download export.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Failed to download export.");
     }
   }, [ticketId, token]);
 
@@ -458,6 +436,7 @@ export default function ClaimantPage() {
       router.push("/login");
       return;
     }
+    setToken(savedToken);
     hasInitializedRef.current = true;
     fetch(`${API_BASE}/api/v1/auth/me`, {
       headers: { Authorization: `Bearer ${savedToken}` },
@@ -507,10 +486,7 @@ export default function ClaimantPage() {
         },
       });
       streamRef.current = stream;
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const audioCtx = new AudioCtx({ sampleRate: 16000 });
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = audioCtx;
       await audioCtx.audioWorklet.addModule("/audio-processor.js");
       const source = audioCtx.createMediaStreamSource(stream);
@@ -530,8 +506,8 @@ export default function ClaimantPage() {
       worklet.connect(audioCtx.destination);
       setIsRecording(true);
       setAgentState("listening");
-    } catch (err: unknown) {
-      setErrorBanner(`Microphone access error: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } catch (err: any) {
+      setErrorBanner(`Microphone access error: ${err.message}`);
     }
   };
 
@@ -565,10 +541,11 @@ export default function ClaimantPage() {
         ]);
       }
       setExtractedData(data.extracted_data || {});
+      setConversationStatus(data.conversation_status || "collecting");
       setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
       fetchClaimsList(token);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Unable to process message.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Unable to process message.");
     } finally {
       setAgentState("idle");
     }
@@ -597,8 +574,8 @@ export default function ClaimantPage() {
         text: `I received “${file.name}”. I'll include it with your claim evidence.`,
         timestamp: Date.now(),
       }]);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Could not upload evidence.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not upload evidence.");
     } finally {
       setEvidenceUploading(false);
     }
@@ -624,21 +601,21 @@ export default function ClaimantPage() {
       );
       setConfirmed(true);
       fetchClaimsList(token);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "An error occurred while submitting your claim.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "An error occurred while submitting your claim.");
     } finally {
       setSubmittingClaim(false);
     }
   };
 
-  const handleOpenEdit = (field: string, currentVal: unknown) => {
+  const handleOpenEdit = (field: string, currentVal: any) => {
     setEditingField(field);
     setEditValue(currentVal != null ? String(currentVal) : "");
   };
 
   const handleSaveEdit = async () => {
     if (!editingField || !ticketId || !token) return;
-    let parsedVal: string | number | null = editValue.trim();
+    let parsedVal: any = editValue.trim();
     if (editingField === "estimated_claim_amount") {
       parsedVal = parseFloat(editValue.replace(/[^0-9.]/g, "")) || null;
     }
@@ -656,8 +633,8 @@ export default function ClaimantPage() {
       setExtractedData(data.extracted_data || { ...extractedData, [editingField]: parsedVal });
       setEditingField(null);
       fetchClaimsList(token);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Could not save correction.");
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not save correction.");
     }
   };
 
@@ -672,7 +649,7 @@ export default function ClaimantPage() {
   };
 
   const currentIncidentTitle = extractedData.insurance_type
-    ? `${(SUPPORTED_INSURANCE_TYPES as Record<string, string>)[extractedData.insurance_type] || extractedData.insurance_type} Claim`
+    ? `${(SUPPORTED_INSURANCE_TYPES as any)[extractedData.insurance_type] || extractedData.insurance_type} Claim`
     : "New Claim Intake";
 
   const pendingCount = [
@@ -680,6 +657,7 @@ export default function ClaimantPage() {
     !extractedData.insurance_type,
     !extractedData.event_date,
     !extractedData.estimated_claim_amount,
+    ...missingEvidence.map(() => true),
   ].filter(Boolean).length;
 
   return (

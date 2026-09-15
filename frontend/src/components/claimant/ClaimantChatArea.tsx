@@ -41,9 +41,12 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   history,
   partialSegments,
   agentState,
+  confirmed,
+  submittedMessage,
   chatContainerRef,
   linkedPolicies = [],
   onSelectPromptSuggestion,
+  onExportTranscript,
   onScrollChange,
 }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);

@@ -37,8 +37,8 @@ export default function ForgotPasswordPage() {
       setTimeout(() => {
         router.push(`/verify-reset-password?email=${encodeURIComponent(email.trim())}`);
       }, 1200);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred.");
     } finally {
       setLoading(false);
     }

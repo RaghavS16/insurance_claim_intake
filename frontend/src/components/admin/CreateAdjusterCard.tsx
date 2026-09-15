@@ -1,16 +1,6 @@
 import React from "react";
 import { SPECIALIZATION_OPTIONS } from "@/lib/constants";
 
-export interface CreatedAdjusterData {
-  email?: string;
-  phone?: string;
-  temporary_password?: string;
-  adjuster?: {
-    email?: string;
-    phone?: string;
-  };
-}
-
 interface CreateAdjusterCardProps {
   newAdjusterName: string;
   setNewAdjusterName: (v: string) => void;
@@ -22,7 +12,7 @@ interface CreateAdjusterCardProps {
   setNewAdjusterSpec: (v: string) => void;
   creatingAdjuster: boolean;
   adjusterError: string;
-  createdAdjusterData: CreatedAdjusterData | null;
+  createdAdjusterData: any;
   copiedPass: boolean;
   setCopiedPass: (v: boolean) => void;
   onSubmit: (e: React.FormEvent) => void;
@@ -76,7 +66,7 @@ export const CreateAdjusterCard: React.FC<CreateAdjusterCardProps> = ({
             <span>Temp Pass: {createdAdjusterData.temporary_password}</span>
             <button
               onClick={() => {
-                navigator.clipboard.writeText(createdAdjusterData.temporary_password || "");
+                navigator.clipboard.writeText(createdAdjusterData.temporary_password);
                 setCopiedPass(true);
                 setTimeout(() => setCopiedPass(false), 2000);
               }}

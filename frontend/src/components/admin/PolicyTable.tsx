@@ -66,7 +66,7 @@ export const PolicyTable: React.FC<PolicyTableProps> = ({
         </thead>
         <tbody className="divide-y divide-surface-container-highest">
           {policies.map((p) => {
-            const typeLabel = (SUPPORTED_INSURANCE_TYPES as Record<string, string>)[p.policy_type] || p.policy_type;
+            const typeLabel = (SUPPORTED_INSURANCE_TYPES as any)[p.policy_type] || p.policy_type;
             return (
               <tr key={p.id} className="hover:bg-surface-container-low/50 transition-colors">
                 <td className="p-4 font-mono font-bold text-on-surface">{p.policy_number}</td>

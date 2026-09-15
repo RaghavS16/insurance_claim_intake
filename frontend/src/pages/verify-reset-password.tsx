@@ -8,9 +8,7 @@ export default function VerifyResetPasswordPage() {
   const router = useRouter();
   const { email: queryEmail } = router.query;
 
-  const emailParam = typeof queryEmail === "string" ? queryEmail : "";
-  const [email, setEmail] = useState(emailParam);
-  const [prevEmailParam, setPrevEmailParam] = useState(emailParam);
+  const [email, setEmail] = useState("");
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -25,10 +23,11 @@ export default function VerifyResetPasswordPage() {
 
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  if (emailParam && emailParam !== prevEmailParam) {
-    setPrevEmailParam(emailParam);
-    setEmail(emailParam);
-  }
+  useEffect(() => {
+    if (router.isReady && router.query.email && typeof router.query.email === "string") {
+      setEmail(router.query.email);
+    }
+  }, [router.isReady, router.query.email]);
 
   useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -114,8 +113,8 @@ export default function VerifyResetPasswordPage() {
       }
       setSuccessMsg("A new verification code has been sent to your email (and logged in terminal).");
       setResendCooldown(60); // 60 seconds cooldown
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to resend verification code.");
+    } catch (err: any) {
+      setError(err.message || "Failed to resend verification code.");
     } finally {
       setResending(false);
     }
@@ -195,8 +194,8 @@ export default function VerifyResetPasswordPage() {
       setTimeout(() => {
         router.push("/login");
       }, 1800);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred.");
     } finally {
       setLoading(false);
     }
