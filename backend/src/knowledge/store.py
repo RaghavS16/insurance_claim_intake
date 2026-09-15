@@ -1,6 +1,7 @@
 """Lightweight persistent document store used as the repository's RAG adapter."""
 from __future__ import annotations
 import json,re,uuid
+from datetime import date
 from pathlib import Path
 from src.config import settings
 
@@ -18,7 +19,7 @@ def ingest(text:str,source_name:str,document_type:str,insurance_type:str|None=No
 def _tokens(s:str)->set[str]:
     return {x for x in re.findall(r"[a-z0-9]+",s.lower()) if len(x)>2}
 
-def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,document_types:list[str]|None=None,limit:int=6)->list[dict]:
+def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,document_types:list[str]|None=None,incident_date:date|None=None,limit:int=6)->list[dict]:
     q=_tokens(query); hits=[]
     for p in ROOT.glob("*.json"):
         try: rows=json.loads(p.read_text(encoding="utf-8")).get("chunks",[])
@@ -27,6 +28,11 @@ def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,do
             if insurance_type and row.get("insurance_type") not in (None,insurance_type): continue
             if policy_number and row.get("policy_number") not in (None,policy_number): continue
             if document_types and row.get("document_type") not in document_types: continue
+            if incident_date:
+                try:
+                    if row.get("effective_from") and incident_date < date.fromisoformat(row["effective_from"]): continue
+                    if row.get("effective_to") and incident_date > date.fromisoformat(row["effective_to"]): continue
+                except ValueError: continue
             score=len(q & _tokens(row.get("text","")))
             if score: hits.append((score,row))
     hits.sort(key=lambda x:x[0],reverse=True)
