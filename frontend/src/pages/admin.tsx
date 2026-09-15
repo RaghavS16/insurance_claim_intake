@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/router";
-import { AdminSidebar } from "@/components/admin/AdminSidebar";
+import { AdminSidebar, AdminUser } from "@/components/admin/AdminSidebar";
 import { AdminTopBar } from "@/components/admin/AdminTopBar";
-import { CsvDropzone } from "@/components/admin/CsvDropzone";
+import { CsvDropzone, CsvImportResult } from "@/components/admin/CsvDropzone";
 import { AdminPolicyTable, PolicyItem } from "@/components/admin/AdminPolicyTable";
-import { CreateAdjusterCard } from "@/components/admin/CreateAdjusterCard";
+import { CreateAdjusterCard, CreatedAdjusterData } from "@/components/admin/CreateAdjusterCard";
 import { AdjustersRosterTable, AdjusterItem } from "@/components/admin/AdjustersRosterTable";
 import {
   AddPolicyModal,
@@ -22,7 +22,7 @@ export default function AdminPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [activeTab, setActiveTab] = useState<"policies" | "adjusters">("policies");
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Policies State
@@ -34,7 +34,7 @@ export default function AdminPage() {
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [importingCsv, setImportingCsv] = useState(false);
-  const [importResult, setImportResult] = useState<any>(null);
+  const [importResult, setImportResult] = useState<CsvImportResult | null>(null);
   const [importError, setImportError] = useState("");
 
   // Policy Create Modal State
@@ -76,7 +76,7 @@ export default function AdminPage() {
   const [newAdjusterPhone, setNewAdjusterPhone] = useState("");
   const [newAdjusterSpec, setNewAdjusterSpec] = useState("motor");
   const [creatingAdjuster, setCreatingAdjuster] = useState(false);
-  const [createdAdjusterData, setCreatedAdjusterData] = useState<any>(null);
+  const [createdAdjusterData, setCreatedAdjusterData] = useState<CreatedAdjusterData | null>(null);
   const [adjusterError, setAdjusterError] = useState("");
   const [copiedPass, setCopiedPass] = useState(false);
 
@@ -96,39 +96,6 @@ export default function AdminPage() {
 
   const [deletingAdjuster, setDeletingAdjuster] = useState<AdjusterItem | null>(null);
   const [deletingLoading, setDeletingLoading] = useState(false);
-
-  // Authenticate Admin
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    const verifyAdmin = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) throw new Error("Unauthorized");
-        const data = await res.json();
-        if (data.role !== "ADMIN") {
-          router.push(data.role === "ADJUSTER" ? "/adjuster" : "/claimant");
-          return;
-        }
-        setCurrentUser(data);
-        fetchPolicies(token);
-        fetchAdjusters(token);
-      } catch {
-        clearAuthToken();
-        router.push("/login");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    verifyAdmin();
-  }, [router]);
 
   const fetchPolicies = async (token: string) => {
     setLoadingPolicies(true);
@@ -163,6 +130,39 @@ export default function AdminPage() {
       setLoadingAdjusters(false);
     }
   };
+
+  // Authenticate Admin
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+
+    const verifyAdmin = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error("Unauthorized");
+        const data = await res.json();
+        if (data.role !== "ADMIN") {
+          router.push(data.role === "ADJUSTER" ? "/adjuster" : "/claimant");
+          return;
+        }
+        setCurrentUser(data);
+        fetchPolicies(token);
+        fetchAdjusters(token);
+      } catch {
+        clearAuthToken();
+        router.push("/login");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    verifyAdmin();
+  }, [router]);
 
   const handleLogout = async () => {
     const token = getAuthToken();
@@ -213,8 +213,8 @@ export default function AdminPage() {
       setCsvFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       fetchPolicies(token);
-    } catch (err: any) {
-      setImportError(err.message || "An error occurred during CSV ingestion");
+    } catch (err: unknown) {
+      setImportError(err instanceof Error ? err.message : "An error occurred during CSV ingestion");
     } finally {
       setImportingCsv(false);
     }
@@ -246,7 +246,7 @@ export default function AdminPage() {
     setCreatePolicyError("");
 
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         policy_number: newPolicyNum.trim().toUpperCase(),
         policy_type: newPolicyType,
         coverage_amount: parseFloat(newPolicyCov),
@@ -273,8 +273,8 @@ export default function AdminPage() {
       }
       setShowAddPolicyModal(false);
       fetchPolicies(token);
-    } catch (err: any) {
-      setCreatePolicyError(err.message || "Error creating policy");
+    } catch (err: unknown) {
+      setCreatePolicyError(err instanceof Error ? err.message : "Error creating policy");
     } finally {
       setCreatingPolicy(false);
     }
@@ -304,7 +304,7 @@ export default function AdminPage() {
     setEditPolicyError("");
 
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         policy_type: editPolicyType,
         coverage_amount: parseFloat(editPolicyCov),
         deductible: parseFloat(editPolicyDed),
@@ -329,8 +329,8 @@ export default function AdminPage() {
       }
       setEditingPolicy(null);
       fetchPolicies(token);
-    } catch (err: any) {
-      setEditPolicyError(err.message || "Error saving policy updates");
+    } catch (err: unknown) {
+      setEditPolicyError(err instanceof Error ? err.message : "Error saving policy updates");
     } finally {
       setSavingPolicy(false);
     }
@@ -375,8 +375,8 @@ export default function AdminPage() {
       setNewAdjusterEmail("");
       setNewAdjusterPhone("");
       fetchAdjusters(token);
-    } catch (err: any) {
-      setAdjusterError(err.message || "Error provisioning adjuster");
+    } catch (err: unknown) {
+      setAdjusterError(err instanceof Error ? err.message : "Error provisioning adjuster");
     } finally {
       setCreatingAdjuster(false);
     }
@@ -422,8 +422,8 @@ export default function AdminPage() {
       }
       setEditingAdjuster(null);
       fetchAdjusters(token);
-    } catch (err: any) {
-      setEditError(err.message || "Error saving adjuster");
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : "Error saving adjuster");
     } finally {
       setSavingEdit(false);
     }
@@ -449,8 +449,8 @@ export default function AdminPage() {
         tempPass: data.temporary_password,
       });
       setCopiedResetPass(false);
-    } catch (err: any) {
-      alert(`Password reset failed: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Password reset failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setResettingPasswordId(null);
     }
@@ -474,8 +474,8 @@ export default function AdminPage() {
       }
       setDeletingAdjuster(null);
       fetchAdjusters(token);
-    } catch (err: any) {
-      alert(`Deletion failed: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Deletion failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setDeletingLoading(false);
     }

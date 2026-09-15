@@ -18,6 +18,15 @@ interface LinkedPolicy {
   linked_at?: string;
 }
 
+export interface LinkPolicySuccessData {
+  policy_number?: string;
+  policyholder_name?: string;
+  already_linked?: boolean;
+  message?: string;
+  policy?: LinkedPolicy;
+  [key: string]: unknown;
+}
+
 export default function LinkPolicyPage() {
   const router = useRouter();
   const { policy } = router.query;
@@ -25,13 +34,20 @@ export default function LinkPolicyPage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; full_name: string; email: string; role: string } | null>(null);
   const [claimsList, setClaimsList] = useState<ClaimSummary[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
-  const [policyNumber, setPolicyNumber] = useState("");
+  const queryPolicy = typeof policy === "string" ? policy.toUpperCase() : "";
+  const [policyNumber, setPolicyNumber] = useState(queryPolicy);
+  const [prevQueryPolicy, setPrevQueryPolicy] = useState(queryPolicy);
   const [policyholderName, setPolicyholderName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [phoneLast4, setPhoneLast4] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [successData, setSuccessData] = useState<any>(null);
+  const [successData, setSuccessData] = useState<LinkPolicySuccessData | null>(null);
+
+  if (queryPolicy && queryPolicy !== prevQueryPolicy) {
+    setPrevQueryPolicy(queryPolicy);
+    setPolicyNumber(queryPolicy);
+  }
 
   const [myPolicies, setMyPolicies] = useState<LinkedPolicy[]>([]);
   const [loadingPolicies, setLoadingPolicies] = useState(true);
@@ -73,14 +89,7 @@ export default function LinkPolicyPage() {
       setLoadingPolicies(false);
     }
   };
-
-  // Initialize from query param if available
-  useEffect(() => {
-    if (policy && typeof policy === "string") {
-      setPolicyNumber(policy.toUpperCase());
-    }
-  }, [policy]);
-
+ 
   // Authenticate user & load policies and claims
   useEffect(() => {
     const token = getAuthToken();
