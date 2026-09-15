@@ -90,7 +90,7 @@ def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
 
 @router.get("/queue")
 def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
-    q=db.query(Claim).filter(Claim.status.in_(["submitted","under_review","pending_evidence","pending_adjuster"]))
+    q=db.query(Claim).filter(Claim.status.in_(["submitted","assigned","under_review","pending_evidence"]))
     claims=q.order_by(Claim.updated_at.desc()).all()
     _auto_assign_pending(claims, db)
     if user.role=="ADJUSTER":
@@ -102,7 +102,7 @@ def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
 def claim_file(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
-    if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     return {"claim":_item(c),"extracted_data":state.get("extracted_data",{}),
@@ -127,16 +127,19 @@ def update_claim(ticket_id:str,payload:ClaimUpdate,user:User=Depends(_guard),db:
 def assign_claim(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
-    state=dict(c.pipeline_state or {})
-    if state.get("assigned_adjuster_id"): return {"success":True,"already_assigned":True,"claim":_item(c)}
-    spec=(c.insurance_type or "").lower()
-    candidates=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).all()
-    if not candidates: candidates=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).all()
-    if not candidates: raise HTTPException(status_code=409,detail="No active adjuster is available.")
-    a=candidates[0]; a.claims_assigned=(a.claims_assigned or 0)+1
-    state["assigned_adjuster_id"]=str(a.id); state["assigned_adjuster_name"]=a.name
-    c.pipeline_state=state; c.status="pending_adjuster"; db.commit()
-    return {"success":True,"already_assigned":False,"claim":_item(c,a)}
+    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.is_active.is_(True)).first()
+    if active:
+        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id).first()
+        return {"success":True,"already_assigned":True,"claim":_item(c,aa)}
+    from src.database.claim_workflow import assign_claim as assign_claim_tx
+    try:
+        aa=assign_claim_tx(db,c,str(user.id))
+        if c.status=="submitted": transition_claim(db,c,"assigned",str(user.id),"manual assignment")
+        state=dict(c.pipeline_state or {}); state["assigned_adjuster_id"]=str(aa.id); state["assigned_adjuster_name"]=aa.name; c.pipeline_state=state
+        db.commit()
+    except ValueError as exc:
+        db.rollback(); raise HTTPException(status_code=409,detail=str(exc))
+    return {"success":True,"already_assigned":False,"claim":_item(c,aa)}
 
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
 def evidence_url(ticket_id:str,evidence_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
