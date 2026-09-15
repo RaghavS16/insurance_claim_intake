@@ -70,3 +70,6 @@ frontend/coverage/
 # ===== Misc =====
 *.tmp
 .cache/
+
+graphify-out/
+.agents/

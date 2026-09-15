@@ -1,10 +1,17 @@
 import React, { useState } from "react";
 import Link from "next/link";
 
+export interface AdminUser {
+  name?: string;
+  email?: string;
+  role?: string;
+  [key: string]: unknown;
+}
+
 export interface AdminSidebarProps {
   activeTab: "policies" | "adjusters";
   setActiveTab: (tab: "policies" | "adjusters") => void;
-  currentUser: any;
+  currentUser: AdminUser | null;
   onLogout: () => void;
   policiesCount?: number;
   adjustersCount?: number;

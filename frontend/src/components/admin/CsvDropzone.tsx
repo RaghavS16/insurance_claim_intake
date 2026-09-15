@@ -1,10 +1,16 @@
 import React, { RefObject } from "react";
 
+export interface CsvImportResult {
+  total_processed?: number;
+  imported?: number;
+  [key: string]: unknown;
+}
+
 interface CsvDropzoneProps {
   fileInputRef: RefObject<HTMLInputElement | null>;
   csvFile: File | null;
   importingCsv: boolean;
-  importResult: any;
+  importResult: CsvImportResult | null;
   importError: string;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onUploadCsv: () => void;

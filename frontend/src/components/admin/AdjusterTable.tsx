@@ -58,7 +58,7 @@ export const AdjusterTable: React.FC<AdjusterTableProps> = ({
         </thead>
         <tbody className="divide-y divide-surface-container-highest">
           {adjusters.map((a) => {
-            const specLabel = (SUPPORTED_INSURANCE_TYPES as any)[a.specialization] || a.specialization;
+            const specLabel = (SUPPORTED_INSURANCE_TYPES as Record<string, string>)[a.specialization] || a.specialization;
             return (
               <tr key={a.id} className="hover:bg-surface-container-low/50 transition-colors">
                 <td className="p-4 font-bold text-on-surface">{a.name}</td>

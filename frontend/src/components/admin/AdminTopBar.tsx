@@ -1,8 +1,14 @@
 import React from "react";
 
+export interface AdminTopBarUser {
+  email?: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
 interface AdminTopBarProps {
   activeTab: "policies" | "adjusters";
-  currentUser: any;
+  currentUser: AdminTopBarUser | null;
 }
 
 export const AdminTopBar: React.FC<AdminTopBarProps> = ({ activeTab, currentUser }) => {
