@@ -189,33 +189,32 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     )
     if not context.get("available"):
         return {"ticket_id":ticket_id,"analysis":None,"status":"grounding_unavailable","error":"Authoritative claim knowledge is unavailable; Copilot will not generate an ungrounded recommendation.","sources":[]}
-    state=dict(c.pipeline_state or {})
-    prompt=(
-            "Act as an insurance adjuster copilot. Give advisory analysis only; never make the final legal or coverage decision. "
-            "Use only claim facts and retrieved evidence. State uncertainty when evidence is insufficient. "
-            f"Claim facts: {data}\nIncident: {c.event_description}\n"
-            f"Retrieved policy evidence: {context.get('policy', [])}\n"
-            f"Retrieved regulatory evidence: {context.get('regulations', [])}"
-        )
-        try:
-            result=get_configured_llm().invoke(prompt)
-            text=getattr(result,"content",str(result)).strip()
-            if text:
-                state["copilot"]={"summary":text,"coverage_observations":[],"evidence_gaps":[]}
-                state["knowledge_sources"]=[*context.get("policy",[]),*context.get("regulations",[])]
-                c.pipeline_state=state
-                db.add(CopilotAnalysis(
-                    claim_id=str(c.id), claim_version=1,
-                    knowledge_version="retrieval-current",
-                    model=settings.CLOUD_LLM_MODEL,
-                    prompt_version="v1",
-                    result_json=state["copilot"],
-                    citations_json=state["knowledge_sources"],
-                ))
-                db.commit()
-        except Exception:
-            return {"ticket_id":ticket_id,"analysis":None,"status":"unavailable","error":"AI provider is temporarily unavailable. Retry Copilot shortly.","sources":[*context.get("policy",[]),*context.get("regulations",[])]}
-    return {"ticket_id":ticket_id,"analysis":state.get("copilot"),"status":"ready" if state.get("copilot") else "unavailable","sources":state.get("knowledge_sources",[])}
+    prompt = (
+        "Act as an insurance adjuster copilot. Give advisory analysis only; never make the final legal or coverage decision. "
+        "Use only claim facts and retrieved evidence. State uncertainty when evidence is insufficient. "
+        f"Claim facts: {data}\nIncident: {c.event_description}\n"
+        f"Retrieved policy evidence: {context.get('policy', [])}\n"
+        f"Retrieved regulatory evidence: {context.get('regulations', [])}"
+    )
+    try:
+        result = get_configured_llm().invoke(prompt)
+        text = getattr(result, "content", str(result)).strip()
+        if text:
+            state["copilot"] = {"summary": text, "coverage_observations": [], "evidence_gaps": []}
+            state["knowledge_sources"] = [*context.get("policy", []), *context.get("regulations", [])]
+            c.pipeline_state = state
+            db.add(CopilotAnalysis(
+                claim_id=str(c.id), claim_version=1,
+                knowledge_version="retrieval-current",
+                model=settings.CLOUD_LLM_MODEL,
+                prompt_version="v1",
+                result_json=state["copilot"],
+                citations_json=state["knowledge_sources"],
+            ))
+            db.commit()
+    except Exception:
+        return {"ticket_id": ticket_id, "analysis": None, "status": "unavailable", "error": "AI provider is temporarily unavailable. Retry Copilot shortly.", "sources": [*context.get("policy", []), *context.get("regulations", [])]}
+    return {"ticket_id": ticket_id, "analysis": state.get("copilot"), "status": "ready" if state.get("copilot") else "unavailable", "sources": state.get("knowledge_sources", [])}
 
 
 # Production workflow endpoints: decisions, notes, audit and normalized assignments.
