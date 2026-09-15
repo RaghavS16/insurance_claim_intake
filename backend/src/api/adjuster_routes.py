@@ -118,6 +118,7 @@ def assign_claim(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_
 def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
+    if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     data=state.get("extracted_data") or {}
     context=KnowledgeRetriever().retrieve(
