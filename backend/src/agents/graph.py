@@ -156,7 +156,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     state["dynamic_requirements"] = context.get("requirements", [])
     state["knowledge_context"] = context
     extract_answers(state)
-    if state.get("dynamic_missing"):
+    if state.get("dynamic_missing") or state.get("missing_evidence"):
         state["awaiting_confirmation"] = False
         state["confirmed"] = False
         state["conversation_status"] = "collecting_dynamic"
@@ -179,6 +179,8 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question_field"] = missing[0]
     elif dynamic_missing:
         state["next_question_field"] = dynamic_missing[0].get("key")
+    elif missing_evidence:
+        state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
     else:
         state["next_question_field"] = "confirmation"
     state["next_question"] = _model_response(state)
