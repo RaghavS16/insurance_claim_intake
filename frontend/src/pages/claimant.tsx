@@ -63,6 +63,7 @@ export default function ClaimantPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
+  const [evidenceUploading, setEvidenceUploading] = useState(false);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -546,6 +547,36 @@ export default function ClaimantPage() {
       setErrorBanner(err.message || "Unable to process message.");
     } finally {
       setAgentState("idle");
+    }
+  };
+
+  const handleUploadEvidence = async (file: File) => {
+    if (!ticketId || !token) {
+      setErrorBanner("Start your claim conversation before uploading evidence.");
+      return;
+    }
+    setEvidenceUploading(true);
+    setErrorBanner("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/evidence`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not upload evidence.");
+      setHistory((prev) => [...prev, {
+        turn: prev.length + 1,
+        speaker: "agent",
+        text: `I received “${file.name}”. I'll include it with your claim evidence.`,
+        timestamp: Date.now(),
+      }]);
+    } catch (err: any) {
+      setErrorBanner(err.message || "Could not upload evidence.");
+    } finally {
+      setEvidenceUploading(false);
     }
   };
 
