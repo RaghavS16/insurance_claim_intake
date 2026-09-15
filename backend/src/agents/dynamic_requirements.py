@@ -12,7 +12,7 @@ def build_dynamic_context(state: dict[str, Any]) -> dict[str, Any]:
     data = state.get("extracted_data") or {}
     insurance_type = str(data.get("insurance_type") or "")
     if not insurance_type:
-        return {"requirements": [], "policy": [], "regulations": []}
+        return {"available": True, "status": "NO_INSURANCE_TYPE", "requirements": [], "policy": [], "regulations": []}
     incident_date = None
     try:
         from datetime import date
@@ -63,7 +63,7 @@ def extract_answers(state: dict[str, Any]) -> None:
         for key, value in values.items():
             if key in allowed and value not in (None, "", "UNKNOWN"):
                 state.setdefault("extracted_data", {})[key] = value
-    except Exception:
-        pass
+    except Exception as exc:
+        state["dynamic_extraction_error"] = type(exc).__name__
     state["dynamic_missing"] = unresolved(state)
     state["missing_evidence"] = missing_evidence(state)
