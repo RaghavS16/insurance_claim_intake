@@ -43,8 +43,10 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
                 if expires_at > now:
                     return True
-    except Exception:
-        pass
+    except Exception as exc:
+        # Authentication must fail closed if revocation state cannot be checked.
+        logger.exception("Token revocation check failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable.") from exc
     return False
 
 
