@@ -19,6 +19,7 @@ from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
+from src.database.models import Adjuster
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -377,14 +378,37 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     if not state.get("confirmed"):
         raise HTTPException(status_code=400, detail="Please confirm the claim details in the conversation before submitting.")
     missing = state.get("missing_fields") or []
+    dynamic_missing = state.get("dynamic_missing") or []
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
+    if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
         raise HTTPException(status_code=400, detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}")
-    claim.status = "submitted"; claim.conversation_status = "confirmed"; state["policy_verification"] = verification; claim.pipeline_state = state
+    # Auto-assignment happens only after claimant confirmation, complete dynamic intake,
+    # and authoritative policy verification.
+    candidates = (
+        db.query(Adjuster)
+        .filter(Adjuster.is_active == True, Adjuster.specialization == (claim.insurance_type or ""))
+        .order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc())
+        .all()
+    )
+    if not candidates:
+        candidates = db.query(Adjuster).filter(Adjuster.is_active == True).order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc()).all()
+    if not candidates:
+        raise HTTPException(status_code=409, detail="Claim verified, but no active adjuster is available for assignment.")
+    assigned = candidates[0]
+    assigned.claims_assigned = (assigned.claims_assigned or 0) + 1
+    state["policy_verification"] = verification
+    state["assigned_adjuster_id"] = str(assigned.id)
+    state["assigned_adjuster_name"] = assigned.name
+    claim.status = "pending_adjuster"
+    claim.conversation_status = "confirmed"
+    claim.pipeline_state = state
     db.commit()
-    return {**_claim_payload(claim), "policy_verification": verification, "message": f"Claim #{ticket_id} has been verified, confirmed, and submitted."}
+    return {**_claim_payload(claim), "policy_verification": verification,
+            "assigned_adjuster": {"id": str(assigned.id), "name": assigned.name, "specialization": assigned.specialization},
+            "message": f"Claim #{ticket_id} has been verified, confirmed, and assigned to {assigned.name}."}
 
 
 @router.patch("/{ticket_id}")

@@ -1,84 +1,37 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Link from "next/link";
 import { getAuthToken, clearAuthToken } from "../lib/auth";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const title = (v?: string) => (v || "Unknown").replaceAll("_", " ").replace(/\\b\\w/g, c => c.toUpperCase());
+const money = (v?: number) => v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
 
-export default function AdjusterPage() {
-  const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<any>(null);
+type Claim = { ticket_id:string; status:string; insurance_type?:string; event_date?:string; event_location?:string; estimated_claim_amount?:number; priority?:string; assigned_adjuster_id?:string; assigned_adjuster_name?:string; claimant_confirmed?:boolean; policy_verified?:boolean; dynamic_requirements_complete?:boolean };
+type FileData = { claim:Claim; extracted_data:Record<string,any>; conversation:{speaker:string;text:string;turn:number}[]; requirements:any[]; missing_requirements:any[]; evidence:any[]; policy_verification:Record<string,any>; knowledge_sources:any[]; copilot:Record<string,any> };
 
-  useEffect(() => {
-    const savedToken = getAuthToken();
-    if (!savedToken) {
-      router.push("/login");
-      return;
-    }
-
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${savedToken}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Unauthorized");
-        return res.json();
-      })
-      .then((data) => {
-        if (data.role !== "ADJUSTER" && data.role !== "ADMIN") {
-          router.push("/claimant");
-          return;
-        }
-        setCurrentUser(data);
-      })
-      .catch(() => {
-        clearAuthToken();
-        router.push("/login");
-      });
-  }, [router]);
-
-  const handleLogout = () => {
-    clearAuthToken();
-    router.push("/login");
-  };
-
-  return (
-    <div className="min-h-screen bg-canvas font-body text-on-surface flex flex-col antialiased selection:bg-primary-fixed selection:text-on-primary-fixed">
-      {/* Top App Bar */}
-      <header className="bg-canvas border-b border-surface-container-highest px-6 py-4 flex justify-between items-center sticky top-0 z-30">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary text-2xl">waves</span>
-          <h1 className="font-headline text-lg font-bold text-on-surface">InsureClaimAI Adjuster Portal</h1>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-secondary font-label">{currentUser?.name || currentUser?.email}</span>
-          <button
-            onClick={handleLogout}
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface border border-outline-variant hover:bg-surface-container text-secondary hover:text-error transition-colors flex items-center gap-1"
-          >
-            <span className="material-symbols-outlined text-sm">logout</span>
-            <span>Sign Out</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 max-w-4xl mx-auto w-full p-8 flex flex-col items-center justify-center text-center">
-        <div className="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center text-voice-active mb-4 shadow-sm">
-          <span className="material-symbols-outlined text-3xl">assignment_turned_in</span>
-        </div>
-        <h2 className="font-headline text-2xl font-bold text-on-surface mb-2">Adjuster Review Queue</h2>
-        <p className="font-body text-sm text-secondary max-w-md mb-6 leading-relaxed">
-          Welcome to the Adjuster Portal. Claims filed by claimants via the Kinetic Voice intake agent will be automatically queued and assigned here.
-        </p>
-        <div className="flex gap-3">
-          <Link
-            href="/claimant"
-            className="bg-voice-active hover:bg-primary-container text-white font-label text-xs font-semibold px-5 py-2.5 rounded-lg transition-colors shadow-sm"
-          >
-            Go to Claimant Intake
-          </Link>
-        </div>
-      </main>
-    </div>
-  );
+export default function AdjusterPage(){
+ const router=useRouter(); const [user,setUser]=useState<any>(); const [claims,setClaims]=useState<Claim[]>([]); const [selected,setSelected]=useState<string>(); const [file,setFile]=useState<FileData>(); const [view,setView]=useState("queue"); const [error,setError]=useState(""); const [loading,setLoading]=useState(true);
+ const headers=()=>{const t=getAuthToken(); return t?{Authorization:"Bearer "+t}:{};};
+ const api=async(path:string,opts:RequestInit={})=>{const r=await fetch(API+path,{...opts,headers:{...headers(),...(opts.headers||{})}}); if(r.status===401){clearAuthToken();router.push("/login");throw new Error("Authentication expired.");} if(!r.ok){const b=await r.json().catch(()=>({}));throw new Error(b.detail||"Request failed.");} return r.json();};
+ const loadQueue=async()=>{const d=await api("/api/v1/adjuster/queue");setClaims(d.items||[]);};
+ const openClaim=async(id:string)=>{setSelected(id);setView("file");setFile(await api("/api/v1/adjuster/claims/"+id));};
+ useEffect(()=>{const t=getAuthToken();if(!t){router.replace("/login");return;} api("/api/v1/auth/me").then((u)=>{if(u.role!=="ADJUSTER"&&u.role!=="ADMIN"){router.replace("/claimant");return;}setUser(u);return loadQueue();}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[router]);
+ const update=async(status:string)=>{if(!selected)return;await api("/api/v1/adjuster/claims/"+selected,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})});await loadQueue();await openClaim(selected);};
+ if(loading)return <div className="min-h-screen grid place-items-center bg-[#f7f9fb] text-sm text-[#505f76]">Loading Adjuster Portal…</div>;
+ return <div className="min-h-screen bg-[#f7f9fb] text-[#191c1e] font-body">
+  <header className="h-16 bg-white border-b border-[#e0e3e5] px-6 flex items-center justify-between sticky top-0 z-20"><div className="flex items-center gap-3"><span className="material-symbols-outlined text-[#00647c]">waves</span><div><b className="font-headline text-[17px]">InsureClaimAI</b><div className="text-[9px] uppercase tracking-[.12em] text-[#778187]">Adjuster Portal</div></div></div><div className="flex items-center gap-4"><span className="hidden sm:block text-[11px] text-[#505f76]">{user?.email}</span><button onClick={()=>{clearAuthToken();router.push("/login")}} className="border border-[#bdc8ce] rounded-lg px-3 py-2 text-xs font-semibold bg-white flex gap-1"><span className="material-symbols-outlined text-[16px]">logout</span>Sign Out</button></div></header>
+  <div className="flex min-h-[calc(100vh-64px)]">
+   <aside className="hidden md:flex w-60 bg-white border-r border-[#e0e3e5] p-4 flex-col"><div className="text-[9px] uppercase tracking-[.12em] text-[#778187] px-2 py-3">Operations Core</div>{[["queue","inbox","Claims Queue"],["file","folder_open","Claim File"],["evidence","description","Evidence Review"],["copilot","auto_awesome","AI Copilot"]].map(x=><button key={x[0]} onClick={()=>setView(x[0])} className={"flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-xs font-semibold mb-1 "+(view===x[0]?"bg-[#d0e1fb] text-[#254b59]":"text-[#526066] hover:bg-[#f2f4f6]")}><span className="material-symbols-outlined text-[18px]">{x[1]}</span>{x[2]}</button>)}<div className="mt-auto border-t border-[#e0e3e5] pt-4 px-2 text-xs"><b>{user?.full_name||"Adjuster"}</b><div className="text-[10px] text-[#6e797e] mt-1">Claims Operations</div></div></aside>
+   <main className="flex-1 min-w-0"><div className="max-w-[1450px] mx-auto p-5 md:p-7">{error&&<div className="mb-5 p-3 rounded-lg bg-[#ffefed] border border-[#f1b7b1] text-xs text-[#93000a]">{error}</div>}
+    {view==="queue"&&<><div className="flex justify-between items-end mb-6"><div><div className="text-[9px] uppercase tracking-[.12em] text-[#778187] mb-2">Operations / Intake</div><h1 className="font-headline text-2xl font-bold">Claims Queue</h1><p className="text-xs text-[#657177] mt-1">Claims that completed conversational intake, verification and automatic assignment.</p></div><button onClick={()=>loadQueue()} className="border border-[#bdc8ce] bg-white rounded-lg px-3 py-2 text-xs font-semibold flex gap-1"><span className="material-symbols-outlined text-[16px]">refresh</span>Refresh</button></div>
+     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">{[["Total claims",claims.length,"inbox"],["Assigned",claims.filter(c=>c.assigned_adjuster_id).length,"person_check"],["Evidence pending",claims.filter(c=>c.status==="pending_evidence").length,"assignment_late"],["Policy verified",claims.filter(c=>c.policy_verified).length,"verified"]].map(x=><div key={x[0]} className="bg-white border border-[#e0e3e5] rounded-xl p-4"><div className="flex justify-between text-[10px] uppercase tracking-[.08em] text-[#778187]"><span>{x[0]}</span><span className="material-symbols-outlined text-[#00647c] text-[18px]">{x[2]}</span></div><div className="font-headline text-2xl font-bold mt-2">{x[1]}</div></div>)}</div>
+     <div className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden shadow-sm"><div className="px-5 py-4 border-b border-[#e0e3e5] flex justify-between"><div><h2 className="font-headline font-bold">Review Queue</h2><p className="text-[11px] text-[#6e797e] mt-1">Automatically assigned claims requiring adjuster action.</p></div><span className="text-[10px] text-[#6e797e]">{claims.length} records</span></div><div className="hidden md:grid grid-cols-5 gap-4 px-5 py-3 bg-[#f7f9fb] text-[9px] uppercase tracking-[.1em] font-semibold text-[#778187]"><span>Claim</span><span>Type</span><span>Status</span><span>Amount</span><span>Assigned</span></div>{claims.length===0?<div className="py-16 text-center"><span className="material-symbols-outlined text-[#9aa5aa] text-4xl">inbox</span><h3 className="font-headline font-semibold mt-3">No claims in queue</h3><p className="text-xs text-[#6e797e] mt-1">Verified claims will appear here after automatic assignment.</p></div>:claims.map(c=><button key={c.ticket_id} onClick={()=>openClaim(c.ticket_id)} className={"w-full text-left grid grid-cols-1 md:grid-cols-5 gap-2 md:gap-4 px-5 py-4 border-t border-[#edf0f1] hover:bg-[#f8fbfc] "+(selected===c.ticket_id?"bg-[#eef7fa]":"")}><div><b className="text-[13px]">#{c.ticket_id}</b><div className="text-[10px] text-[#6e797e] mt-1">{c.event_date||"Date pending"} · {c.event_location||"Location pending"}</div></div><div className="text-xs">{title(c.insurance_type)}</div><div><span className={"px-2 py-1 rounded-full text-[9px] uppercase font-semibold "+(c.status==="pending_evidence"?"bg-[#fff0d8] text-[#895900]":"bg-[#dfeafc] text-[#345a72]")}>{title(c.status)}</span></div><div className="text-xs font-semibold">{money(c.estimated_claim_amount)}</div><div className="text-xs text-[#526066]">{c.assigned_adjuster_name||"Auto-assigned"}</div></button>)}</div></>}
+    {view!=="queue"&&!file&&<div className="bg-white border border-[#e0e3e5] rounded-xl p-12 text-center"><h2 className="font-headline font-bold">Select a claim</h2><p className="text-xs text-[#6e797e] mt-2">Open a claim from the queue to review its file.</p><button onClick={()=>setView("queue")} className="mt-5 bg-[#00647c] text-white rounded-lg px-4 py-2 text-xs font-semibold">Open Queue</button></div>}
+    {file&&<><div className="flex justify-between items-end mb-5"><div><button onClick={()=>setView("queue")} className="text-[11px] text-[#00647c] font-semibold flex gap-1 mb-2"><span className="material-symbols-outlined text-[15px]">arrow_back</span>Queue</button><h1 className="font-headline text-2xl font-bold">#{file.claim.ticket_id}</h1><p className="text-xs text-[#657177] mt-1">{title(file.claim.insurance_type)} · {file.claim.event_location||"Location pending"} · {money(file.claim.estimated_claim_amount)}</p></div><span className="px-3 py-1.5 rounded-full bg-[#d9efe4] text-[#2f6b4f] text-[10px] font-semibold">Policy verified</span></div>
+     <div className="flex gap-2 mb-4 md:hidden">{["file","evidence","copilot"].map(v=><button key={v} onClick={()=>setView(v)} className={"px-3 py-2 rounded-lg text-xs font-semibold "+(view===v?"bg-[#00647c] text-white":"bg-white border")}>{title(v)}</button>)}</div>
+     {view==="file"&&<div className="grid xl:grid-cols-[1fr_350px] gap-5"><div className="space-y-5"><section className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden"><div className="px-5 py-4 border-b"><h2 className="font-headline font-bold">Claim File</h2><p className="text-[11px] text-[#6e797e] mt-1">Structured facts extracted from the claimant conversation.</p></div><div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-[#e0e3e5]">{[["Policy",file.extracted_data?.policy_id],["Incident date",file.claim.event_date],["Insurance",title(file.claim.insurance_type)],["Location",file.claim.event_location],["Estimated loss",money(file.claim.estimated_claim_amount)],["Assigned to",file.claim.assigned_adjuster_name]].map(x=><div key={x[0]} className="bg-white p-4"><div className="text-[9px] uppercase tracking-[.08em] text-[#778187]">{x[0]}</div><div className="text-[13px] font-semibold mt-1">{x[1]||"—"}</div></div>)}</div><div className="p-5"><div className="text-[9px] uppercase tracking-[.08em] text-[#778187]">Incident narrative</div><p className="text-sm leading-6 mt-2">{file.claim.event_description||"No incident narrative available."}</p></div></section><section className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden"><div className="px-5 py-4 border-b flex justify-between"><h2 className="font-headline font-bold">Voice Transcript</h2><span className="text-[10px] text-[#6e797e]">Complete conversation</span></div><div className="p-5 space-y-4 max-h-[520px] overflow-auto">{file.conversation.length?file.conversation.map((t,i)=><div key={i}><div className="text-[9px] uppercase tracking-[.08em] text-[#778187] mb-1">{t.speaker}</div><div className={"max-w-[90%] rounded-xl px-4 py-3 text-[13px] leading-5 "+(t.speaker==="Claimant"?"bg-[#e9f5f8]":"bg-[#f2f4f6]")}>{t.text}</div></div>):<p className="text-xs text-[#6e797e]">No transcript recorded.</p>}</div></section></div><aside className="space-y-5"><section className="bg-white border border-[#e0e3e5] rounded-xl p-5"><h2 className="font-headline font-bold text-[15px]">Claim Progress</h2>{[["Claimant confirmed",file.claim.claimant_confirmed],["Policy verified",file.claim.policy_verified],["Claim-specific intake",file.claim.dynamic_requirements_complete]].map(x=><div key={x[0]} className="flex justify-between text-xs py-3 border-b last:border-0"><span>{x[0]}</span><span className={x[1]?"text-[#2f6b4f]":"text-[#a86516]"}>{x[1]?"Complete":"Pending"}</span></div>)}</section><section className="bg-white border border-[#e0e3e5] rounded-xl p-5"><h2 className="font-headline font-bold text-[15px]">Adjuster Action</h2><p className="text-[11px] text-[#6e797e] leading-5 mt-2">Review the transcript, evidence and grounded policy context before changing claim status.</p><div className="grid gap-2 mt-4"><button onClick={()=>update("under_review")} className="bg-[#00647c] text-white rounded-lg py-2.5 text-xs font-semibold">Start Review</button><button onClick={()=>update("pending_evidence")} className="border border-[#bdc8ce] rounded-lg py-2.5 text-xs font-semibold">Request Evidence</button></div></section></aside></div>}
+     {view==="evidence"&&<section className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden"><div className="px-5 py-4 border-b"><h2 className="font-headline font-bold">Evidence Review</h2><p className="text-[11px] text-[#6e797e] mt-1">Claim-specific evidence requirements and uploaded documents.</p></div><div className="p-5">{file.evidence?.length?file.evidence.map((e:any,i:number)=><div key={i} className="py-4 border-b flex justify-between"><div><b className="text-sm">{e.name||e.type||"Evidence item"}</b><p className="text-[11px] text-[#6e797e] mt-1">{e.type||"Document"} · {e.status||"Pending review"}</p></div><span className="text-[9px] bg-[#f2f4f6] px-2 py-1 rounded-full">{title(e.review||"Review")}</span></div>):<div className="py-14 text-center text-xs text-[#6e797e]">No evidence uploaded for this claim yet.</div>}</div></section>}
+     {view==="copilot"&&<div className="grid xl:grid-cols-[1fr_350px] gap-5"><section className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden"><div className="px-5 py-4 border-b flex justify-between"><div><h2 className="font-headline font-bold">AI Adjuster Copilot</h2><p className="text-[11px] text-[#6e797e] mt-1">Advisory analysis grounded in claim facts and retrieved knowledge.</p></div><span className="material-symbols-outlined text-[#00647c]">auto_awesome</span></div><div className="p-5 space-y-4">{file.copilot?.summary?<><div className="border-l-[3px] border-[#00647c] bg-[#f4f9fa] p-4 text-xs leading-5">{file.copilot.summary}</div>{(file.copilot.coverage_observations||[]).map((x:string,i:number)=><div key={i} className="bg-[#f7f9fb] rounded-lg p-3 text-xs"><b>Coverage observation</b><p className="mt-1 leading-5">{x}</p></div>)}{(file.copilot.evidence_gaps||[]).map((x:string,i:number)=><div key={i} className="bg-[#fff8ec] rounded-lg p-3 text-xs"><b>Evidence gap</b><p className="mt-1 leading-5">{x}</p></div>)}</>:<div className="py-14 text-center text-xs text-[#6e797e]">Copilot analysis is not available yet.</div>}</div></section><aside className="bg-white border border-[#e0e3e5] rounded-xl p-5 h-fit"><h2 className="font-headline font-bold text-[15px]">Decision Control</h2><p className="text-[11px] text-[#6e797e] leading-5 mt-2">AI is advisory. The adjuster owns the final claim decision.</p><div className="grid gap-2 mt-5"><button onClick={()=>update("pending_evidence")} className="border border-[#bdc8ce] rounded-lg py-2.5 text-xs font-semibold">Need More Evidence</button><button onClick={()=>update("approved")} className="bg-[#00647c] text-white rounded-lg py-2.5 text-xs font-semibold">Approve Claim</button><button onClick={()=>update("rejected")} className="border border-[#d9a7a2] text-[#93000a] rounded-lg py-2.5 text-xs font-semibold">Reject Claim</button></div></aside></div>}
+    </>}
+   </div></main></div></div>;
 }
