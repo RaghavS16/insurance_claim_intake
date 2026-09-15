@@ -12,6 +12,7 @@ ALLOWED_TRANSITIONS = {
     "verified": {"pending_evidence", "submitted", "assigned", "escalated"},
     "pending_evidence": {"verified", "submitted", "escalated"},
     "submitted": {"assigned", "under_review", "escalated"},
+    "pending_adjuster": {"assigned", "under_review", "escalated"},
     "assigned": {"under_review", "pending_evidence", "escalated"},
     "under_review": {"pending_evidence", "approved", "partially_approved", "rejected", "escalated"},
     "approved": {"closed"},
