@@ -37,6 +37,19 @@ services:
       DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-cloud}
+      CLOUD_LLM_MODEL: ${CLOUD_LLM_MODEL:-google/gemma-4-26b-a4b-it:free}
+      CLOUD_LLM_BASE_URL: ${CLOUD_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      CLOUD_LLM_API_KEY: ${CLOUD_LLM_API_KEY:-}
+      CLOUD_LLM_FALLBACK_MODELS: ${CLOUD_LLM_FALLBACK_MODELS:-openrouter/free}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen/qwen3-embedding-0.6b}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_KNOWLEDGE_PREFIX: ${S3_KNOWLEDGE_PREFIX:-knowledge}
+      S3_EVIDENCE_PREFIX: ${S3_EVIDENCE_PREFIX:-claims}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       ENVIRONMENT: production
     depends_on:
       postgres:
