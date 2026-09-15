@@ -60,8 +60,11 @@ logger = app_logger
 # Database Initialization & Seeding
 # ---------------------------------------------------------------------------
 def _init_db_and_seeds():
-    """Ensure database schema is created and seed initial canonical records if empty."""
+    """Initialize development/test fixtures only; production schema is migration-managed."""
     try:
+        if settings.ENVIRONMENT in ("production", "staging"):
+            logger.info("Production/staging startup: schema creation and demo seeding are disabled; run Alembic migrations separately.")
+            return
         Base.metadata.create_all(bind=engine)
 
         # Safe auto-migration: dynamically add columns to claims and policies if missing
@@ -308,8 +311,22 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint for container probes and monitoring."""
+    """Liveness probe: does not require downstream services."""
     return {"status": "ok", "environment": settings.ENVIRONMENT}
+
+@app.get("/ready")
+def readiness_check():
+    """Readiness probe that verifies the database and required production storage."""
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        if settings.ENVIRONMENT in ("production", "staging") and not settings.S3_BUCKET:
+            raise RuntimeError("S3_BUCKET is not configured")
+        return {"status": "ready", "database": "ok", "storage": "configured"}
+    except Exception as exc:
+        logger.exception("Readiness check failed: %s", type(exc).__name__)
+        return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "dependency_unavailable"})
 
 
 # ---------------------------------------------------------------------------
