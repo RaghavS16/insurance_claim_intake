@@ -729,6 +729,8 @@ export default function ClaimantPage() {
               confirmed={confirmed}
               showScrollBottom={showScrollBottom}
               onScrollToBottom={handleScrollToBottom}
+              onUploadEvidence={handleUploadEvidence}
+              evidenceUploading={evidenceUploading}
             />
           </div>
 
