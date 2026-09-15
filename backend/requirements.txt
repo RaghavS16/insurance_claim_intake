@@ -38,3 +38,7 @@ pytest-asyncio>=1.4.0
 httpx>=0.25.0
 
 pypdf>=5.0.0
+
+pgvector>=0.3.6
+boto3>=1.35.0
+requests>=2.32.0

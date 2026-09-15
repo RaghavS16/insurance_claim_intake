@@ -64,6 +64,7 @@ export default function ClaimantPage() {
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
+  const [missingEvidence, setMissingEvidence] = useState<any[]>([]);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -656,6 +657,7 @@ export default function ClaimantPage() {
     !extractedData.insurance_type,
     !extractedData.event_date,
     !extractedData.estimated_claim_amount,
+    ...missingEvidence.map(() => true),
   ].filter(Boolean).length;
 
   return (
@@ -729,6 +731,8 @@ export default function ClaimantPage() {
               confirmed={confirmed}
               showScrollBottom={showScrollBottom}
               onScrollToBottom={handleScrollToBottom}
+              onUploadEvidence={handleUploadEvidence}
+              evidenceUploading={evidenceUploading}
             />
           </div>
 

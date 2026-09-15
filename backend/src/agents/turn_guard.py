@@ -99,6 +99,15 @@ def conversation_turn_processor(state):
         return state
 
     was_awaiting = bool(state.get("awaiting_confirmation"))
+    normalized = " ".join(raw.strip().lower().split())
+    if normalized in {"hello","hi","hey","good morning","good afternoon","good evening"}:
+        state = nodes.conversation_turn_processor(state)
+        state["last_intent"] = "greeting"
+        state["_skip_all"] = True
+        state["spoken_response"] = ""
+        state["next_question"] = "Hello. I’m here to help with your insurance claim. Tell me what happened whenever you’re ready."
+        state["message"] = state["next_question"]
+        return state
     state = nodes.conversation_turn_processor(state)
 
     if _is_conversational_filler(raw) and not state.get("recently_extracted_fields"):

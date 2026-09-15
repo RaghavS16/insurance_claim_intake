@@ -5,7 +5,8 @@
 --   health, senior_health, home, travel, motor, cyber
 -- ============================================================
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";  -- for gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector";  -- for gen_random_uuid()
 
 -- -------------------------
 -- Users
@@ -140,3 +141,35 @@ CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti
     ON revoked_tokens(token_jti);
 
 
+
+-- -------------------------
+-- Semantic RAG Knowledge
+-- Originals live in S3; chunks and embeddings live in PostgreSQL/pgvector.
+-- -------------------------
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_name VARCHAR NOT NULL,
+    source_uri VARCHAR NOT NULL,
+    document_type VARCHAR NOT NULL,
+    insurance_type VARCHAR,
+    policy_number VARCHAR,
+    effective_from DATE,
+    effective_to DATE,
+    content_sha256 VARCHAR(64) NOT NULL,
+    uploaded_by UUID REFERENCES users(id),
+    metadata_json JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_type ON knowledge_documents(document_type);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_insurance ON knowledge_documents(insurance_type);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_policy ON knowledge_documents(policy_number);
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding vector(1024) NOT NULL,
+    metadata_json JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(document_id);
+CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_hnsw ON knowledge_chunks USING hnsw (embedding vector_cosine_ops);

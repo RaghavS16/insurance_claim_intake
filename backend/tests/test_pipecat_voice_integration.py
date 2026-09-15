@@ -1,5 +1,6 @@
 """Integration-level construction tests for the Pipecat insurance pipeline."""
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 from src.voice.pipecat import build_voice_pipeline, websocket_transport
@@ -14,13 +15,12 @@ def test_pipeline_contains_transport_vad_stt_agent_and_tts():
     with patch("src.voice.pipecat.WhisperSTTService") as stt_cls, patch(
         "src.voice.pipecat.PiperHTTPService"
     ) as tts_cls:
-        worker = build_voice_pipeline(
-            transport,
-            claim,
-            stt_model="small",
-            vad_aggressiveness=1,
-            piper_url="http://localhost:5000",
-        )
+        async def construct():
+            return build_voice_pipeline(
+                transport, claim, stt_model="small",
+                vad_aggressiveness=1, piper_url="http://localhost:5000",
+            )
+        worker = asyncio.run(construct())
 
     assert worker is not None
     stt_cls.assert_called_once()
@@ -46,12 +46,12 @@ def test_pipeline_uses_native_piper_when_model_exists():
     with patch("src.voice.pipecat.WhisperSTTService") as stt_cls, patch(
         "src.voice.pipecat.PiperNativeTTSService"
     ) as native_tts_cls, patch("src.voice.pipecat._find_piper_model_path", return_value="piper/en_US-ryan-medium.onnx"):
-        worker = build_voice_pipeline(
-            transport,
-            claim,
-            stt_model="small",
-            piper_model_path="piper/en_US-ryan-medium.onnx",
-        )
+        async def construct():
+            return build_voice_pipeline(
+                transport, claim, stt_model="small",
+                piper_model_path="piper/en_US-ryan-medium.onnx",
+            )
+        worker = asyncio.run(construct())
 
     assert worker is not None
     stt_cls.assert_called_once()
