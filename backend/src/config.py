@@ -47,8 +47,11 @@ class Settings(BaseSettings):
     RERANK_MODEL: Optional[str] = "qwen/qwen3-reranker-0.6b"
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
-    AWS_REGION: str = "ap-south-1"
+    AWS_REGION: str = "eu-north-1"
     S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT_URL: Optional[str] = None
+    S3_SERVER_SIDE_ENCRYPTION: str = "AES256"
+    S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
     S3_EVIDENCE_PREFIX: str = "claims"
     KNOWLEDGE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
@@ -66,6 +69,8 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
+    MAX_EVIDENCE_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    REQUIRE_S3_IN_PRODUCTION: bool = True
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     @property
@@ -104,6 +109,8 @@ class Settings(BaseSettings):
             if "sqlite" in self.DATABASE_URL.lower():
                 raise RuntimeError("SQLite is not supported for production/staging.")
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
+            raise RuntimeError("S3_BUCKET must be configured in production/staging.")
 
 
 settings = Settings()
