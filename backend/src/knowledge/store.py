@@ -37,7 +37,7 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
     db=SessionLocal()
     try:
         def as_date(v): return date.fromisoformat(v) if v else None
-        doc=KnowledgeDocument(id=str(uuid.uuid4()),source_name=filename,source_uri=s3["uri"],document_type=document_type or "unknown",insurance_type=insurance_type,policy_number=policy_number,effective_from=as_date(effective_from),effective_to=as_date(effective_to),content_sha256=hashlib.sha256(content).hexdigest(),uploaded_by=uploaded_by,metadata_json={"title":meta.title,"scope":meta.document_scope})
+        doc=KnowledgeDocument(id=str(uuid.uuid4()),source_name=filename,source_uri=s3["uri"],document_type=document_type or meta.document_type or "unknown",insurance_type=insurance_type,policy_number=policy_number,effective_from=as_date(effective_from),effective_to=as_date(effective_to),content_sha256=hashlib.sha256(content).hexdigest(),uploaded_by=uploaded_by,metadata_json={"title":meta.title,"scope":meta.document_scope})
         db.add(doc); db.flush()
         for idx,(chunk,vector) in enumerate(zip(chunks,vectors)):
             db.add(KnowledgeChunk(id=str(uuid.uuid4()),document_id=doc.id,chunk_index=idx,text=chunk,embedding=vector,metadata_json={"source_name":filename}))
