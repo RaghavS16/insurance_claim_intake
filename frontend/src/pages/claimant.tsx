@@ -657,6 +657,7 @@ export default function ClaimantPage() {
     !extractedData.insurance_type,
     !extractedData.event_date,
     !extractedData.estimated_claim_amount,
+    ...missingEvidence.map(() => true),
   ].filter(Boolean).length;
 
   return (
