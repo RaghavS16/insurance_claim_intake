@@ -13,9 +13,16 @@ def build_dynamic_context(state: dict[str, Any]) -> dict[str, Any]:
     insurance_type = str(data.get("insurance_type") or "")
     if not insurance_type:
         return {"requirements": [], "policy": [], "regulations": []}
+    incident_date = None
+    try:
+        from datetime import date
+        incident_date = date.fromisoformat(str(data.get("event_date"))) if data.get("event_date") else None
+    except ValueError:
+        incident_date = None
     return KnowledgeRetriever().retrieve(
         insurance_type=insurance_type,
         policy_number=data.get("policy_id"),
+        incident_date=incident_date,
         query=str(data.get("event_description") or ""),
     )
 
