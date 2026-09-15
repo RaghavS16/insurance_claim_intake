@@ -361,7 +361,14 @@ def verify_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
     enforce_claim_ownership(claim, current_user)
     state = dict(claim.pipeline_state or {})
     missing = state.get("missing_fields", [])
-    if missing: raise HTTPException(status_code=400, detail=f"Cannot verify claim: missing mandatory fields {missing}.")
+    if missing:
+        verification = {"valid": False, "reason": "missing_mandatory_fields", "missing_fields": missing}
+        claim.status = "verification_failed"
+        claim.conversation_status = "verification_failed"
+        state["policy_verification"] = verification
+        claim.pipeline_state = state
+        db.commit()
+        return {**_claim_payload(claim), "policy_verification": verification, "message": _verification_failure_message("missing_mandatory_fields")}
     extracted = state.get("extracted_data", {})
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if verification["valid"]:
