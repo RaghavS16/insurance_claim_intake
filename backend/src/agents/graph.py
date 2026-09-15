@@ -117,6 +117,7 @@ def _model_response(state: ClaimState) -> str:
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
         f"Still-needed claim-specific information: {state.get('dynamic_missing', [])}\n"
+        f"Still-needed evidence uploads: {state.get('missing_evidence', [])}\n"
         f"Grounding context: {state.get('knowledge_context', {})}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
@@ -168,7 +169,8 @@ def _response_planner(state: ClaimState) -> ClaimState:
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
-    if state.get("awaiting_confirmation") and not dynamic_missing:
+    missing_evidence = list(state.get("missing_evidence", []))
+    if state.get("awaiting_confirmation") and not dynamic_missing and not missing_evidence:
         state["next_question_field"] = "confirmation"
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
         state["message"] = state["next_question"]
@@ -180,7 +182,10 @@ def _response_planner(state: ClaimState) -> ClaimState:
     else:
         state["next_question_field"] = "confirmation"
     state["next_question"] = _model_response(state)
-    if dynamic_missing and state["next_question"] == _natural_fallback(missing, data):
+    if missing_evidence and not dynamic_missing:
+        item = missing_evidence[0]
+        state["next_question"] = f"Please upload the {str(item.get('label', 'supporting document')).lower()} when you have it, and then we can continue."
+    elif dynamic_missing and state["next_question"] == _natural_fallback(missing, data):
         state["next_question"] = _dynamic_fallback(state)
     state["message"] = state["next_question"]
     return state
