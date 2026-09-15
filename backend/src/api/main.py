@@ -36,7 +36,7 @@ from src.utils.auth import get_password_hash, verify_password, create_access_tok
 from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
 
 # Route modules
-from src.api import auth_routes, claim_routes, policy_routes, admin_routes, adjuster_routes
+from src.api import auth_routes, claim_routes, policy_routes, admin_routes, adjuster_routes, knowledge_routes
 
 # Shared auth dependencies (also exported for backward compatibility)
 from src.api.deps import get_current_user, get_current_user_id, require_role  # noqa: F401
@@ -359,6 +359,7 @@ app.include_router(
 
 # Adjuster workbench
 app.include_router(adjuster_routes.router)
+app.include_router(knowledge_routes.router)
 
 # Voice WebSocket router
 app.include_router(voice_router)
