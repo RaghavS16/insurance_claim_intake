@@ -31,7 +31,7 @@ async def upload_document(
     policy_number:str|None=Form(None),
     effective_from:str|None=Form(None),
     effective_to:str|None=Form(None),
-    user:User=Depends(require_role(["ADMIN","ADJUSTER"])),
+    user:User=Depends(require_role(["ADJUSTER"])),
 ):
     if not file.filename: raise HTTPException(status_code=400,detail="A document file is required.")
     raw=await file.read()
