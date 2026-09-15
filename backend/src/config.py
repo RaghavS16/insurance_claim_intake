@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:7b"
     CLOUD_LLM_MODEL: str = "Qwen/Qwen3.5-27B"
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
+    CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
     CLOUD_LLM_API_KEY: Optional[str] = None
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 

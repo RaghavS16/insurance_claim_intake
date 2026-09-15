@@ -36,6 +36,11 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
             c.pipeline_state=state; c.status="pending_adjuster"; changed=True
     if changed: db.commit()
 
+def _can_access_claim(c: Claim, user: User) -> bool:
+    if user.role == "ADMIN":
+        return True
+    return str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
+
 class ClaimUpdate(BaseModel):
     status: str|None=None
     priority: str|None=None
@@ -73,11 +78,12 @@ def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
 def claim_file(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
+    if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     return {"claim":_item(c),"extracted_data":state.get("extracted_data",{}),
             "conversation":[{"speaker":"Claimant" if t.speaker in {"user","claimant"} else "Agent","text":t.text,"turn":t.turn_number} for t in turns],
-            "requirements":state.get("dynamic_requirements",[]),"missing_requirements":state.get("dynamic_missing",[]),
+            "requirements":state.get("dynamic_requirements",[]),"missing_requirements":state.get("dynamic_missing",[]),"missing_evidence":state.get("missing_evidence",[]),
             "evidence":state.get("evidence",[]),"policy_verification":state.get("policy_verification",{}),
             "knowledge_sources":state.get("knowledge_sources",[]),"copilot":state.get("copilot",{})}
 
@@ -85,6 +91,7 @@ def claim_file(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db
 def update_claim(ticket_id:str,payload:ClaimUpdate,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
+    if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     if payload.priority: state["priority"]=payload.priority
     if payload.note: state.setdefault("adjuster_notes",[]).append({"author":user.full_name,"note":payload.note})
@@ -111,6 +118,7 @@ def assign_claim(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_
 def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
+    if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     data=state.get("extracted_data") or {}
     context=KnowledgeRetriever().retrieve(
@@ -129,11 +137,12 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
         )
         try:
             result=get_configured_llm().invoke(prompt)
-            text=getattr(result,"content",str(result))
-            state["copilot"]={"summary":str(text),"coverage_observations":[],"evidence_gaps":[]}
+            text=getattr(result,"content",str(result)).strip()
+            if text:
+                state["copilot"]={"summary":text,"coverage_observations":[],"evidence_gaps":[]}
+                state["knowledge_sources"]=[*context.get("policy",[]),*context.get("regulations",[])]
+                c.pipeline_state=state
+                db.commit()
         except Exception:
-            state["copilot"]={"summary":"No AI analysis is available yet. Review the verified policy and evidence manually.","coverage_observations":[],"evidence_gaps":[]}
-        state["knowledge_sources"]=[*context.get("policy",[]),*context.get("regulations",[])]
-        c.pipeline_state=state
-        db.commit()
-    return {"ticket_id":ticket_id,"analysis":state.get("copilot",{}),"sources":state.get("knowledge_sources",[])}
+            return {"ticket_id":ticket_id,"analysis":None,"status":"unavailable","error":"AI provider is temporarily unavailable. Retry Copilot shortly.","sources":[*context.get("policy",[]),*context.get("regulations",[])]}
+    return {"ticket_id":ticket_id,"analysis":state.get("copilot"),"status":"ready" if state.get("copilot") else "unavailable","sources":state.get("knowledge_sources",[])}

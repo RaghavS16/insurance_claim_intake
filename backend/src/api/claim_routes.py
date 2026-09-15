@@ -7,7 +7,7 @@ resumed after navigation, browser refresh, or a disconnected voice socket.
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
+from src.agents.dynamic_requirements import missing_evidence
 from src.database.models import Adjuster
 
 logger = app_logger
@@ -80,6 +81,10 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
         "extracted_data": state.get("extracted_data") or {},
         "missing_fields": state.get("missing_fields") or [],
+        "dynamic_requirements": state.get("dynamic_requirements") or [],
+        "dynamic_missing": state.get("dynamic_missing") or [],
+        "missing_evidence": state.get("missing_evidence") or [],
+        "evidence": state.get("evidence") or [],
         "field_status": state.get("field_status") or {},
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
         "confirmed": bool(state.get("confirmed")),
@@ -381,6 +386,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     dynamic_missing = state.get("dynamic_missing") or []
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
+    if missing_evidence: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
@@ -410,6 +416,57 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
             "assigned_adjuster": {"id": str(assigned.id), "name": assigned.name, "specialization": assigned.specialization},
             "message": f"Claim #{ticket_id} has been verified, confirmed, and assigned to {assigned.name}."}
 
+
+
+
+@router.post("/{ticket_id}/evidence")
+async def upload_claim_evidence(
+    ticket_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    evidence_key: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Store claimant evidence against the active claim and expose only metadata to the client."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation"):
+        raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+    allowed = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}
+    from pathlib import Path
+    import uuid as _uuid
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported evidence format.")
+    content = await file.read()
+    if len(content) > settings.MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+    root = Path(settings.UPLOAD_DIR) / "claims" / ticket_id / "evidence"
+    root.mkdir(parents=True, exist_ok=True)
+    stored = root / f"{_uuid.uuid4().hex}{ext}"
+    stored.write_bytes(content)
+    state = dict(claim.pipeline_state or {})
+    evidence = list(state.get("evidence") or [])
+    item = {
+        "id": stored.stem,
+        "name": file.filename,
+        "stored_name": stored.name,
+        "evidence_key": evidence_key,
+        "content_type": file.content_type or "application/octet-stream",
+        "size": len(content),
+        "status": "uploaded",
+        "review": "pending",
+    }
+    evidence.append(item)
+    state["evidence"] = evidence
+    claim.pipeline_state = state
+    db.commit()
+    return {"success": True, "evidence": item, "evidence_items": evidence}
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):

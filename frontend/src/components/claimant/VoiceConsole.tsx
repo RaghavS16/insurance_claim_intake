@@ -12,6 +12,8 @@ interface VoiceConsoleProps {
   confirmed: boolean;
   showScrollBottom?: boolean;
   onScrollToBottom?: () => void;
+  onUploadEvidence?: (file: File) => void;
+  evidenceUploading?: boolean;
 }
 
 export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
@@ -39,6 +41,24 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
         </span>
         <span>Scroll to latest</span>
       </button>
+    )}
+
+    {onUploadEvidence && (
+      <label className="pointer-events-auto mb-3 flex items-center gap-2 px-4 py-2 rounded-full border border-[#bdc8ce] bg-white hover:bg-[#f7f9fb] text-xs font-semibold text-[#505f76] cursor-pointer shadow-sm">
+        <span className="material-symbols-outlined text-[17px]">upload_file</span>
+        <span>{evidenceUploading ? "Uploading evidence…" : "Upload supporting evidence"}</span>
+        <input
+          type="file"
+          className="hidden"
+          accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.txt"
+          disabled={evidenceUploading}
+          onChange={(e) => {
+            const selected = e.target.files?.[0];
+            if (selected) onUploadEvidence(selected);
+            e.currentTarget.value = "";
+          }}
+        />
+      </label>
     )}
 
     {/* Audio Waveform Dots Visualizer */}
