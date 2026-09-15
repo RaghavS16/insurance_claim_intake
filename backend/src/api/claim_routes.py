@@ -381,6 +381,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     dynamic_missing = state.get("dynamic_missing") or []
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
+    if missing_evidence: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
