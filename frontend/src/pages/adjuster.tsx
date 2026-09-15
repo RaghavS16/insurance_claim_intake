@@ -6,7 +6,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const title = (v?: string) => (v || "Unknown").replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
 const money = (v?: number) => v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
 
-type Claim = { ticket_id:string; status:string; insurance_type?:string; event_date?:string; event_location?:string; estimated_claim_amount?:number; priority?:string; assigned_adjuster_id?:string; assigned_adjuster_name?:string; claimant_confirmed?:boolean; policy_verified?:boolean; dynamic_requirements_complete?:boolean };
+type Claim = { ticket_id:string; status:string; insurance_type?:string; event_date?:string; event_location?:string; estimated_claim_amount?:number; event_description?:string; priority?:string; assigned_adjuster_id?:string; assigned_adjuster_name?:string; claimant_confirmed?:boolean; policy_verified?:boolean; dynamic_requirements_complete?:boolean };
 type FileData = { claim:Claim; extracted_data:Record<string,any>; conversation:{speaker:string;text:string;turn:number}[]; requirements:any[]; missing_requirements:any[]; missing_evidence:any[]; evidence:any[]; policy_verification:Record<string,any>; knowledge_sources:any[]; copilot:Record<string,any> };
 
 export default function AdjusterPage(){
