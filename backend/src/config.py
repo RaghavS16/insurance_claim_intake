@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
     EMBEDDING_MODEL: str = "qwen/qwen3-embedding-0.6b"
     EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
+    RERANK_MODEL: Optional[str] = "qwen/qwen3-reranker-0.6b"
+    RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
     AWS_REGION: str = "ap-south-1"
     S3_BUCKET: Optional[str] = None
