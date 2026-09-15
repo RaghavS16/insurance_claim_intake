@@ -108,7 +108,10 @@ class Settings(BaseSettings):
                 raise RuntimeError("SECRET_KEY must be at least 32 characters.")
             if "sqlite" in self.DATABASE_URL.lower():
                 raise RuntimeError("SQLite is not supported for production/staging.")
-        Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+            if "DBpassword" in self.DATABASE_URL or "REPLACE_WITH" in self.DATABASE_URL:
+                raise RuntimeError("DATABASE_URL still contains a development/example credential.")
+        if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
+            Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
 
