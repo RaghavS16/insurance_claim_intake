@@ -30,7 +30,7 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
     policy_number=policy_number or meta.policy_number
     effective_from=effective_from or (meta.effective_from.isoformat() if meta.effective_from else None)
     effective_to=effective_to or (meta.effective_to.isoformat() if meta.effective_to else None)
-    content_sha256=content_sha256
+    content_sha256=hashlib.sha256(content).hexdigest()
     db=SessionLocal()
     try:
         existing=db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256==content_sha256).first()
@@ -48,7 +48,7 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
     db=SessionLocal()
     try:
         def as_date(v): return date.fromisoformat(v) if v else None
-        doc=KnowledgeDocument(id=str(uuid.uuid4()),source_name=filename,source_uri=s3["uri"],document_type=document_type or meta.document_type or "unknown",insurance_type=insurance_type,policy_number=policy_number,effective_from=as_date(effective_from),effective_to=as_date(effective_to),content_sha256=hashlib.sha256(content).hexdigest(),uploaded_by=uploaded_by,metadata_json={"title":meta.title,"scope":meta.document_scope})
+        doc=KnowledgeDocument(id=str(uuid.uuid4()),source_name=filename,source_uri=s3["uri"],document_type=document_type or meta.document_type or "unknown",insurance_type=insurance_type,policy_number=policy_number,effective_from=as_date(effective_from),effective_to=as_date(effective_to),content_sha256=content_sha256,uploaded_by=uploaded_by,metadata_json={"title":meta.title,"scope":meta.document_scope})
         db.add(doc); db.flush()
         for idx,(chunk,vector) in enumerate(zip(chunks,vectors)):
             db.add(KnowledgeChunk(id=str(uuid.uuid4()),document_id=doc.id,chunk_index=idx,text=chunk,embedding=vector,metadata_json={"source_name":filename}))
@@ -71,5 +71,5 @@ def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,do
         distance=KnowledgeChunk.embedding.cosine_distance(vector)
         stmt=select(KnowledgeChunk,KnowledgeDocument,distance.label("distance")).select_from(KnowledgeChunk).join(KnowledgeDocument,KnowledgeChunk.document_id==KnowledgeDocument.id).where(*conditions).order_by(distance).limit(limit)
         rows=db.execute(stmt).all()
-        return [{"id":c.id,"text":c.text,"source_name":d.source_name,"source_uri":d.source_uri,"document_type":d.document_type,"insurance_type":d.insurance_type,"policy_number":d.policy_number,"score":round(1-float(dist),6)} for c,d,dist in rows]
+        return [{"id":c.id,"chunk_id":c.id,"document_id":d.id,"text":c.text,"source_name":d.source_name,"source_uri":d.source_uri,"document_type":d.document_type,"insurance_type":d.insurance_type,"policy_number":d.policy_number,"score":round(1-float(dist),6)} for c,d,dist in rows]
     finally: db.close()
