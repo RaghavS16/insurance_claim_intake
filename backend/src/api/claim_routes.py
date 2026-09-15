@@ -21,6 +21,7 @@ from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence
 from src.database.models import Adjuster
+from src.database.claim_workflow import assign_claim, transition_claim
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -399,24 +400,18 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
         raise HTTPException(status_code=400, detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}")
-    # Auto-assignment happens only after claimant confirmation, complete dynamic intake,
-    # and authoritative policy verification.
-    candidates = (
-        db.query(Adjuster)
-        .filter(Adjuster.is_active == True, Adjuster.specialization == (claim.insurance_type or ""))
-        .order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc())
-        .all()
-    )
-    if not candidates:
-        candidates = db.query(Adjuster).filter(Adjuster.is_active == True).order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc()).all()
-    if not candidates:
-        raise HTTPException(status_code=409, detail="Claim verified, but no active adjuster is available for assignment.")
-    assigned = candidates[0]
-    assigned.claims_assigned = (assigned.claims_assigned or 0) + 1
+    # Assignment is transactional and recorded as a durable work item.
     state["policy_verification"] = verification
+    try:
+        if claim.status != "verified":
+            transition_claim(db, claim, "verified", str(current_user.id), "claimant confirmation and policy verification")
+        assigned = assign_claim(db, claim, str(current_user.id))
+        transition_claim(db, claim, "assigned", str(current_user.id), "automatic assignment")
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
     state["assigned_adjuster_id"] = str(assigned.id)
     state["assigned_adjuster_name"] = assigned.name
-    claim.status = "pending_adjuster"
     claim.conversation_status = "confirmed"
     claim.pipeline_state = state
     db.commit()
