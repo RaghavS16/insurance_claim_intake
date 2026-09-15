@@ -17,7 +17,7 @@ def _extract_text(content:bytes,filename:str)->str:
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     return content.decode("utf-8-sig")
 
-def _chunks(text:str,size:int=700,overlap:int=100)->list[str]:
+def _chunks(text:str,size:int=450,overlap:int=75)->list[str]:
     words=re.findall(r"\S+",text)
     return [part for i in range(0,len(words),max(1,size-overlap)) if (part:=" ".join(words[i:i+size]).strip())]
 
@@ -47,7 +47,7 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
         db.rollback(); raise
     finally: db.close()
 
-def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,document_types:list[str]|None=None,incident_date:date|None=None,limit:int=8)->list[dict]:
+def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,document_types:list[str]|None=None,incident_date:date|None=None,limit:int=12)->list[dict]:
     vector=embed_documents([query])[0]; db=SessionLocal()
     try:
         conditions=[]
