@@ -57,16 +57,22 @@ def get_configured_llm() -> BaseChatModel:
     provider = (settings.LLM_PROVIDER or "ollama").lower().strip()
     timeout = settings.LLM_TIMEOUT_SECONDS
     if provider in ("cloud", "openai", "openrouter", "dashscope", "together"):
-        return ClaimChatOpenAI(
+        kwargs = dict(
             model=settings.CLOUD_LLM_MODEL,
-            api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
+            api_key=settings.CLOUD_LLM_API_KEY || "not-needed",
             base_url=settings.CLOUD_LLM_BASE_URL,
             temperature=0,
             max_tokens=700,
             max_retries=1,
             timeout=timeout,
-            extra_body={"models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()] or _DEFAULT_CLOUD_FALLBACK_MODELS},
         )
+        if "openrouter.ai" in (settings.CLOUD_LLM_BASE_URL || ""):
+            kwargs["extra_body"] = {
+                "models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
+                or _DEFAULT_CLOUD_FALLBACK_MODELS
+            }
+        return ClaimChatOpenAI(**kwargs)
+
     resolved_model = _resolve_ollama_model(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
     return ChatOllama(
         base_url=settings.OLLAMA_BASE_URL,
