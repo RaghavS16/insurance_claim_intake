@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.config import settings
 from src.database.models import Base
+# Import normalized workflow models so Alembic autogenerate sees their metadata.
+from src.database import hardening_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
