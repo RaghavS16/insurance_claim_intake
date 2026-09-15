@@ -134,6 +134,14 @@ def _model_response(state: ClaimState) -> str:
 
 
 
+def _dynamic_fallback(state: ClaimState) -> str:
+    remaining = state.get("dynamic_missing") or []
+    if not remaining:
+        return _natural_fallback(list(state.get("missing_fields", [])), state.get("extracted_data", {}))
+    first = remaining[0]
+    return f"Thanks. To complete this claim, could you tell me about {first.get('label', 'that detail').lower()}?"
+
+
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
@@ -172,6 +180,8 @@ def _response_planner(state: ClaimState) -> ClaimState:
     else:
         state["next_question_field"] = "confirmation"
     state["next_question"] = _model_response(state)
+    if dynamic_missing and state["next_question"] == _natural_fallback(missing, data):
+        state["next_question"] = _dynamic_fallback(state)
     state["message"] = state["next_question"]
     return state
 
