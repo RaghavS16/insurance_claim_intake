@@ -18,6 +18,24 @@ def _guard(user: User=Depends(get_current_user)):
         raise HTTPException(status_code=403,detail="Adjuster access required.")
     return user
 
+def _auto_assign_pending(claims:list[Claim], db:Session):
+    changed=False
+    for c in claims:
+        state=dict(c.pipeline_state or {})
+        if state.get("assigned_adjuster_id") or c.status not in {"submitted","pending_adjuster"}:
+            continue
+        if not (state.get("confirmed") and (state.get("policy_verification") or {}).get("valid") and not state.get("dynamic_missing")):
+            continue
+        spec=(c.insurance_type or "").lower()
+        a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+        if not a:
+            a=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+        if a:
+            a.claims_assigned=(a.claims_assigned or 0)+1
+            state["assigned_adjuster_id"]=str(a.id); state["assigned_adjuster_name"]=a.name
+            c.pipeline_state=state; c.status="pending_adjuster"; changed=True
+    if changed: db.commit()
+
 class ClaimUpdate(BaseModel):
     status: str|None=None
     priority: str|None=None
@@ -45,8 +63,10 @@ def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
 def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
     q=db.query(Claim).filter(Claim.status.in_(["submitted","under_review","pending_evidence","pending_adjuster"]))
     claims=q.order_by(Claim.updated_at.desc()).all()
+    _auto_assign_pending(claims, db)
     if user.role=="ADJUSTER":
-        claims=[c for c in claims if str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(next((a.id for a in db.query(Adjuster).filter(Adjuster.email==user.email).all()), ""))]
+        adjuster=db.query(Adjuster).filter(Adjuster.email==user.email).first()
+        claims=[c for c in claims if adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(adjuster.id)]
     return {"items":[_item(c) for c in claims],"total":len(claims)}
 
 @router.get("/claims/{ticket_id}")
