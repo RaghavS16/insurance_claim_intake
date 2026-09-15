@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import date
 from .requirements import get_requirements
+from .store import search
 
 class KnowledgeRetriever:
     def requirements(self, insurance_type: str) -> list[dict]:
@@ -13,6 +14,6 @@ class KnowledgeRetriever:
         # policy table remains authoritative for policy identity/date checks.
         return {
             "requirements": self.requirements(insurance_type),
-            "policy": [],
-            "regulations": [],
+            "policy": search(query or insurance_type, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date),
+            "regulations": search(query or insurance_type, insurance_type=insurance_type, document_types=["regulation", "guideline"], incident_date=incident_date),
         }
