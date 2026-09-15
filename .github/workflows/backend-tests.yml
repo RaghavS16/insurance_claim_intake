@@ -10,6 +10,7 @@ on:
       - main
       - "refactor/pipecat-voice-migration"
       - "fix/**"
+      - "production-grade-hardening-**"
     paths:
       - "backend/**"
       - ".github/workflows/backend-tests.yml"
@@ -28,4 +29,5 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
+      - run: python -m compileall -q src tests
       - run: pytest -q
