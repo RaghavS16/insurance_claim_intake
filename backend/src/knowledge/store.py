@@ -50,15 +50,15 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
 def search(query:str,insurance_type:str|None=None,policy_number:str|None=None,document_types:list[str]|None=None,incident_date:date|None=None,limit:int=8)->list[dict]:
     vector=embed_documents([query])[0]; db=SessionLocal()
     try:
-        stmt=select(KnowledgeChunk,KnowledgeDocument)
-        stmt=stmt.join(KnowledgeDocument,KnowledgeChunk.document_id==KnowledgeDocument.id)
-        if insurance_type: stmt=stmt.where((KnowledgeDocument.insurance_type==insurance_type)|(KnowledgeDocument.insurance_type.is_(None)))
-        if policy_number: stmt=stmt.where((KnowledgeDocument.policy_number==policy_number)|(KnowledgeDocument.policy_number.is_(None)))
-        if document_types: stmt=stmt.where(KnowledgeDocument.document_type.in_(document_types))
+        conditions=[]
+        if insurance_type: conditions.append((KnowledgeDocument.insurance_type==insurance_type)|(KnowledgeDocument.insurance_type.is_(None)))
+        if policy_number: conditions.append((KnowledgeDocument.policy_number==policy_number)|(KnowledgeDocument.policy_number.is_(None)))
+        if document_types: conditions.append(KnowledgeDocument.document_type.in_(document_types))
         if incident_date:
-            stmt=stmt.where((KnowledgeDocument.effective_from.is_(None))|(KnowledgeDocument.effective_from<=incident_date))
-            stmt=stmt.where((KnowledgeDocument.effective_to.is_(None))|(KnowledgeDocument.effective_to>=incident_date))
+            conditions.append((KnowledgeDocument.effective_from.is_(None))|(KnowledgeDocument.effective_from<=incident_date))
+            conditions.append((KnowledgeDocument.effective_to.is_(None))|(KnowledgeDocument.effective_to>=incident_date))
         distance=KnowledgeChunk.embedding.cosine_distance(vector)
-        rows=db.execute(select(KnowledgeChunk,KnowledgeDocument,distance.label("distance")).select_from(KnowledgeChunk).join(KnowledgeDocument,KnowledgeChunk.document_id==KnowledgeDocument.id).where(*list(stmt._where_criteria)).order_by(distance).limit(limit)).all()
+        stmt=select(KnowledgeChunk,KnowledgeDocument,distance.label("distance")).select_from(KnowledgeChunk).join(KnowledgeDocument,KnowledgeChunk.document_id==KnowledgeDocument.id).where(*conditions).order_by(distance).limit(limit)
+        rows=db.execute(stmt).all()
         return [{"id":c.id,"text":c.text,"source_name":d.source_name,"source_uri":d.source_uri,"document_type":d.document_type,"insurance_type":d.insurance_type,"policy_number":d.policy_number,"score":round(1-float(dist),6)} for c,d,dist in rows]
     finally: db.close()
