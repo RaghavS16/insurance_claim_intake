@@ -44,9 +44,9 @@ def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
 @router.get("/queue")
 def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
     q=db.query(Claim).filter(Claim.status.in_(["submitted","under_review","pending_evidence","pending_adjuster"]))
-    if user.role=="ADJUSTER":
-        q=q.filter(Claim.pipeline_state.isnot(None))
     claims=q.order_by(Claim.updated_at.desc()).all()
+    if user.role=="ADJUSTER":
+        claims=[c for c in claims if str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(next((a.id for a in db.query(Adjuster).filter(Adjuster.email==user.email).all()), ""))]
     return {"items":[_item(c) for c in claims],"total":len(claims)}
 
 @router.get("/claims/{ticket_id}")
