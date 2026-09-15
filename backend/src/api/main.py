@@ -357,5 +357,8 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+app.include_router(adjuster_routes.router)
+app.include_router(knowledge_routes.router)
+
 # Voice WebSocket router
 app.include_router(voice_router)
