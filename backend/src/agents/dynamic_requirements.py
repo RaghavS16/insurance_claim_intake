@@ -24,6 +24,18 @@ def unresolved(state: dict[str, Any]) -> list[dict[str, Any]]:
     data = state.get("extracted_data") or {}
     return [r for r in requirements if r.get("required", True) and data.get(r.get("key")) in (None, "", "UNKNOWN")]
 
+
+def missing_evidence(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return required evidence items that have not been uploaded yet."""
+    requirements = state.get("dynamic_requirements") or []
+    evidence = state.get("evidence") or []
+    uploaded_keys = {str(e.get("evidence_key")) for e in evidence if e.get("evidence_key")}
+    return [
+        r for r in requirements
+        if r.get("required", True) and r.get("evidence_type") and r.get("key") not in uploaded_keys
+    ]
+
+
 def extract_answers(state: dict[str, Any]) -> None:
     remaining = unresolved(state)
     utterance = str(state.get("last_user_utterance") or "").strip()
@@ -46,3 +58,4 @@ def extract_answers(state: dict[str, Any]) -> None:
     except Exception:
         pass
     state["dynamic_missing"] = unresolved(state)
+    state["missing_evidence"] = missing_evidence(state)
