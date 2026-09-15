@@ -452,6 +452,9 @@ async def upload_claim_evidence(
     stored.write_bytes(content)
     state = dict(claim.pipeline_state or {})
     evidence = list(state.get("evidence") or [])
+    if not evidence_key:
+        outstanding = missing_evidence(state)
+        evidence_key = outstanding[0].get("key") if outstanding else None
     item = {
         "id": stored.stem,
         "name": file.filename,
