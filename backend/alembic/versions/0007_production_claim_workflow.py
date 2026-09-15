@@ -21,14 +21,14 @@ def upgrade():
         sa.UniqueConstraint("claim_id","requirement_key",name="uq_claim_requirement_key"))
     op.create_index("ix_claim_requirements_status","claim_requirements",["status"])
     op.create_table("claim_evidence",
-        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
+        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("uploaded_by",postgresql.UUID(as_uuid=True),sa.ForeignKey("users.id",ondelete="SET NULL")),sa.Column("requirement_id",sa.String(36),sa.ForeignKey("claim_requirements.id",ondelete="SET NULL")),
         sa.Column("object_key",sa.String(1000),nullable=False,unique=True),sa.Column("original_filename",sa.String(500),nullable=False),sa.Column("content_type",sa.String(200),nullable=False),
         sa.Column("size_bytes",sa.Integer(),nullable=False),sa.Column("sha256",sa.String(64)),sa.Column("status",sa.String(40),nullable=False,server_default="uploaded"),sa.Column("document_type",sa.String(100)),
         sa.Column("analysis_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()),sa.Column("updated_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
     for n,c in [("ix_claim_evidence_claim","claim_id"),("ix_claim_evidence_status","status"),("ix_claim_evidence_sha256","sha256")]: op.create_index(n,"claim_evidence",[c])
     op.create_table("claim_decisions",
-        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
+        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("adjuster_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False),sa.Column("decision",sa.String(40),nullable=False),
         sa.Column("rationale",sa.Text(),nullable=False),sa.Column("approved_amount",sa.Numeric()),sa.Column("ai_recommendation_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
     op.create_index("ix_claim_decisions_claim","claim_decisions",["claim_id"])
