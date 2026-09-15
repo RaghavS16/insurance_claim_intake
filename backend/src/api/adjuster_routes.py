@@ -36,8 +36,14 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
             c.pipeline_state=state; c.status="pending_adjuster"; changed=True
     if changed: db.commit()
 
-def _can_access_claim(c: Claim, user: User) -> bool:
+def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     if user.role == "ADMIN":
+        return True
+    if db is not None and db.query(ClaimAssignment).filter(
+        ClaimAssignment.claim_id == c.id,
+        ClaimAssignment.adjuster_id == user.id,
+        ClaimAssignment.is_active.is_(True),
+    ).first():
         return True
     return str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
 
