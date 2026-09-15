@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from src.agents import nodes
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
+from src.agents.dynamic_requirements import build_dynamic_context, extract_answers
 
 
 _RESPONSE_SYSTEM_PROMPT = """You are the conversation planner for a voice-first insurance claim assistant.
@@ -115,6 +116,8 @@ def _model_response(state: ClaimState) -> str:
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
+        f"Still-needed claim-specific information: {state.get('dynamic_missing', [])}\n"
+        f"Grounding context: {state.get('knowledge_context', {})}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
         f"Latest claimant utterance: {state.get('last_user_utterance', '')}\n\n"
@@ -130,22 +133,44 @@ def _model_response(state: ClaimState) -> str:
     return _natural_fallback(missing, data)
 
 
+
+def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
+    if state.get("_skip_all"):
+        return state
+    data = state.get("extracted_data") or {}
+    insurance_type = data.get("insurance_type")
+    if not insurance_type:
+        state["dynamic_requirements"] = []
+        state["dynamic_missing"] = []
+        return state
+    context = build_dynamic_context(state)
+    state["dynamic_requirements"] = context.get("requirements", [])
+    state["knowledge_context"] = context
+    extract_answers(state)
+    if state.get("dynamic_missing"):
+        state["awaiting_confirmation"] = False
+        state["confirmed"] = False
+        state["conversation_status"] = "collecting_dynamic"
+    return state
+
+
 def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
-
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
-
-    # Confirmation is deliberately grounded and deterministic: the model must not invent or
-    # rephrase claim facts at the point where the claimant is asked to verify them.
-    if state.get("awaiting_confirmation"):
+    dynamic_missing = list(state.get("dynamic_missing", []))
+    if state.get("awaiting_confirmation") and not dynamic_missing:
         state["next_question_field"] = "confirmation"
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
         state["message"] = state["next_question"]
         return state
-
-    state["next_question_field"] = missing[0] if missing else "confirmation"
+    if missing:
+        state["next_question_field"] = missing[0]
+    elif dynamic_missing:
+        state["next_question_field"] = dynamic_missing[0].get("key")
+    else:
+        state["next_question_field"] = "confirmation"
     state["next_question"] = _model_response(state)
     state["message"] = state["next_question"]
     return state
@@ -156,6 +181,7 @@ def _build_conversation_graph():
     graph.add_node("conversation_turn_processor", conversation_turn_processor)
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
+    graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
     graph.add_node("next_question_generator", _response_planner)
     graph.set_entry_point("conversation_turn_processor")
     graph.add_conditional_edges(
@@ -164,7 +190,8 @@ def _build_conversation_graph():
         {"continue": "claim_extractor", "done": END},
     )
     graph.add_edge("claim_extractor", "mandatory_field_checker")
-    graph.add_edge("mandatory_field_checker", "next_question_generator")
+    graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
+    graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
     graph.add_edge("next_question_generator", END)
     return graph.compile()
 
