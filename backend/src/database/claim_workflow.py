@@ -9,7 +9,7 @@ ALLOWED_TRANSITIONS = {
     "draft": {"pending_confirmation", "verification_failed", "escalated"},
     "pending_confirmation": {"draft", "pending_verification", "escalated"},
     "pending_verification": {"verified", "verification_failed", "escalated"},
-    "verified": {"pending_evidence", "submitted", "escalated"},
+    "verified": {"pending_evidence", "submitted", "assigned", "escalated"},
     "pending_evidence": {"verified", "submitted", "escalated"},
     "submitted": {"assigned", "under_review", "escalated"},
     "assigned": {"under_review", "pending_evidence", "escalated"},
