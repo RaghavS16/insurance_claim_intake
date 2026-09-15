@@ -8,6 +8,8 @@ from sqlalchemy import func
 from src.api.deps import get_current_user
 from src.database.models import Claim, Adjuster, User, ConversationTurn
 from src.database.session import get_db
+from src.agents.llm_factory import get_configured_llm
+from src.knowledge.retriever import KnowledgeRetriever
 
 router=APIRouter(prefix="/api/v1/adjuster",tags=["Adjuster"])
 
@@ -90,4 +92,28 @@ def copilot(ticket_id:str,user:User=Depends(_guard),db:Session=Depends(get_db)):
     c=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
     state=dict(c.pipeline_state or {})
+    data=state.get("extracted_data") or {}
+    context=KnowledgeRetriever().retrieve(
+        insurance_type=c.insurance_type or "",
+        policy_number=data.get("policy_id"),
+        incident_date=c.event_date,
+        query=c.event_description or "",
+    )
+    if not state.get("copilot"):
+        prompt=(
+            "Act as an insurance adjuster copilot. Give advisory analysis only; never make the final legal or coverage decision. "
+            "Use only claim facts and retrieved evidence. State uncertainty when evidence is insufficient. "
+            f"Claim facts: {data}\nIncident: {c.event_description}\n"
+            f"Retrieved policy evidence: {context.get('policy', [])}\n"
+            f"Retrieved regulatory evidence: {context.get('regulations', [])}"
+        )
+        try:
+            result=get_configured_llm().invoke(prompt)
+            text=getattr(result,"content",str(result))
+            state["copilot"]={"summary":str(text),"coverage_observations":[],"evidence_gaps":[]}
+        except Exception:
+            state["copilot"]={"summary":"No AI analysis is available yet. Review the verified policy and evidence manually.","coverage_observations":[],"evidence_gaps":[]}
+        state["knowledge_sources"]=[*context.get("policy",[]),*context.get("regulations",[])]
+        c.pipeline_state=state
+        db.commit()
     return {"ticket_id":ticket_id,"analysis":state.get("copilot",{}),"sources":state.get("knowledge_sources",[])}
