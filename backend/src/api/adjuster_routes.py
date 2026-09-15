@@ -79,4 +79,50 @@ def copilot(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found.")
     state = dict(claim.pipeline_state or {})
-    return {"ticket_id": ticket_id, "analysis": state.get("copilot", {}), "sources": state.get("knowledge_sources", [])}
+    analysis = state.get("copilot") or _generate_copilot(claim)
+    db.commit()
+    return {"ticket_id": ticket_id, "analysis": analysis, "sources": state.get("knowledge_sources", [])}
+
+
+from src.agents.llm_factory import get_configured_llm
+from src.knowledge.retriever import KnowledgeRetriever
+
+class CopilotAnalysis(BaseModel):
+    summary: str = ""
+    coverage_observations: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+    sources: list[str] = Field(default_factory=list)
+
+def _generate_copilot(claim: Claim) -> dict[str, Any]:
+    state = dict(claim.pipeline_state or {})
+    data = state.get("extracted_data") or {}
+    ctx = KnowledgeRetriever().retrieve(
+        insurance_type=claim.insurance_type or "",
+        policy_number=data.get("policy_id"),
+        incident_date=claim.event_date,
+        query=str(claim.event_description or ""),
+    )
+    evidence = state.get("evidence", [])
+    prompt = (
+        "You are an insurance adjuster copilot. Produce an advisory analysis only. "
+        "Do not make a final legal or coverage determination. Use only supplied claim facts and retrieved documents. "
+        "Explicitly identify when the retrieved policy/regulatory evidence is insufficient. "
+        f"Claim facts: {data}\n"
+        f"Incident description: {claim.event_description}\n"
+        f"Evidence state: {evidence}\n"
+        f"Retrieved policy clauses: {[x.model_dump() for x in ctx.policy_chunks]}\n"
+        f"Retrieved regulations/guidelines: {[x.model_dump() for x in ctx.regulation_chunks]}\n"
+    )
+    try:
+        result = get_configured_llm().with_structured_output(CopilotAnalysis).invoke(prompt)
+        analysis = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    except Exception:
+        analysis = {"summary":"Copilot analysis is unavailable until relevant policy/regulatory evidence is indexed.",
+                    "coverage_observations":[],"risks":[],"evidence_gaps":[],"recommendation":"Review the claim manually.",
+                    "sources":[]}
+    state["copilot"] = analysis
+    state["knowledge_sources"] = [x.model_dump() for x in (*ctx.policy_chunks, *ctx.regulation_chunks)]
+    claim.pipeline_state = state
+    return analysis
