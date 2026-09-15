@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import { getAuthToken, clearAuthToken } from "../lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const title = (v?: string) => (v || "Unknown").replaceAll("_", " ").replace(/\\b\\w/g, c => c.toUpperCase());
+const title = (v?: string) => (v || "Unknown").replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
 const money = (v?: number) => v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
 
 type Claim = { ticket_id:string; status:string; insurance_type?:string; event_date?:string; event_location?:string; estimated_claim_amount?:number; priority?:string; assigned_adjuster_id?:string; assigned_adjuster_name?:string; claimant_confirmed?:boolean; policy_verified?:boolean; dynamic_requirements_complete?:boolean };
