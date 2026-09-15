@@ -22,5 +22,5 @@ def rerank(query:str,documents:list[dict],top_n:int=5)->list[dict]:
             doc["rerank_score"]=item.get("relevance_score")
             ranked.append(doc)
         return ranked or documents[:top_n]
-    except Exception:
-        return documents[:top_n]
+    except Exception as exc:
+        raise RuntimeError(f"Reranker service failed: {type(exc).__name__}") from exc
