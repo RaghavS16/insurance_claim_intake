@@ -43,7 +43,7 @@ async def upload_document(
         raise HTTPException(status_code=502,detail=f"Knowledge indexing failed: {exc}")
 
 @router.get("/search")
-def retrieve(q:str,user:User=Depends(require_role(["ADMIN","ADJUSTER"])),insurance_type:str|None=None,policy_number:str|None=None,document_type:str|None=None):
+def retrieve(q:str,user:User=Depends(require_role(["ADJUSTER"])),insurance_type:str|None=None,policy_number:str|None=None,document_type:str|None=None):
     try:
         return {"items":search(q,insurance_type=insurance_type,policy_number=policy_number,document_types=[document_type] if document_type else None),"query":q}
     except Exception as exc:
