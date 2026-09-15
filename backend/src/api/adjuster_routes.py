@@ -92,7 +92,6 @@ def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
 def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
     q=db.query(Claim).filter(Claim.status.in_(["submitted","assigned","under_review","pending_evidence"]))
     claims=q.order_by(Claim.updated_at.desc()).all()
-    _auto_assign_pending(claims, db)
     if user.role=="ADJUSTER":
         adjuster=db.query(Adjuster).filter(Adjuster.email==user.email).first()
         claims=[c for c in claims if adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(adjuster.id)]
@@ -117,10 +116,21 @@ def update_claim(ticket_id:str,payload:ClaimUpdate,user:User=Depends(_guard),db:
     if not c: raise HTTPException(status_code=404,detail="Claim not found.")
     if not _can_access_claim(c, user): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
-    if payload.priority: state["priority"]=payload.priority
-    if payload.note: state.setdefault("adjuster_notes",[]).append({"author":user.full_name,"note":payload.note})
-    if payload.status: c.status=payload.status
-    c.pipeline_state=state; db.commit(); db.refresh(c)
+    if payload.priority:
+        if payload.priority not in {"low","normal","high","urgent"}:
+            raise HTTPException(status_code=400, detail="Invalid priority.")
+        state["priority"]=payload.priority
+    if payload.note:
+        db.add(ClaimNote(claim_id=str(c.id), author_user_id=str(user.id), note=payload.note, visibility="internal"))
+    if payload.status:
+        try:
+            transition_claim(db, c, payload.status, str(user.id), "adjuster workflow update")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+    c.pipeline_state=state
+    db.add(ClaimAuditEvent(claim_id=str(c.id), actor_user_id=str(user.id), event_type="claim_updated",
+                           new_value_json={"priority":state.get("priority"),"status":c.status}))
+    db.commit(); db.refresh(c)
     return _item(c)
 
 @router.post("/claims/{ticket_id}/assign")
