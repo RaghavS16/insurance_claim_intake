@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 from src.config import settings
 
 _IS_PG = settings.DATABASE_URL.startswith("postgresql")
@@ -21,6 +22,33 @@ else:
 
 class Base(DeclarativeBase):
     pass
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    id: Mapped[str] = _UUID(primary_key=True)
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    source_uri: Mapped[str] = mapped_column(String, nullable=False)
+    document_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    insurance_type: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    policy_number: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    uploaded_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True)
+    metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    chunks: Mapped[list["KnowledgeChunk"]] = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+    id: Mapped[str] = _UUID(primary_key=True)
+    document_id: Mapped[str] = _UUID(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
+    document: Mapped["KnowledgeDocument"] = relationship("KnowledgeDocument", back_populates="chunks")
 
 class User(Base):
     __tablename__ = "users"
