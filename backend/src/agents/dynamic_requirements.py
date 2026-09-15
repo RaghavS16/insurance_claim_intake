@@ -48,6 +48,7 @@ def extract_answers(state: dict[str, Any]) -> None:
     utterance = str(state.get("last_user_utterance") or "").strip()
     if not remaining or not utterance:
         state["dynamic_missing"] = remaining
+        state["missing_evidence"] = missing_evidence(state)
         return
     prompt = (
         "Extract only claim-specific values that are explicitly present in the latest claimant utterance. "
