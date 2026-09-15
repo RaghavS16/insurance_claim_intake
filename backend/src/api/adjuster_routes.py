@@ -41,6 +41,30 @@ def _can_access_claim(c: Claim, user: User) -> bool:
         return True
     return str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
 
+
+
+def _resolve_adjuster(request: Request, db: Session) -> User:
+    from fastapi.security import HTTPAuthorizationCredentials
+    header=request.headers.get("authorization", "")
+    credentials=None
+    if header.lower().startswith("bearer "):
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials=header[7:])
+    user=get_current_user(request=request, credentials=credentials, db=db)
+    if user.role not in {"ADJUSTER", "ADMIN"}:
+        raise HTTPException(status_code=403, detail="Adjuster access required.")
+    return user
+
+def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster:
+    assigned_id=(claim.pipeline_state or {}).get("assigned_adjuster_id")
+    if user.role == "ADMIN":
+        a=db.query(Adjuster).filter(Adjuster.id == assigned_id).first()
+        if a: return a
+    if str(assigned_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+    a=db.query(Adjuster).filter(Adjuster.id == user.id).first()
+    if not a: raise HTTPException(status_code=403, detail="Adjuster profile not found.")
+    return a
+
 class ClaimUpdate(BaseModel):
     status: str|None=None
     priority: str|None=None
@@ -175,11 +199,11 @@ class NoteRequest(BaseModel):
 
 @router.get("/claims/{ticket_id}/assignment")
 def get_normalized_assignment(ticket_id: str, request: Request, db: Session = Depends(get_db)):
-    current_user = _guard(request, db)
+    current_user = _resolve_adjuster(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
-    (db.query(Adjuster).filter(Adjuster.id == current_user.id).first() if current_user.role == "ADJUSTER" else db.query(Adjuster).filter(Adjuster.id == (claim.pipeline_state or {}).get("assigned_adjuster_id")).first())
+    _ensure_assigned_adjuster(claim, current_user, db)
     a = db.execute(select(ClaimAssignment).where(
         ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
     )).scalar_one_or_none()
