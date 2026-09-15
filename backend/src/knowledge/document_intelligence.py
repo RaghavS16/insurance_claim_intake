@@ -6,6 +6,7 @@ from src.agents.llm_factory import get_configured_llm
 
 class DocumentMetadata(BaseModel):
     title: str = ""
+    document_type: str = "unknown"
     insurance_type: str | None = None
     policy_number: str | None = None
     effective_from: date | None = None
