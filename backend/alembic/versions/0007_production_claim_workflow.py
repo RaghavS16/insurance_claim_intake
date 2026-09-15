@@ -33,16 +33,16 @@ def upgrade():
         sa.Column("rationale",sa.Text(),nullable=False),sa.Column("approved_amount",sa.Numeric()),sa.Column("ai_recommendation_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
     op.create_index("ix_claim_decisions_claim","claim_decisions",["claim_id"])
     op.create_table("claim_notes",
-        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
+        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("author_user_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("users.id",ondelete="RESTRICT"),nullable=False),sa.Column("note",sa.Text(),nullable=False),sa.Column("visibility",sa.String(30),nullable=False,server_default="internal"),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
     op.create_index("ix_claim_notes_claim","claim_notes",["claim_id"])
     op.create_table("claim_audit_events",
-        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
+        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("actor_user_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("users.id",ondelete="SET NULL")),sa.Column("event_type",sa.String(100),nullable=False),
         sa.Column("old_value_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("new_value_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("reason",sa.Text()),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
     op.create_index("ix_claim_audit_events_claim","claim_audit_events",["claim_id"]); op.create_index("ix_claim_audit_events_type","claim_audit_events",["event_type"])
     op.create_table("copilot_analyses",
-        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",sa.String(),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
+        sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("claim_version",sa.Integer(),nullable=False,server_default="1"),sa.Column("knowledge_version",sa.String(200),nullable=False,server_default="unknown"),
         sa.Column("model",sa.String(200),nullable=False),sa.Column("prompt_version",sa.String(100),nullable=False,server_default="v1"),
         sa.Column("result_json",sa.JSON(),nullable=False,server_default="{}"),sa.Column("citations_json",sa.JSON(),nullable=False,server_default="[]"),sa.Column("stale",sa.Boolean(),nullable=False,server_default=sa.false()),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
