@@ -8,7 +8,7 @@ from langgraph.graph import END, StateGraph
 from src.agents import nodes
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
-from src.agents.dynamic_requirements import build_dynamic_context, unresolved_requirements
+from src.agents.dynamic_requirements import build_dynamic_context, unresolved_requirements, extract_dynamic_answers
 
 
 _RESPONSE_SYSTEM_PROMPT = """You are the conversation planner for a voice-first insurance claim assistant.
@@ -116,6 +116,7 @@ def _model_response(state: ClaimState) -> str:
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
+        f"Still-needed claim-specific requirements: {state.get('unresolved_requirements', [])}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
         f"Latest claimant utterance: {state.get('last_user_utterance', '')}\n\n"
@@ -141,6 +142,10 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["dynamic_requirements"] = ctx.get("requirements", [])
         state["knowledge_sources"] = ctx.get("sources", [])
         state["unresolved_requirements"] = unresolved_requirements(state)
+        state = extract_dynamic_answers(state)
+        if state.get("unresolved_requirements"):
+            state["awaiting_confirmation"] = False
+            state["conversation_status"] = "collecting_dynamic"
     return state
 
 
@@ -150,6 +155,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
 
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
+    dynamic_missing = list(state.get("unresolved_requirements", []))
 
     # Confirmation is deliberately grounded and deterministic: the model must not invent or
     # rephrase claim facts at the point where the claimant is asked to verify them.
@@ -159,7 +165,10 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["message"] = state["next_question"]
         return state
 
-    state["next_question_field"] = missing[0] if missing else "confirmation"
+    if not missing and dynamic_missing:
+        state["next_question_field"] = dynamic_missing[0].get("key", "dynamic_requirement")
+    else:
+        state["next_question_field"] = missing[0] if missing else "confirmation"
     state["next_question"] = _model_response(state)
     state["message"] = state["next_question"]
     return state
