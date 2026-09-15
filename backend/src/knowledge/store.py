@@ -30,10 +30,21 @@ def ingest_document(*,content:bytes,filename:str,document_type:str|None=None,ins
     policy_number=policy_number or meta.policy_number
     effective_from=effective_from or (meta.effective_from.isoformat() if meta.effective_from else None)
     effective_to=effective_to or (meta.effective_to.isoformat() if meta.effective_to else None)
-    s3=put_bytes(content,prefix=settings.S3_KNOWLEDGE_PREFIX,filename=filename,content_type="application/pdf" if filename.lower().endswith(".pdf") else "text/plain")
+    content_sha256=content_sha256
+    db=SessionLocal()
+    try:
+        existing=db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256==content_sha256).first()
+        if existing:
+            return {"document_id":existing.id,"source_name":existing.source_name,"source_uri":existing.source_uri,
+                    "chunks":len(existing.chunks),"insurance_type":existing.insurance_type,
+                    "policy_number":existing.policy_number,"duplicate":True}
+    finally:
+        db.close()
+    # Embed before upload so failed embedding cannot leave an orphan S3 object.
     chunks=_chunks(text); vectors=[]
     for start in range(0,len(chunks),16): vectors.extend(embed_documents(chunks[start:start+16]))
     if len(vectors)!=len(chunks): raise RuntimeError("Embedding service returned an incomplete batch.")
+    s3=put_bytes(content,prefix=settings.S3_KNOWLEDGE_PREFIX,filename=filename,content_type="application/pdf" if filename.lower().endswith(".pdf") else "text/plain")
     db=SessionLocal()
     try:
         def as_date(v): return date.fromisoformat(v) if v else None
