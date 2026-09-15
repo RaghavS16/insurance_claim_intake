@@ -153,8 +153,14 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["dynamic_missing"] = []
         return state
     context = build_dynamic_context(state)
+    state["rag_status"] = context.get("status", "UNKNOWN")
     state["dynamic_requirements"] = context.get("requirements", [])
     state["knowledge_context"] = context
+    if not context.get("available", False):
+        state["dynamic_missing"] = [{"key": "__rag_unavailable__", "label": "claim-specific knowledge retrieval", "required": True}]
+        state["missing_evidence"] = []
+        state["conversation_status"] = "waiting_for_knowledge"
+        return state
     extract_answers(state)
     if state.get("dynamic_missing") or state.get("missing_evidence"):
         state["awaiting_confirmation"] = False
@@ -175,7 +181,9 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
         state["message"] = state["next_question"]
         return state
-    if missing:
+    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing:
+        state["next_question_field"] = "knowledge"
+    elif missing:
         state["next_question_field"] = missing[0]
     elif dynamic_missing:
         state["next_question_field"] = dynamic_missing[0].get("key")
@@ -183,7 +191,10 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
     else:
         state["next_question_field"] = "confirmation"
-    state["next_question"] = _model_response(state)
+    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing:
+        state["next_question"] = "I have the baseline claim details. I’m checking the claim-specific policy requirements before we continue."
+    else:
+        state["next_question"] = _model_response(state)
     if missing_evidence and not dynamic_missing:
         item = missing_evidence[0]
         state["next_question"] = f"Please upload the {str(item.get('label', 'supporting document')).lower()} when you have it, and then we can continue."
