@@ -10,6 +10,10 @@ from src.utils.logger import app_logger
 
 logger = app_logger
 
+_DEFAULT_CLOUD_FALLBACK_MODELS = [
+    "openrouter/free",
+]
+
 
 def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
     try:
@@ -59,8 +63,9 @@ def get_configured_llm() -> BaseChatModel:
             base_url=settings.CLOUD_LLM_BASE_URL,
             temperature=0,
             max_tokens=700,
-            max_retries=0,
+            max_retries=1,
             timeout=timeout,
+            extra_body={"models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()] or _DEFAULT_CLOUD_FALLBACK_MODELS},
         )
     resolved_model = _resolve_ollama_model(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
     return ChatOllama(
