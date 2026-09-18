@@ -760,6 +760,8 @@ export default function ClaimantPage() {
               submittingClaim={submittingClaim}
               confirmed={confirmed}
               submitted={claimSubmitted}
+              missingEvidence={missingEvidence}
+              evidenceItems={evidenceItems}
               ticketId={ticketId}
             />
           </div>
