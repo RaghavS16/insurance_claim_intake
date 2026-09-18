@@ -445,15 +445,18 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     state = dict(claim.pipeline_state or {})
     evidence = list(state.get("evidence") or [])
     outstanding = missing_evidence(state)
-    if evidence_key:
-        requested = next((r for r in outstanding if str(r.get("key")) == str(evidence_key)), None)
-        if requested is None:
-            raise HTTPException(status_code=400, detail="That evidence requirement is not currently outstanding.")
-    elif outstanding:
-        requested = outstanding[0]
-        evidence_key = requested.get("key")
-    else:
+    if not outstanding:
         raise HTTPException(status_code=400, detail="There are no outstanding evidence requirements for this claim.")
+    if evidence_key:
+        candidates = [r for r in outstanding if str(r.get("key")) == str(evidence_key)]
+        if not candidates:
+            raise HTTPException(status_code=400, detail="That evidence requirement is not currently outstanding.")
+    else:
+        # When the claimant uploads without selecting a requirement, compare the
+        # document against every outstanding evidence requirement. This prevents a
+        # valid travel bill from being incorrectly tested only against an unrelated
+        # hospital-bill requirement.
+        candidates = outstanding
 
     # Resolve the durable requirement when available so adjusters can trace evidence
     # back to the exact generated requirement and its provenance.
@@ -484,13 +487,33 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Evidence storage is unavailable: {exc}")
 
-    analysis = await asyncio.to_thread(
-        verify_evidence,
-        content=content,
-        filename=file.filename,
-        requested_evidence=requested,
-        claim_context=claim_context,
-    )
+    analyses = []
+    for candidate in candidates:
+        candidate_analysis = await asyncio.to_thread(
+            verify_evidence,
+            content=content,
+            filename=file.filename,
+            requested_evidence=candidate,
+            claim_context=claim_context,
+        )
+        candidate_analysis["_candidate_key"] = candidate.get("key")
+        candidate_analysis["_candidate"] = candidate
+        analyses.append(candidate_analysis)
+
+    # Prefer a high-confidence verified match; otherwise preserve the strongest
+    # diagnostic result for claimant feedback without ever treating upload presence
+    # as satisfaction.
+    verified = [a for a in analyses if str(a.get("verification_status")).upper() == "VERIFIED"]
+    if verified:
+        analysis = max(verified, key=lambda a: float(a.get("confidence") or 0.0))
+    else:
+        analysis = max(
+            analyses,
+            key=lambda a: (float(a.get("confidence") or 0.0),
+                           1 if str(a.get("verification_status")).upper() == "REVIEW_REQUIRED" else 0),
+        )
+    requested = analysis["_candidate"]
+    evidence_key = str(requested.get("key"))
     verification_status = str(analysis.get("verification_status", "REVIEW_REQUIRED")).upper()
     item_id = str(uuid.uuid4())
     item = {
