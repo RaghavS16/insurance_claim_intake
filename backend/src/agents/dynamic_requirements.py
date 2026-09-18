@@ -42,13 +42,20 @@ def unresolved(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
-    """Return required evidence upload items that have not been uploaded yet."""
+    """Return required evidence that has not been VERIFIED.
+
+    An upload, filename match, or pending review never satisfies a requirement.
+    """
     requirements = state.get("dynamic_requirements") or []
     evidence = state.get("evidence") or []
-    uploaded_keys = {str(e.get("evidence_key")) for e in evidence if e.get("evidence_key")}
+    verified_keys = {
+        str(e.get("evidence_key"))
+        for e in evidence
+        if e.get("evidence_key") and str(e.get("verification_status") or "").upper() == "VERIFIED"
+    }
     return [
         r for r in requirements
-        if r.get("required", True) and r.get("evidence_type") and r.get("key") not in uploaded_keys
+        if r.get("required", True) and r.get("evidence_type") and str(r.get("key")) not in verified_keys
     ]
 
 
