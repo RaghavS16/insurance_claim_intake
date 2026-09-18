@@ -36,7 +36,7 @@ def upgrade():
         sa.Column("document_id",sa.String(),sa.ForeignKey("knowledge_documents.id",ondelete="CASCADE"),nullable=False),
         sa.Column("chunk_index",sa.Integer(),nullable=False),
         sa.Column("text",sa.Text(),nullable=False),
-        sa.Column("embedding",Vector(1024),nullable=False),
+        sa.Column("embedding",Vector(768),nullable=False),
         sa.Column("metadata_json",sa.JSON(),nullable=False,server_default="{}"),
     )
     op.create_index("ix_knowledge_chunks_document_id","knowledge_chunks",["document_id"])

@@ -54,7 +54,12 @@ Confirmation/rejection creates no new facts unless the same utterance explicitly
 A policy identifier normally contains digits. Never turn generic words into a policy value.
 Return concise structured changes; spoken_reply is advisory only.
 """
-_GENERIC_POLICY_WORDS = {"IDEA", "ID", "NUMBER", "NO", "IS", "MY", "POLICY", "TYPE", "THE", "A"}
+_GENERIC_POLICY_WORDS = {
+    "IDEA", "ID", "NUMBER", "NO", "IS", "MY", "POLICY", "TYPE", "THE", "A", "AN",
+    "IN", "AT", "ON", "FOR", "TO", "OF", "BY", "AND", "OR", "IT", "WAS", "ARE", "BE",
+    "HAVE", "HAD", "LIKE", "ABOUT", "AROUND", "ESTIMATE", "RUPEES", "INR", "RS", "CLAIM",
+    "DATE", "LOCATION", "PLACE", "DAMAGE", "COST", "LOSS", "BIKE", "CAR", "ACCIDENT", "INCIDENT"
+}
 _SOCIAL_EXACT = {"hi", "hello", "hey", "thanks", "thank you", "thx", "bye", "goodbye", "ok", "okay", "great", "fine", "perfect", "sure", "got it", "alright", "all right", "yes", "yeah", "yep", "no", "nope"}
 _INCIDENT_TERMS = re.compile(r"\b(accident|crash|collision|damage|damaged|stolen|theft|lost|loss|fire|flood|injur|hospital|burglary|break[- ]?in|leak|broken|fell|hit|destroyed|ransomware|phishing|breach)\b", re.I)
 
@@ -128,18 +133,35 @@ def _deterministic_type(text: str) -> Optional[str]:
 
 def _clean_policy_candidate(value: Any) -> Optional[str]:
     if not isinstance(value, str): return None
-    raw = value.strip().upper(); raw = re.sub(r"^(?:MY\s+)?POLICY\s*(?:NUMBER|NO\.?|ID|IDENTIFIER)?\s*(?:IS|:)?\s*", "", raw, flags=re.I).strip(); raw = re.sub(r"\s+", "-", raw); clean = re.sub(r"[^A-Za-z0-9_-]", "", raw).upper()
-    if len(clean) < 3 or clean in _GENERIC_POLICY_WORDS or not re.search(r"\d", clean): return None
+    raw = value.strip().upper()
+    raw = re.sub(r"^(?:MY\s+)?POLICY\s*(?:NUMBER|NO\.?|ID|IDENTIFIER)?\s*(?:IS|:)?\s*", "", raw, flags=re.I).strip()
+    raw = re.sub(r"\s+", "-", raw)
+    clean = re.sub(r"[^A-Za-z0-9_-]", "", raw).upper()
+    if len(clean) < 3 or not re.search(r"\d", clean): return None
+    # Check if the prefix (letters before hyphen/digits) or the whole token is a generic word
+    prefix_match = re.match(r"^([A-Za-z]+)[-_]?\d+", clean)
+    if prefix_match and prefix_match.group(1) in _GENERIC_POLICY_WORDS:
+        return None
+    if clean in _GENERIC_POLICY_WORDS:
+        return None
     return clean
 
 def _deterministic_policy(text: str) -> Optional[str]:
-    for pattern in (r"\bpolicy\s*(?:number|no\.?|id|identifier)?\s*(?:is|:)?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})", r"\bpolicy\s*(?:is|:)\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})"):
+    # Check explicit policy statements first (e.g. "policy number is POL-1409-XI", "policy is ABC-1234")
+    for pattern in (
+        r"\bpolicy\s*(?:number|no\.?|id|identifier)?\s*(?:is|:)?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})",
+        r"\bpolicy\s*(?:is|:)\s*([A-Za-z0-9][A-Za-z0-9_-]{2,})"
+    ):
         match = re.search(pattern, text, re.I)
         if match:
             candidate = _clean_policy_candidate(match.group(1))
             if candidate: return candidate
-    for pattern in (r"\b([A-Za-z]{2,5}[-_ ]?\d{3,8}(?:[-_ ][A-Za-z0-9]{1,4})?)\b", r"\b([A-Za-z0-9]{2,8}[-_]\d{2,8}(?:[-_][A-Za-z0-9]{1,4})?)\b", r"\b([A-Za-z]{2,5}\d{3,8}[A-Za-z0-9]{0,4})\b"):
-        for match in re.finditer(pattern, text):
+    # Standalone policy codes (must start with known policy prefixes like POL-, MOT-, HLT-, TRV-, CYB-, HOM-, AUTO-, VEH-, etc.)
+    for pattern in (
+        r"\b((?:POL|MOT|HLT|TRV|CYB|HOM|AUTO|VEH|INS|LIC|BAJAJ|HDFC|ICICI|TATA|SBI|STAR)[-_ ]?\d{2,8}(?:[-_ ][A-Za-z0-9]{1,6})?)\b",
+        r"\b([A-Za-z]{3,6}[-_]\d{3,8}(?:[-_][A-Za-z0-9]{1,6})?)\b"
+    ):
+        for match in re.finditer(pattern, text, re.I):
             candidate = _clean_policy_candidate(match.group(1))
             if candidate: return candidate
     return None
@@ -190,20 +212,35 @@ def _rule_changes(raw: str, state: ClaimState) -> List[FieldChange]:
     current = state.get("extracted_data", {}); changes: List[FieldChange] = []; low = raw.strip().lower().strip(" .!?")
     if low in _SOCIAL_EXACT and len(low.split()) <= 4: return changes
     ref = date.today(); d = _deterministic_date(raw, ref)
-    if d and not current.get("event_date"): changes.append(FieldChange(field="event_date", operation="set", value=d, evidence=raw, confidence=.99))
+    if d:
+        old_d = current.get("event_date")
+        op = "replace" if old_d and old_d != d else "set"
+        if not old_d or old_d != d:
+            changes.append(FieldChange(field="event_date", operation=op, value=d, evidence=raw, confidence=.99))
     policy = _deterministic_policy(raw)
     if policy:
-        old = current.get("policy_id"); op = "replace" if old and _policy_is_suspicious(old) else ("set" if not old else "ignore"); changes.append(FieldChange(field="policy_id", operation=op, value=policy, evidence=raw, confidence=.99))
+        old_p = current.get("policy_id")
+        op = "replace" if old_p and old_p != policy else "set"
+        if not old_p or old_p != policy:
+            changes.append(FieldChange(field="policy_id", operation=op, value=policy, evidence=raw, confidence=.99))
     itype = _deterministic_type(raw)
-    if itype and not current.get("insurance_type"): changes.append(FieldChange(field="insurance_type", operation="set", value=itype, evidence=raw, confidence=.95))
+    if itype:
+        old_t = current.get("insurance_type")
+        op = "replace" if old_t and old_t != itype else "set"
+        if not old_t or old_t != itype:
+            changes.append(FieldChange(field="insurance_type", operation=op, value=itype, evidence=raw, confidence=.95))
     amount = _deterministic_amount(raw)
     if amount is not None:
-        old_amount = current.get("estimated_claim_amount"); replace_amount = old_amount not in (None, "", UNKNOWN_SENTINEL) and bool(re.search(r"\b(?:actually|sorry|wrong|incorrect|correction|correct|instead|change|make it|update|revised?)\b", low))
-        if old_amount in (None, "", UNKNOWN_SENTINEL) or replace_amount: changes.append(FieldChange(field="estimated_claim_amount", operation="replace" if replace_amount else "set", value=amount, evidence=raw, confidence=.99))
+        old_amount = current.get("estimated_claim_amount")
+        replace_amount = old_amount not in (None, "", UNKNOWN_SENTINEL)
+        if old_amount in (None, "", UNKNOWN_SENTINEL) or old_amount != amount:
+            changes.append(FieldChange(field="estimated_claim_amount", operation="replace" if replace_amount else "set", value=amount, evidence=raw, confidence=.99))
     location = _deterministic_location(raw)
     if location:
-        old_location = current.get("event_location"); replace_location = old_location not in (None, "", UNKNOWN_SENTINEL) and bool(re.search(r"\b(?:actually|sorry|wrong|incorrect|instead|correct|change|update|revised?)\b", low))
-        if old_location in (None, "", UNKNOWN_SENTINEL) or replace_location: changes.append(FieldChange(field="event_location", operation="replace" if replace_location else "set", value=location, evidence=raw, confidence=.92))
+        old_location = current.get("event_location")
+        replace_location = old_location not in (None, "", UNKNOWN_SENTINEL)
+        if old_location in (None, "", UNKNOWN_SENTINEL) or old_location != location:
+            changes.append(FieldChange(field="event_location", operation="replace" if replace_location else "set", value=location, evidence=raw, confidence=.92))
     return changes
 
 def _merge_change(state: ClaimState, change: FieldChange, turn: int) -> bool:
@@ -245,29 +282,38 @@ def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldCh
 
 
 def conversation_turn_processor(state: ClaimState) -> ClaimState:
-    raw = (state.get("claim_text") or "").strip(); state["last_user_utterance"] = raw; state["turn_number"] = int(state.get("turn_number") or 0) + 1
-    state.setdefault("conversation_history", []).append({"turn":state["turn_number"],"speaker":"user","text":raw}); state.setdefault("extracted_data", {}); state.setdefault("field_status", {}); state.setdefault("field_metadata", {}); state.setdefault("audit_log", []); state["recently_extracted_fields"] = []; state["extraction_changes"] = []; state["_skip_all"] = False; state["_confirmation_pending"] = False; state["_rejection_active"] = False; state.setdefault("consecutive_field_retries", {})
-    if not raw: state["last_intent"] = "filler"; state["_skip_all"] = True; return state
+    raw = (state.get("claim_text") or "").strip()
+    state["last_user_utterance"] = raw
+    state["turn_number"] = (state.get("turn_number") or 0) + 1
+    state.setdefault("conversation_history", []).append(
+        {"turn": state["turn_number"], "speaker": "user", "text": raw}
+    )
+    state.setdefault("extracted_data", {})
+    state.setdefault("field_status", {})
+    state.setdefault("field_metadata", {})
+    state.setdefault("audit_log", [])
+    state["recently_extracted_fields"] = []
+    state["extraction_changes"] = []
+    state["_skip_all"] = False
+    state["_confirmation_pending"] = False
+    state["_rejection_active"] = False
+    state.setdefault("consecutive_field_retries", {})
+    if not raw:
+        state["last_intent"] = "filler"
+        state["_skip_all"] = True
+        return state
     awaiting = bool(state.get("awaiting_confirmation")); low = raw.lower().strip(" .!?")
     if low in _SOCIAL_EXACT or (re.search(r"\b(human|person|representative|agent|adjuster)\b", low) and re.search(r"\b(speak|talk|connect|transfer)\b", low)):
         intent = _fallback_intent(raw, awaiting); state["last_intent"] = intent; state["spoken_response"] = ""
         if intent in {"greeting", "gratitude", "closing", "filler", "escalation"}:
             state["_skip_all"] = True; responses = {"greeting":"Hi. Tell me what happened and I'll collect the claim details as we go.","gratitude":"You're welcome. Tell me what happened whenever you're ready.","closing":"Okay. We can continue whenever you're ready.","filler":"I'm listening. Tell me what happened whenever you're ready.","escalation":"I understand. I'll connect you with a human claims specialist who can help you directly."}; state["next_question"] = responses[intent]; state["message"] = state["next_question"]
             if intent == "escalation": state["escalate_to_human"] = True; state["escalation_reason"] = "user_requested"; state["conversation_status"] = "escalated"
-        elif awaiting and intent in {"confirmation", "rejection"}:
-            if intent == "confirmation": state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
-            else: state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"; state["next_question"] = "No problem. Tell me what you'd like to correct."; state["message"] = state["next_question"]
-        return state
-
-    # Confirmation and rejection are deterministic even when the utterance is a
-    # natural sentence rather than an exact "yes"/"no" response.
-    if awaiting and _fallback_intent(raw, True) in {"confirmation", "rejection"} and not re.search(r"\b(?:sorry|wrong|incorrect|mistake|correction|corrected|instead|change|update|revised?)\b", low):
-        intent = _fallback_intent(raw, True); state["last_intent"] = intent; state["spoken_response"] = ""
-        if intent == "confirmation":
-            state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"; state["_skip_all"] = True; state["next_question"] = "Thanks. I’ve confirmed those details. I’ll verify the policy next."; state["message"] = state["next_question"]
-        else:
-            state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"; state["_skip_all"] = True; state["next_question"] = "No problem. Tell me which detail you'd like to correct."; state["message"] = state["next_question"]
-        return state
+            return state
+        elif awaiting and intent == "confirmation":
+            state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
+        elif awaiting and intent == "rejection":
+            state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"
+            state["_rejection_active"] = True
 
     deterministic = _rule_changes(raw, state); deterministic_fields = {c.field for c in deterministic}; patch: Optional[ExtractionPatch] = None
     if not deterministic:
@@ -275,7 +321,7 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
         patch = _invoke_structured(_get_llm(), prompt, ExtractionPatch)
         if patch is None: patch = ExtractionPatch(intent=_fallback_intent(raw, awaiting), changes=[])
     else:
-        patch = ExtractionPatch(intent="correction" if re.search(r"\b(?:actually|sorry|wrong|incorrect|change|update|instead|revised?)\b", low) else "claim_detail", changes=[])
+        patch = ExtractionPatch(intent="correction" if re.search(r"\b(?:actually|sorry|wrong|incorrect|change|update|instead|revised?|no)\b", low) else "claim_detail", changes=[])
     state["last_intent"] = patch.intent; state["spoken_response"] = ""
     model_changes = [c for c in patch.changes if c.field not in deterministic_fields]
     for raw_change in deterministic + model_changes:
@@ -285,7 +331,7 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     if not state["recently_extracted_fields"] and re.match(r"^(what|why|how|when|where|can|could|will|do|does|is|are)\b", low): state["last_intent"] = "question"
     target_before = state.get("next_question_field") or (state.get("missing_fields") or [None])[0]
     if not state["recently_extracted_fields"] and state["last_intent"] in {"claim_detail", "unclear", "filler"} and isinstance(target_before, str):
-        retries = state.setdefault("consecutive_field_retries", {}); retries[target_before] = int(retries.get(target_before, 0)) + 1
+        retries = state.setdefault("consecutive_field_retries", {}); retries[target_before] = retries.get(target_before, 0) + 1
         if retries[target_before] >= 3:
             state.setdefault("unknown_fields", [])
             if target_before not in state["unknown_fields"]: state["unknown_fields"].append(target_before)
@@ -309,19 +355,46 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
 def claim_extractor(state: ClaimState) -> ClaimState: return state
 
 def mandatory_field_checker(state: ClaimState) -> ClaimState:
-    if state.get("_skip_all"): return state
-    data = state.get("extracted_data", {}); statuses = dict(state.get("field_status", {})); metadata = state.setdefault("field_metadata", {}); missing: List[str] = []
+    if state.get("_skip_all"):
+        return state
+    data = state.get("extracted_data", {})
+    statuses = dict(state.get("field_status", {}))
+    metadata = state.setdefault("field_metadata", {})
+    missing: List[str] = []
     for field in REQUIRED_FIELDS:
         value = data.get(field)
-        if value in (None, "", UNKNOWN_SENTINEL): statuses[field] = "missing"; missing.append(field)
-        else: statuses[field] = statuses.get(field, "provided"); metadata.setdefault(field, {"status":statuses[field],"confidence":1.0})
-    state["missing_fields"] = missing; state["field_status"] = statuses
-    confidences = [float(metadata.get(f, {}).get("confidence", 0.0)) for f in REQUIRED_FIELDS if f not in missing]
-    state["extraction_confidence"] = round(min(confidences), 2) if len(confidences) == len(REQUIRED_FIELDS) else round(sum(confidences)/len(confidences), 2) if confidences else 0.0
-    if state.get("confirmed"): state["conversation_status"] = "pending_verification"; state["awaiting_confirmation"] = False
-    elif state.get("_rejection_active") and state.get("awaiting_confirmation"): state["conversation_status"] = "collecting"; state["awaiting_confirmation"] = False; state["confirmed"] = False
-    elif not missing: state["conversation_status"] = "reviewing"; state["awaiting_confirmation"] = True
-    else: state["conversation_status"] = "collecting"; state["awaiting_confirmation"] = False
+        if value in (None, "", UNKNOWN_SENTINEL):
+            statuses[field] = "missing"
+            missing.append(field)
+        else:
+            statuses[field] = statuses.get(field, "provided")
+            metadata.setdefault(field, {"status": statuses[field], "confidence": 1.0})
+    state["missing_fields"] = missing
+    state["field_status"] = statuses
+    confidences = [
+        float(metadata.get(f, {}).get("confidence", 0.0))
+        for f in REQUIRED_FIELDS
+        if f not in missing
+    ]
+    if len(confidences) == len(REQUIRED_FIELDS):
+        state["extraction_confidence"] = round(min(confidences), 2)
+    elif confidences:
+        state["extraction_confidence"] = round(sum(confidences) / len(confidences), 2)
+    else:
+        state["extraction_confidence"] = 0.0
+    if state.get("confirmed"):
+        state["conversation_status"] = "pending_verification"
+        state["awaiting_confirmation"] = False
+    elif state.get("_rejection_active") and state.get("awaiting_confirmation"):
+        state["conversation_status"] = "collecting"
+        state["awaiting_confirmation"] = False
+        state["confirmed"] = False
+    elif not missing:
+        state["conversation_status"] = "reviewing"
+        state["awaiting_confirmation"] = True
+    else:
+        state["conversation_status"] = "collecting"
+        state["awaiting_confirmation"] = False
     return state
 
 def _confirmation_summary(data: Dict[str, Any]) -> str:

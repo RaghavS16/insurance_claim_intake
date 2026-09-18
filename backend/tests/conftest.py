@@ -1,176 +1,91 @@
 """
-Pytest configuration and test database fixtures for Phase 1.
-
-Sets up an isolated temporary SQLite database per test session, seeds canonical policies
-and adjusters for all 6 supported insurance types, and configures mock fallbacks.
+Shared test fixtures and configuration for all edge-case tests.
 """
 import os
-import uuid
-import tempfile
-from datetime import date
-from pathlib import Path
-
 import pytest
-from fastapi.testclient import TestClient
-from langchain_ollama import ChatOllama
-from sqlalchemy.orm import sessionmaker
+from unittest.mock import MagicMock, patch
 
-# 1. Setup isolated temporary SQLite test database
-_tmp_db_path = Path(tempfile.gettempdir()) / f"test_claims_{uuid.uuid4().hex[:8]}.db"
-SQLITE_URL = f"sqlite:///{_tmp_db_path}"
-os.environ["DATABASE_URL"] = SQLITE_URL
-os.environ["ENVIRONMENT"] = "test"
+# Ensure test environment before importing anything from src
+os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-32chars!")
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-# 2. Import application models and session
-from src.config import settings  # noqa: E402
-from src.api.main import app  # noqa: E402
-from src.database.models import Base, Policy, Adjuster, User  # noqa: E402
-from src.database.session import get_db, engine as app_engine  # noqa: E402
-from src.utils.auth import get_password_hash  # noqa: E402
-
-# 3. Create tables using the test engine
-Base.metadata.create_all(bind=app_engine)
-TestingSessionLocal = sessionmaker(bind=app_engine, autoflush=False, autocommit=False)
-
-
-def _seed_db(db):
-    """Insert canonical test policies and adjusters for the 6 supported insurance types."""
-    test_policies = [
-        ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True),
-        ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True),
-        ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True),
-        ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True),
-        ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True),
-        ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True),
-        ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True),
-        ("EXP-0001", "motor", 300000, 5000, date(2020, 1, 1), date(2022, 12, 31), False),
-    ]
-
-    claimant_id = "TEST_USER_ID"
-    if not db.query(User).filter(User.id == claimant_id).first():
-        db.add(User(
-            id=claimant_id,
-            full_name="Test Claimant",
-            email="claimant@test.com",
-            password_hash=get_password_hash("password123"),
-            role="CLAIMANT",
-            status="active"
-        ))
-
-    admin_id = "TEST_ADMIN_ID"
-    if not db.query(User).filter(User.id == admin_id).first():
-        db.add(User(
-            id=admin_id,
-            full_name="Test Admin",
-            email="admin@test.com",
-            password_hash=get_password_hash("AdminPassword123!"),
-            role="ADMIN",
-            status="active"
-        ))
-
-    for pol_num, ptype, cov, ded, eff, exp, active in test_policies:
-        if db.query(Policy).filter(Policy.policy_number == pol_num).first() is None:
-            c_id = claimant_id if pol_num == "XYZ123" else (None if pol_num == "MOT-5521" else str(uuid.uuid4()))
-            db.add(Policy(
-                id=str(uuid.uuid4()),
-                policy_number=pol_num,
-                customer_id=c_id,
-                policy_type=ptype,
-                coverage_amount=cov,
-                deductible=ded,
-                effective_date=eff,
-                expiry_date=exp,
-                is_active=active,
-                policyholder_name="Test Policyholder",
-                policyholder_dob=date(1990, 5, 15),
-                policyholder_phone_last4="1234",
-                link_attempts=0,
-            ))
-
-    test_adjusters = [
-        ("motor",         "Priya Sharma",   "priya@insure.co", "+91 98450 10101"),
-        ("home",          "Rohan Mehta",    "rohan@insure.co", "+91 98450 10102"),
-        ("health",        "Dr. Anita Roy",  "anita@insure.co", "+91 98450 10103"),
-        ("senior_health", "Dr. V. Rao",     "rao@insure.co",   "+91 98450 10104"),
-        ("travel",        "Vikram Sen",     "vikram@insure.co", "+91 98450 10105"),
-        ("cyber",         "Neha Kapoor",    "neha@insure.co",  "+91 98450 10106"),
-    ]
-
-    for spec, name, email, phone in test_adjusters:
-        adj = db.query(Adjuster).filter(Adjuster.email == email).first()
-        uid = adj.id if adj else str(uuid.uuid4())
-        
-        usr = db.query(User).filter(User.email == email).first()
-        if not usr:
-            db.add(User(
-                id=uid,
-                full_name=name,
-                email=email,
-                phone=phone,
-                password_hash=get_password_hash("AdjusterPassword123!"),
-                role="ADJUSTER",
-                status="active"
-            ))
-        
-        if not adj:
-            db.add(Adjuster(
-                id=uid,
-                name=name,
-                email=email,
-                phone=phone,
-                specialization=spec,
-                claims_assigned=0,
-                is_active=True,
-            ))
-
-    db.commit()
-
-
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_db():
-    """Seed test DB before running test suite and clean up temporary SQLite file afterwards."""
-    db = TestingSessionLocal()
-    _seed_db(db)
-    db.close()
-    yield
-    try:
-        _tmp_db_path.unlink(missing_ok=True)
-    except Exception:
-        pass
+# ---------------------------------------------------------------------------
+# Settings patch – use a lightweight in-memory config for all tests
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def patch_settings(monkeypatch):
+    """Patch settings to use safe test values without touching real .env."""
+    from src.config import settings
+    monkeypatch.setattr(settings, "ENVIRONMENT", "test")
+    monkeypatch.setattr(settings, "SECRET_KEY", "test-secret-key-at-least-32-chars!!")
+    monkeypatch.setattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 60)
+    monkeypatch.setattr(settings, "OTP_LENGTH", 6)
+    monkeypatch.setattr(settings, "OTP_EXPIRY_MINUTES", 10)
+    monkeypatch.setattr(settings, "SMTP_HOST", None)
+    monkeypatch.setattr(settings, "REDIS_URL", None)
 
 
 @pytest.fixture
-def db():
-    session = TestingSessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+def mock_db():
+    """A MagicMock SQLAlchemy session."""
+    return MagicMock()
 
 
-@pytest.fixture(autouse=True)
-def mock_offline_llm(monkeypatch):
-    """
-    Mock ChatOllama.invoke to test deterministic rule-based fallback extraction during unit tests.
-    """
-    def mock_invoke(self, prompt, *args, **kwargs):
-        raise ConnectionError("Ollama offline in test runner")
+@pytest.fixture
+def make_user():
+    """Factory for creating mock User objects."""
+    from src.database.models import User
 
-    monkeypatch.setattr(ChatOllama, "invoke", mock_invoke)
+    def _make(role="CLAIMANT", uid="user-1", email="test@example.com"):
+        u = MagicMock(spec=User)
+        u.id = uid
+        u.role = role
+        u.email = email
+        u.full_name = "Test User"
+        return u
+
+    return _make
 
 
-@pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:
-        yield c
+@pytest.fixture
+def make_claim():
+    """Factory for creating mock Claim objects."""
+    from src.database.models import Claim
+
+    def _make(
+        ticket_id="CLAIM-ABCD1234",
+        status="draft",
+        claimant_id="user-1",
+        customer_id=None,
+        insurance_type="motor",
+        pipeline_state=None,
+    ):
+        c = MagicMock(spec=Claim)
+        c.id = "claim-uuid-1"
+        c.ticket_id = ticket_id
+        c.status = status
+        c.claimant_id = claimant_id
+        c.customer_id = customer_id
+        c.insurance_type = insurance_type
+        c.pipeline_state = pipeline_state or {}
+        return c
+
+    return _make
+
+
+@pytest.fixture
+def make_adjuster():
+    """Factory for creating mock Adjuster objects."""
+    from src.database.models import Adjuster
+
+    def _make(adj_id="adj-1", name="John Doe", specialization="motor", is_active=True, claims_assigned=0):
+        a = MagicMock(spec=Adjuster)
+        a.id = adj_id
+        a.name = name
+        a.specialization = specialization
+        a.is_active = is_active
+        a.claims_assigned = claims_assigned
+        return a
+
+    return _make

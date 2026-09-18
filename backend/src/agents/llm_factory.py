@@ -62,7 +62,7 @@ def get_configured_llm() -> BaseChatModel:
             api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
             base_url=settings.CLOUD_LLM_BASE_URL,
             temperature=0,
-            max_tokens=700,
+            max_tokens=2048,
             max_retries=1,
             timeout=timeout,
         )

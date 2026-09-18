@@ -2,9 +2,8 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { ClaimantSidebar, ClaimSummary } from "@/components/claimant/ClaimantSidebar";
-import { getAuthToken, clearAuthToken } from "../lib/auth";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { getAuthToken, clearAuthToken, verifySessionOrRedirect } from "../lib/auth";
+import { apiFetch, normalizeList } from "../lib/api";
 
 interface LinkedPolicy {
   policy_number: string;
@@ -57,13 +56,11 @@ export default function LinkPolicyPage() {
     if (!t) return;
     setLoadingClaims(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims`, {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setClaimsList(Array.isArray(data) ? data : (data.items || []));
-      }
+      const data = await apiFetch<ClaimSummary[] | { items?: ClaimSummary[] }>(
+        "/api/v1/claims",
+        { token: t },
+      );
+      setClaimsList(normalizeList(data));
     } catch {
       // ignore
     } finally {
@@ -76,13 +73,8 @@ export default function LinkPolicyPage() {
     if (!t) return;
     setLoadingPolicies(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/policies/my-policies`, {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setMyPolicies(data);
-      }
+      const data = await apiFetch<LinkedPolicy[]>("/api/v1/policies/my-policies", { token: t });
+      setMyPolicies(Array.isArray(data) ? data : []);
     } catch {
       // ignore
     } finally {
@@ -92,32 +84,15 @@ export default function LinkPolicyPage() {
  
   // Authenticate user & load policies and claims
   useEffect(() => {
-    const token = getAuthToken();
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Unauthorized");
-        return res.json();
-      })
-      .then((data) => {
-        if (data.role !== "CLAIMANT") {
-          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
-          return;
-        }
-        setCurrentUser(data);
+    verifySessionOrRedirect(router, {
+      requiredRole: "CLAIMANT",
+      onSuccess: (data) => {
+        const token = getAuthToken()!;
+        setCurrentUser(data as { id: string; full_name: string; email: string; role: string });
         fetchMyPolicies(token);
         fetchClaimsList(token);
-      })
-      .catch(() => {
-        clearAuthToken();
-        router.push("/login");
-      });
+      },
+    });
   }, [router]);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,25 +119,22 @@ export default function LinkPolicyPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/policies/link`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const data = await apiFetch<{ detail?: string } & LinkPolicySuccessData>(
+        "/api/v1/policies/link",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            policy_number: policyNumber.trim().toUpperCase(),
+            policyholder_name: policyholderName.trim(),
+            date_of_birth: dateOfBirth.trim(),
+            phone_last4: phoneLast4.trim(),
+          }),
         },
-        body: JSON.stringify({
-          policy_number: policyNumber.trim().toUpperCase(),
-          policyholder_name: policyholderName.trim(),
-          date_of_birth: dateOfBirth.trim(),
-          phone_last4: phoneLast4.trim(),
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data.detail || "Unable to link policy. Please verify your details.");
-      }
+      );
 
       setSuccessData(data);
       fetchMyPolicies(token);

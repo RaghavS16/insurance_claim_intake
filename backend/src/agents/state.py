@@ -18,6 +18,8 @@ class ClaimState(TypedDict, total=False):
     deferral_message: Optional[str]
     awaiting_confirmation: bool
     confirmed: bool
+    awaiting_submission_confirmation: bool
+    final_submission_confirmed: bool
     message: str
 
     conversation_status: str
@@ -33,6 +35,11 @@ class ClaimState(TypedDict, total=False):
     dynamic_requirements: List[Dict[str, Any]]
     dynamic_missing: List[Dict[str, Any]]
     knowledge_context: Dict[str, Any]
+    rag_status: Optional[str]
+    rag_context_key: Optional[str]
+    missing_evidence: List[Dict[str, Any]]
+    evidence: List[Dict[str, Any]]
+    dynamic_extraction_error: Optional[str]
 
     _skip_all: bool
     _skip_extraction: bool

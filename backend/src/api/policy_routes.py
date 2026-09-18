@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,7 +15,7 @@ from src.database.session import get_db
 from src.database.models import Policy, PolicyLinkAudit, User
 from src.utils.logger import app_logger
 from src.utils.rate_limiter import enforce_rate_limit
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, resolve_bearer_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/policies", tags=["Policies"])
@@ -38,14 +37,9 @@ class LinkPolicyRequest(BaseModel):
 # Helper Functions
 # ---------------------------------------------------------------------------
 def _resolve_user(request: Request, db: Session) -> User:
-    """Resolve authenticated user via centralized get_current_user dependency."""
-    auth_header = request.headers.get("authorization", "")
-    credentials = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-
-    return get_current_user(request=request, credentials=credentials, db=db)
+    """Resolve the authenticated user. Delegates to the shared revocation-aware
+    implementation in deps.resolve_bearer_user."""
+    return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
 
 
 def _audit(db: Session, user_id: Any, policy_number: str, outcome: str, ip: Optional[str] = None):

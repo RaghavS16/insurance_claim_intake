@@ -41,17 +41,27 @@ class Settings(BaseSettings):
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
     CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
     CLOUD_LLM_API_KEY: Optional[str] = None
-    EMBEDDING_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "qwen/qwen3-embedding-0.6b"
+    GEMINI_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None
+    EMBEDDING_PROVIDER: str = "ollama"
+    EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
+    EMBEDDING_MODEL: str = "nomic-embed-text"
+    EMBEDDING_API_KEY: Optional[str] = None
     EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
-    RERANK_MODEL: Optional[str] = "qwen/qwen3-reranker-0.6b"
+    RERANK_MODEL: Optional[str] = None
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
     AWS_REGION: str = "ap-south-1"
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_SESSION_TOKEN: Optional[str] = None
     S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT_URL: Optional[str] = None
+    S3_SERVER_SIDE_ENCRYPTION: str = "AES256"
+    S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
     S3_EVIDENCE_PREFIX: str = "claims"
-    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 150 * 1024 * 1024
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 
     STT_MODEL_SIZE: str = "small"
@@ -66,6 +76,8 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
+    MAX_EVIDENCE_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    REQUIRE_S3_IN_PRODUCTION: bool = True
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     @property
@@ -79,6 +91,15 @@ class Settings(BaseSettings):
         norm = v.lower().strip()
         if norm not in valid_envs:
             raise ValueError(f"ENVIRONMENT must be one of {valid_envs}, got '{v}'")
+        return norm
+
+    @field_validator("EMBEDDING_PROVIDER")
+    @classmethod
+    def validate_embedding_provider(cls, v: str) -> str:
+        norm = v.lower().strip()
+        allowed = {"ollama", "gemini", "fastembed", "local", "inmemory", "openai"}
+        if norm not in allowed:
+            raise ValueError(f"EMBEDDING_PROVIDER must be one of {sorted(allowed)}.")
         return norm
 
     @field_validator("DATABASE_URL")
@@ -103,7 +124,16 @@ class Settings(BaseSettings):
                 raise RuntimeError("SECRET_KEY must be at least 32 characters.")
             if "sqlite" in self.DATABASE_URL.lower():
                 raise RuntimeError("SQLite is not supported for production/staging.")
-        Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+            if "DBpassword" in self.DATABASE_URL or "REPLACE_WITH" in self.DATABASE_URL:
+                raise RuntimeError("DATABASE_URL still contains a development/example credential.")
+        if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
+            Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
+            raise RuntimeError("S3_BUCKET must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.EMBEDDING_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY or self.EMBEDDING_API_KEY):
+            raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
+        if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
+            raise RuntimeError("OpenRouter cannot be used as the embedding endpoint; configure a real embedding provider.")
 
 
 settings = Settings()

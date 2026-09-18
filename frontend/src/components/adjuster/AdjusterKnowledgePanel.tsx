@@ -59,9 +59,7 @@ export const AdjusterKnowledgePanel: React.FC<AdjusterKnowledgePanelProps> = ({
                 className="w-full border border-[#cbd5e1] rounded-lg px-3 py-2 text-xs bg-white cursor-pointer"
               >
                 <option value="policy_wording">Policy wording</option>
-                <option value="regulation">Regulation</option>
-                <option value="guideline">Guideline</option>
-                <option value="claim_requirement">Claim requirement</option>
+                <option value="regulatory ">Regulatory</option>
               </select>
             </div>
 
@@ -73,18 +71,6 @@ export const AdjusterKnowledgePanel: React.FC<AdjusterKnowledgePanelProps> = ({
                 value={knowledgeInsurance}
                 onChange={(e) => setKnowledgeInsurance(e.target.value)}
                 placeholder="e.g. motor, health, home"
-                className="w-full border border-[#cbd5e1] rounded-lg px-3 py-2 text-xs bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] uppercase font-bold text-[#6e797e] block mb-1">
-                Policy Number (optional)
-              </label>
-              <input
-                value={knowledgePolicy}
-                onChange={(e) => setKnowledgePolicy(e.target.value)}
-                placeholder="e.g. POL-8492-AX"
                 className="w-full border border-[#cbd5e1] rounded-lg px-3 py-2 text-xs bg-white"
               />
             </div>

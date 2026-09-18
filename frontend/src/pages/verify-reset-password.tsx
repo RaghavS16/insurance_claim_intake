@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { apiFetch } from "../lib/api";
 
 export default function VerifyResetPasswordPage() {
   const router = useRouter();
@@ -103,15 +102,11 @@ export default function VerifyResetPasswordPage() {
     setSuccessMsg("");
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/forgot-password`, {
+      await apiFetch("/api/v1/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: targetEmail }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to resend code.");
-      }
       setSuccessMsg("A new verification code has been sent to your email (and logged in terminal).");
       setResendCooldown(60); // 60 seconds cooldown
     } catch (err: unknown) {
@@ -156,19 +151,14 @@ export default function VerifyResetPasswordPage() {
 
     try {
       // Step 1: Verify OTP & obtain reset_token
-      const verifyRes = await fetch(`${API_BASE}/api/v1/auth/verify-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: email.trim(),
-          otp: fullOtp,
-        }),
-      });
-
-      const verifyData = await verifyRes.json().catch(() => ({}));
-      if (!verifyRes.ok) {
-        throw new Error(verifyData.detail || "Invalid or expired verification code.");
-      }
+      const verifyData = await apiFetch<{ reset_token?: string }>(
+        "/api/v1/auth/verify-otp",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), otp: fullOtp }),
+        },
+      );
 
       const resetToken = verifyData.reset_token;
       if (!resetToken) {
@@ -176,7 +166,7 @@ export default function VerifyResetPasswordPage() {
       }
 
       // Step 2: Reset password with verified token
-      const resetRes = await fetch(`${API_BASE}/api/v1/auth/reset-password`, {
+      await apiFetch("/api/v1/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -185,11 +175,6 @@ export default function VerifyResetPasswordPage() {
           confirm_password: confirmPassword,
         }),
       });
-
-      const resetData = await resetRes.json().catch(() => ({}));
-      if (!resetRes.ok) {
-        throw new Error(resetData.detail || "Failed to update password. Please try again.");
-      }
 
       setSuccessMsg("Password updated successfully! Redirecting to login...");
       setTimeout(() => {

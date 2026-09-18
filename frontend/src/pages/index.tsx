@@ -1,42 +1,14 @@
 import React, { useEffect } from "react";
 import { useRouter } from "next/router";
-import { getAuthToken, clearAuthToken } from "../lib/auth";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { verifySessionOrRedirect, redirectByRole } from "../lib/auth";
 
 export default function IndexPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const token = getAuthToken();
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Invalid session");
-        return res.json();
-      })
-      .then((data) => {
-        if (data.role === "CLAIMANT") {
-          router.push("/claimant");
-        } else if (data.role === "ADJUSTER") {
-          router.push("/adjuster");
-        } else if (data.role === "ADMIN") {
-          router.push("/admin");
-        } else {
-          clearAuthToken();
-          router.push("/login");
-        }
-      })
-      .catch(() => {
-        clearAuthToken();
-        router.push("/login");
-      });
+    verifySessionOrRedirect(router, {
+      onSuccess: (user) => redirectByRole(user.role as string, router),
+    });
   }, [router]);
 
   return (

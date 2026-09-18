@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { apiFetch } from "../lib/api";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -40,7 +39,7 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/signup`, {
+      await apiFetch("/api/v1/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -51,11 +50,6 @@ export default function SignupPage() {
           confirm_password: confirmPassword,
         }),
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "Sign up failed. Please try again.");
-      }
 
       setSuccess("Account created successfully! Redirecting to login...");
       setTimeout(() => {

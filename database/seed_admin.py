@@ -1,12 +1,5 @@
 import os
-import sys
-from pathlib import Path
-
-# Add backend directory to sys.path so modules can be imported
-backend_path = Path(__file__).resolve().parent.parent / "backend"
-sys.path.insert(0, str(backend_path))
-
-from src.database.session import SessionLocal
+from database._db_helpers import SessionLocal  # bootstraps sys.path automatically
 from src.database.models import User
 from src.utils.auth import get_password_hash
 

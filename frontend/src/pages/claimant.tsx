@@ -9,9 +9,8 @@ import { ManualEditModal } from "@/components/claimant/ManualEditModal";
 import { ExtractedData } from "@/components/claimant/ExtractionPanel";
 import { ConversationTurn } from "@/components/claimant/ChatTranscript";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
-import { getAuthToken, clearAuthToken } from "@/lib/auth";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { getAuthToken, clearAuthToken, verifySessionOrRedirect } from "@/lib/auth";
+import { apiFetch, normalizeList } from "@/lib/api";
 
 interface TranscriptSegment {
   segment_id: string;
@@ -36,6 +35,10 @@ interface SessionPayload {
   estimated_claim_amount?: number;
   extracted_data?: ExtractedData;
   missing_fields?: string[];
+  dynamic_requirements?: Array<Record<string, unknown>>;
+  dynamic_missing?: Array<Record<string, unknown>>;
+  missing_evidence?: Array<Record<string, unknown>>;
+  evidence?: Array<Record<string, unknown>>;
   field_status?: Record<string, string>;
   awaiting_confirmation?: boolean;
   confirmed?: boolean;
@@ -68,10 +71,12 @@ export default function ClaimantPage() {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [claimSubmitted, setClaimSubmitted] = useState(false);
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
-  const [missingEvidence, setMissingEvidence] = useState<any[]>([]);
+  const [missingEvidence, setMissingEvidence] = useState<Array<Record<string, unknown>>>([]);
+  const [evidenceItems, setEvidenceItems] = useState<Array<Record<string, unknown>>>([]);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -165,13 +170,11 @@ export default function ClaimantPage() {
     if (!authToken) return;
     setLoadingClaims(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setClaimsList(Array.isArray(data) ? data : (data.items || []));
-      }
+      const data = await apiFetch<ClaimSummary[] | { items?: ClaimSummary[] }>(
+        "/api/v1/claims",
+        { token: authToken },
+      );
+      setClaimsList(normalizeList(data));
     } catch {} finally {
       setLoadingClaims(false);
     }
@@ -180,13 +183,8 @@ export default function ClaimantPage() {
   const fetchLinkedPolicies = useCallback(async (authToken: string) => {
     if (!authToken) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/policies/my-policies`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setLinkedPolicies(Array.isArray(data) ? data : []);
-      }
+      const data = await apiFetch<LinkedPolicyItem[]>("/api/v1/policies/my-policies", { token: authToken });
+      setLinkedPolicies(Array.isArray(data) ? data : []);
     } catch {}
   }, []);
 
@@ -208,6 +206,9 @@ export default function ClaimantPage() {
       timestamp?: number;
       extracted_data?: ExtractedData;
       confirmed?: boolean;
+      status?: string;
+      missing_evidence?: Array<Record<string, unknown>>;
+      evidence?: Array<Record<string, unknown>>;
     };
     try {
       msg = JSON.parse(event.data);
@@ -272,6 +273,9 @@ export default function ClaimantPage() {
     if (msg.type === "state_update") {
       setExtractedData(msg.extracted_data || {});
       setConfirmed(Boolean(msg.confirmed));
+      if (msg.status) setClaimSubmitted(msg.status === "submitted");
+      if (msg.missing_evidence) setMissingEvidence(msg.missing_evidence);
+      if (msg.evidence) setEvidenceItems(msg.evidence);
       return;
     }
   }, [enqueueAudio]);
@@ -306,8 +310,9 @@ export default function ClaimantPage() {
     try {
       wsRef.current?.close();
     } catch {}
+    const wsBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/^http/, "ws");
     const ws = new WebSocket(
-      `${API_BASE.replace(/^http/, "ws")}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`
+      `${wsBase}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`
     );
     ws.binaryType = "blob";
     ws.onmessage = handleWsMessage;
@@ -330,6 +335,9 @@ export default function ClaimantPage() {
     setExtractedData({});
     setHistory([]);
     setConfirmed(false);
+    setClaimSubmitted(false);
+    setMissingEvidence([]);
+    setEvidenceItems([]);
     setSubmittedMessage("");
     setPartialSegments(new Map());
     setErrorBanner("");
@@ -343,7 +351,10 @@ export default function ClaimantPage() {
     localStorage.setItem("active_claim_ticket_id", data.ticket_id);
     setConversationStatus(data.conversation_status || data.status || "collecting");
     setExtractedData(data.extracted_data || {});
-    setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+    setConfirmed(Boolean(data.confirmed));
+    setClaimSubmitted(Boolean(data.status === "submitted"));
+    setMissingEvidence(data.missing_evidence || []);
+    setEvidenceItems(data.evidence || []);
     setPartialSegments(new Map());
     const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
@@ -375,11 +386,10 @@ export default function ClaimantPage() {
     setLoading(true);
     setErrorBanner("");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${selectedTicketId}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (!res.ok) throw new Error(`Could not load claim #${selectedTicketId}`);
-      const data = await res.json();
+      const data = await apiFetch<SessionPayload>(
+        `/api/v1/claims/${selectedTicketId}`,
+        { token: authToken },
+      );
       applySession(data, authToken);
       router.replace({ pathname: "/claimant", query: { ticket: selectedTicketId } }, undefined, { shallow: true });
     } catch (err: unknown) {
@@ -392,16 +402,14 @@ export default function ClaimantPage() {
   const ensureClaimSession = useCallback(async (authToken: string, policyNum?: string): Promise<string> => {
     if (ticketId) return ticketId;
     const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
-    const res = await fetch(`${API_BASE}/api/v1/claims/new-session`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-        "Content-Type": "application/json",
+    const data = await apiFetch<{ ticket_id: string }>(
+      "/api/v1/claims/new-session",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error("Could not initialize claim intake.");
-    const data = await res.json();
+    );
     setTicketId(data.ticket_id);
     localStorage.setItem("active_claim_ticket_id", data.ticket_id);
     connectWebSocket(data.ticket_id, authToken);
@@ -414,14 +422,10 @@ export default function ClaimantPage() {
     if (!token || !targetTicketId) return;
     if (!window.confirm(`Discard draft for claim #${targetTicketId}?`)) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${targetTicketId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || "Unable to delete claim.");
-      }
+      await apiFetch(
+        `/api/v1/claims/${targetTicketId}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
       fetchClaimsList(token);
       if (targetTicketId === ticketId) initBlankChat();
     } catch (err: unknown) {
@@ -432,11 +436,10 @@ export default function ClaimantPage() {
   const handleExportTranscript = useCallback(async () => {
     if (!ticketId || !token) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/export`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Could not export transcript.");
-      const data = await res.json();
+      const data = await apiFetch<{ formatted_text?: string }>(
+        `/api/v1/claims/${ticketId}/export`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
       const textContent = data.formatted_text || JSON.stringify(data, null, 2);
       const blob = new Blob([textContent], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -454,35 +457,19 @@ export default function ClaimantPage() {
 
   useEffect(() => {
     if (!router.isReady || hasInitializedRef.current) return;
-    const savedToken = getAuthToken();
-    if (!savedToken) {
-      router.push("/login");
-      return;
-    }
     hasInitializedRef.current = true;
-    fetch(`${API_BASE}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${savedToken}` },
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error("Session expired");
-        return r.json();
-      })
-      .then((data) => {
-        if (data.role !== "CLAIMANT") {
-          router.push(data.role === "ADMIN" ? "/admin" : "/adjuster");
-          return;
-        }
-        setUserName(data.full_name || "Claimant");
+    verifySessionOrRedirect(router, {
+      requiredRole: "CLAIMANT",
+      onSuccess: (data) => {
+        const savedToken = getAuthToken()!;
+        setUserName((data.full_name as string) || "Claimant");
         const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
         fetchClaimsList(savedToken);
         fetchLinkedPolicies(savedToken);
-        if (initialTicket) return loadClaimByTicket(initialTicket, savedToken);
+        if (initialTicket) void loadClaimByTicket(initialTicket, savedToken);
         else initBlankChat();
-      })
-      .catch(() => {
-        clearAuthToken();
-        router.push("/login");
-      });
+      },
+    });
   }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);
 
   useEffect(() => () => {
@@ -547,26 +534,26 @@ export default function ClaimantPage() {
     setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");
     try {
-      let activeTid = ticketId;
-      if (!activeTid) activeTid = await ensureClaimSession(token);
-      const res = await fetch(`${API_BASE}/api/v1/claims/${activeTid}/text-turn`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const activeTid = ticketId || await ensureClaimSession(token);
+      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string; missing_evidence?: Array<Record<string, unknown>>; evidence?: Array<Record<string, unknown>> }>(
+        `/api/v1/claims/${activeTid}/text-turn`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
         },
-        body: JSON.stringify({ text }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Unable to process message.");
+      );
       if (data.agent_message) {
         setHistory((prev) => [
           ...prev,
-          { turn: prev.length + 1, speaker: "agent", text: data.agent_message, timestamp: Date.now() },
+          { turn: prev.length + 1, speaker: "agent", text: data.agent_message!, timestamp: Date.now() },
         ]);
       }
       setExtractedData(data.extracted_data || {});
-      setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+      setConfirmed(Boolean(data.confirmed));
+      setClaimSubmitted(Boolean(data.status === "submitted"));
+      setMissingEvidence(data.missing_evidence || []);
+      setEvidenceItems(data.evidence || []);
       fetchClaimsList(token);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Unable to process message.");
@@ -585,17 +572,20 @@ export default function ClaimantPage() {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/evidence`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Could not upload evidence.");
+      const result = await apiFetch<{ missing_evidence?: Array<Record<string, unknown>>; evidence_items?: Array<Record<string, unknown>>; message?: string }>(
+        `/api/v1/claims/${ticketId}/evidence`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        },
+      );
+      setMissingEvidence(result.missing_evidence || []);
+      setEvidenceItems(result.evidence_items || []);
       setHistory((prev) => [...prev, {
         turn: prev.length + 1,
         speaker: "agent",
-        text: `I received “${file.name}”. I'll include it with your claim evidence.`,
+        text: result.message || `I checked “${file.name}” against the claim evidence requirements.`,
         timestamp: Date.now(),
       }]);
     } catch (err: unknown) {
@@ -610,20 +600,19 @@ export default function ClaimantPage() {
     setSubmittingClaim(true);
     setErrorBanner("");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}/confirm`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const data = await apiFetch<{ message?: string }>(
+        `/api/v1/claims/${ticketId}/confirm`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmed: true }),
         },
-        body: JSON.stringify({ confirmed: true }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to submit claim.");
+      );
       setSubmittedMessage(
         data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`
       );
       setConfirmed(true);
+      setClaimSubmitted(true);
       fetchClaimsList(token);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "An error occurred while submitting your claim.");
@@ -644,16 +633,14 @@ export default function ClaimantPage() {
       parsedVal = parseFloat(editValue.replace(/[^0-9.]/g, "")) || null;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/v1/claims/${ticketId}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const data = await apiFetch<{ extracted_data?: ExtractedData }>(
+        `/api/v1/claims/${ticketId}`,
+        {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ [editingField]: parsedVal }),
         },
-        body: JSON.stringify({ [editingField]: parsedVal }),
-      });
-      if (!res.ok) throw new Error("Could not save this correction.");
-      const data = await res.json();
+      );
       setExtractedData(data.extracted_data || { ...extractedData, [editingField]: parsedVal });
       setEditingField(null);
       fetchClaimsList(token);
@@ -774,6 +761,9 @@ export default function ClaimantPage() {
               onSubmitClaim={handleSubmitClaim}
               submittingClaim={submittingClaim}
               confirmed={confirmed}
+              submitted={claimSubmitted}
+              missingEvidence={missingEvidence}
+              evidenceItems={evidenceItems}
               ticketId={ticketId}
             />
           </div>
