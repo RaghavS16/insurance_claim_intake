@@ -118,7 +118,7 @@ class PiperHTTPService(TTSService):
 
 class ClaimAgentProcessor(FrameProcessor):
     """Keep STT/transcription live while claim turns are analyzed sequentially."""
-    FINAL_DEBOUNCE_SECONDS=0.25
+    FINAL_DEBOUNCE_SECONDS=0.8
     def __init__(self,claim:Claim,*,input_mode:str="voice"):
         super().__init__(); self._db=SessionLocal(); self._ticket_id=claim.ticket_id; self._input_mode=input_mode; self._segment_number=0; self._pending_text=""; self._pending_at=0.0; self._debounce_task=None; self._turn_queue=asyncio.Queue(); self._worker_task=asyncio.create_task(self._turn_worker()); self._generation=0
     async def cleanup(self):
@@ -170,7 +170,7 @@ class ClaimAgentProcessor(FrameProcessor):
             result=await process_claimant_turn(db,claim,text,self._input_mode)
         finally: db.close()
         if generation!=self._generation: return
-        await self.push_frame(OutputTransportMessageFrame(message={"type":"state_update","extracted_data":result.get("extracted_data",{}) or {},"missing_fields":result.get("missing_fields",[]),"field_status":result.get("field_status",{}),"awaiting_confirmation":result.get("awaiting_confirmation",False),"confirmed":result.get("confirmed",False),"conversation_status":result.get("conversation_status")}),direction)
+        await self.push_frame(OutputTransportMessageFrame(message={"type":"state_update","extracted_data":result.get("extracted_data",{}) or {},"missing_fields":result.get("missing_fields",[]),"field_status":result.get("field_status",{}),"awaiting_confirmation":result.get("awaiting_confirmation",False),"confirmed":result.get("confirmed",False),"status":result.get("status"),"conversation_status":result.get("conversation_status"),"missing_evidence":result.get("missing_evidence",[]),"evidence":result.get("evidence",[])}),direction)
         agent_text=result.get("next_question") or result.get("message","")
         if agent_text:
             await self.push_frame(OutputTransportMessageFrame(message={"type":"transcript","speaker":"agent","text":agent_text,"is_final":True,"segment_id":f"agent-{self._segment_number}","generation":generation}),direction); await self.push_frame(TTSSpeakFrame(text=agent_text),direction)
