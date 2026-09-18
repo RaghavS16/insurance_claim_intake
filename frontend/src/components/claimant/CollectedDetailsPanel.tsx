@@ -10,6 +10,7 @@ interface CollectedDetailsPanelProps {
   onSubmitClaim?: () => void;
   submittingClaim?: boolean;
   confirmed: boolean;
+  submitted?: boolean;
   ticketId: string;
 }
 
@@ -17,6 +18,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   extractedData,
   onOpenEdit,
   confirmed,
+  submitted = false,
 }) => {
   const pendingCount = [
     !extractedData.policy_id,
@@ -44,7 +46,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
               : "bg-slate-100 text-slate-600 border border-slate-200"
           }`}
         >
-          {confirmed ? "Submitted" : isBaselineComplete ? "Baseline Ready" : `${pendingCount} Details Needed`}
+          {submitted ? "Submitted" : isBaselineComplete ? "Baseline Verified" : `${pendingCount} Details Needed`}
         </span>
       </div>
 
@@ -81,7 +83,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
                 confirmed ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
-              {confirmed ? "✓" : "3"}
+              {submitted ? "✓" : "3"}
             </span>
             <span className={isBaselineComplete ? "text-[#00647c] font-semibold" : "text-slate-500"}>Details</span>
           </div>
@@ -92,7 +94,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
                 confirmed ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
-              {confirmed ? "✓" : "4"}
+              {submitted ? "✓" : "4"}
             </span>
             <span className={confirmed ? "text-emerald-700 font-bold" : "text-slate-500"}>Submit</span>
           </div>
@@ -226,7 +228,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
         <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
           <span className="material-symbols-outlined text-[#00647c] text-lg">forum</span>
           <p className="text-xs text-[#475569] leading-snug">
-            {confirmed
+            {submitted
               ? "Your claim has been submitted to the adjuster. Updates will appear in your claim dashboard."
               : isBaselineComplete
               ? "All baseline details are recorded. Reply in chat to verify and complete specific requirements."
