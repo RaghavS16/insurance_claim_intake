@@ -517,6 +517,15 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     evidence.append(item)
     state["evidence"] = evidence
     state["missing_evidence"] = missing_evidence(state)
+    # Keep the durable requirement lifecycle synchronized with the conversational cache.
+    if requirement_row is not None:
+        if verification_status == "VERIFIED":
+            requirement_row.status = "satisfied"
+        elif verification_status in {"REJECTED", "UNREADABLE"}:
+            requirement_row.status = "evidence_required"
+        else:
+            requirement_row.status = "review_required"
+        requirement_row.updated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     state["last_evidence_verification"] = {
         "evidence_id": item_id,
         "requirement_key": evidence_key,
