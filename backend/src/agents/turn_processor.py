@@ -116,7 +116,9 @@ async def process_claimant_turn(
         }
         outstanding_dynamic = {str(x.get("key")) for x in (result.get("dynamic_missing") or []) if x.get("key")}
         outstanding_evidence = {str(x.get("key")) for x in (result.get("missing_evidence") or []) if x.get("key")}
+        seen_keys = set()
         for req in requirements:
+            seen_keys.add(str(req.get("key") or "").strip())
             key = str(req.get("key") or "").strip()
             if not key:
                 continue
@@ -142,6 +144,13 @@ async def process_claimant_turn(
                 row.status = "information_required"
             else:
                 row.status = "satisfied"
+        # If the RAG planner intentionally changed the requirement set (for example
+        # after a corrected insurance type), retain history but stop treating removed
+        # requirements as active blockers.
+        if result.get("rag_status") == "OK":
+            for key, row in existing_rows.items():
+                if key not in seen_keys:
+                    row.status = "superseded"
     claim.pipeline_state = dict(result)
     claim.insurance_type = extracted.get("insurance_type")
     claim.event_description = extracted.get("event_description")
