@@ -93,6 +93,15 @@ class Settings(BaseSettings):
             raise ValueError(f"ENVIRONMENT must be one of {valid_envs}, got '{v}'")
         return norm
 
+    @field_validator("EMBEDDING_PROVIDER")
+    @classmethod
+    def validate_embedding_provider(cls, v: str) -> str:
+        norm = v.lower().strip()
+        allowed = {"ollama", "gemini", "fastembed", "local", "inmemory", "openai"}
+        if norm not in allowed:
+            raise ValueError(f"EMBEDDING_PROVIDER must be one of {sorted(allowed)}.")
+        return norm
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
@@ -121,6 +130,10 @@ class Settings(BaseSettings):
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.EMBEDDING_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY or self.EMBEDDING_API_KEY):
+            raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
+        if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
+            raise RuntimeError("OpenRouter cannot be used as the embedding endpoint; configure a real embedding provider.")
 
 
 settings = Settings()
