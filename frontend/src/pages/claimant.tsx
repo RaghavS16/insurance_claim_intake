@@ -71,6 +71,7 @@ export default function ClaimantPage() {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [claimSubmitted, setClaimSubmitted] = useState(false);
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
@@ -328,6 +329,7 @@ export default function ClaimantPage() {
     setExtractedData({});
     setHistory([]);
     setConfirmed(false);
+    setClaimSubmitted(false);
     setSubmittedMessage("");
     setPartialSegments(new Map());
     setErrorBanner("");
@@ -341,7 +343,8 @@ export default function ClaimantPage() {
     localStorage.setItem("active_claim_ticket_id", data.ticket_id);
     setConversationStatus(data.conversation_status || data.status || "collecting");
     setExtractedData(data.extracted_data || {});
-    setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+    setConfirmed(Boolean(data.confirmed));
+    setClaimSubmitted(Boolean(data.status === "submitted"));
     setMissingEvidence(data.missing_evidence || []);
     setEvidenceItems(data.evidence || []);
     setPartialSegments(new Map());
@@ -539,7 +542,8 @@ export default function ClaimantPage() {
         ]);
       }
       setExtractedData(data.extracted_data || {});
-      setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+      setConfirmed(Boolean(data.confirmed));
+      setClaimSubmitted(Boolean(data.status === "submitted"));
       setMissingEvidence(data.missing_evidence || []);
       setEvidenceItems(data.evidence || []);
       fetchClaimsList(token);
@@ -600,6 +604,7 @@ export default function ClaimantPage() {
         data.message || `Claim successfully submitted. Reference ID: #${ticketId.slice(0, 8).toUpperCase()}`
       );
       setConfirmed(true);
+      setClaimSubmitted(true);
       fetchClaimsList(token);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "An error occurred while submitting your claim.");
@@ -748,6 +753,7 @@ export default function ClaimantPage() {
               onSubmitClaim={handleSubmitClaim}
               submittingClaim={submittingClaim}
               confirmed={confirmed}
+              submitted={claimSubmitted}
               ticketId={ticketId}
             />
           </div>
