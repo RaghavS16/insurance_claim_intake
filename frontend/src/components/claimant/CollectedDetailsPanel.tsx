@@ -39,7 +39,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
         </div>
         <span
           className={`font-label text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${
-            confirmed
+            submitted
               ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
               : isBaselineComplete
               ? "bg-sky-100 text-sky-800 border border-sky-200"
@@ -80,7 +80,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
           <div className="flex items-center gap-1.5">
             <span
               className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                confirmed ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
+                submitted ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
               {submitted ? "✓" : "3"}
@@ -96,7 +96,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
             >
               {submitted ? "✓" : "4"}
             </span>
-            <span className={confirmed ? "text-emerald-700 font-bold" : "text-slate-500"}>Submit</span>
+            <span className={submitted ? "text-emerald-700 font-bold" : "text-slate-500"}>Submit</span>
           </div>
         </div>
       </div>
