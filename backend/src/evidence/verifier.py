@@ -1,0 +1,138 @@
+"""Claim evidence verification pipeline.
+
+Uploaded evidence is never considered satisfying a requirement merely because a file
+exists. The pipeline extracts readable content, classifies the document, compares it
+to the requested evidence, and returns VERIFIED, REJECTED, REVIEW_REQUIRED, or
+UNREADABLE without inventing facts.
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import logging
+import os
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from src.agents.llm_factory import get_configured_llm
+from src.knowledge.store import _extract_text
+
+logger = logging.getLogger(__name__)
+
+
+class EvidenceAnalysis(BaseModel):
+    detected_document_type: str = Field(description="The actual document type visible in the uploaded evidence.")
+    verification_status: str = Field(description="One of VERIFIED, REJECTED, REVIEW_REQUIRED, UNREADABLE.")
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    extracted_fields: dict[str, Any] = Field(default_factory=dict)
+    claim_consistency: str = Field(description="One of CONSISTENT, INCONSISTENT, UNKNOWN.")
+    consistency_notes: list[str] = Field(default_factory=list)
+
+
+def _extract_image_text(content: bytes, filename: str) -> str:
+    """OCR raster evidence using the same local OCR stack used by knowledge ingestion."""
+    try:
+        from PIL import Image
+        from rapidocr_onnxruntime import RapidOCR
+        image = Image.open(io.BytesIO(content)).convert("RGB")
+        # RapidOCR accepts an ndarray/PIL-compatible image in supported versions.
+        import numpy as np
+        result, _ = RapidOCR()(np.asarray(image))
+        if not result:
+            return ""
+        return " ".join(str(row[1]) for row in result if isinstance(row, (list, tuple)) and len(row) > 1).strip()
+    except Exception as exc:
+        logger.warning("Evidence OCR failed for %s: %s", filename, exc)
+        return ""
+
+
+def extract_evidence_text(content: bytes, filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+        return _extract_image_text(content, filename)
+    try:
+        return (_extract_text(content, filename) or "").strip()
+    except Exception as exc:
+        logger.warning("Evidence text extraction failed for %s: %s", filename, exc)
+        return ""
+
+
+def verify_evidence(
+    *,
+    content: bytes,
+    filename: str,
+    requested_evidence: dict[str, Any],
+    claim_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Analyze one upload against one dynamic claim requirement.
+
+    A verifier failure is deliberately REVIEW_REQUIRED rather than VERIFIED. This
+    prevents an unavailable/uncertain model from satisfying a required document.
+    """
+    sha256 = hashlib.sha256(content).hexdigest()
+    text = extract_evidence_text(content, filename)
+    if len(text.strip()) < 20:
+        return {
+            "verification_status": "UNREADABLE",
+            "detected_document_type": "unknown",
+            "confidence": 0.0,
+            "reason": "The uploaded evidence could not be read reliably. Please upload a clearer document or image.",
+            "extracted_fields": {},
+            "claim_consistency": "UNKNOWN",
+            "consistency_notes": [],
+            "sha256": sha256,
+            "extracted_text_length": len(text),
+        }
+
+    prompt = f"""You are an insurance evidence verification service.
+Determine what document the claimant actually uploaded and whether it satisfies the requested evidence requirement.
+Do not trust the filename. Use the document content.
+
+REQUESTED EVIDENCE REQUIREMENT:
+{requested_evidence}
+
+CLAIM CONTEXT (use only to assess relevance; do not invent missing facts):
+{claim_context or {}}
+
+UPLOADED DOCUMENT FILENAME (metadata only): {filename}
+UPLOADED DOCUMENT CONTENT:
+{text[:24000]}
+
+Rules:
+1. VERIFIED only when the content clearly represents the requested evidence and is relevant to the claim context.
+2. REJECTED when the document is clearly a different evidence type.
+3. REVIEW_REQUIRED when the type is plausible but ambiguous, conflicting, or insufficiently readable/complete.
+4. UNREADABLE only when content cannot be reliably interpreted.
+5. Never infer a field that is not present in the document.
+6. Return the actual detected document type, not the requested type when they differ.
+"""
+    try:
+        result = get_configured_llm().with_structured_output(EvidenceAnalysis).invoke(prompt)
+        if isinstance(result, EvidenceAnalysis):
+            data = result.model_dump()
+        elif isinstance(result, dict):
+            data = EvidenceAnalysis.model_validate(result).model_dump()
+        else:
+            raise ValueError("Evidence model returned an unsupported response type")
+    except Exception as exc:
+        logger.exception("Evidence verification failed for %s", filename)
+        data = {
+            "verification_status": "REVIEW_REQUIRED",
+            "detected_document_type": "unknown",
+            "confidence": 0.0,
+            "reason": "Automatic evidence verification is temporarily unavailable; adjuster review is required.",
+            "extracted_fields": {},
+            "claim_consistency": "UNKNOWN",
+            "consistency_notes": [type(exc).__name__],
+        }
+    status = str(data.get("verification_status", "REVIEW_REQUIRED")).upper()
+    if status not in {"VERIFIED", "REJECTED", "REVIEW_REQUIRED", "UNREADABLE"}:
+        status = "REVIEW_REQUIRED"
+    data["verification_status"] = status
+    data["sha256"] = sha256
+    data["extracted_text_length"] = len(text)
+    data["requested_evidence_type"] = requested_evidence.get("evidence_type")
+    data["requested_requirement_key"] = requested_evidence.get("key") or requested_evidence.get("requirement_key")
+    return data
