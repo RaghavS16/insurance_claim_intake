@@ -33,6 +33,10 @@ class ClaimState(TypedDict, total=False):
     dynamic_requirements: List[Dict[str, Any]]
     dynamic_missing: List[Dict[str, Any]]
     knowledge_context: Dict[str, Any]
+    rag_status: Optional[str]
+    missing_evidence: List[Dict[str, Any]]
+    evidence: List[Dict[str, Any]]
+    dynamic_extraction_error: Optional[str]
 
     _skip_all: bool
     _skip_extraction: bool

@@ -17,11 +17,11 @@ from src.database.models import Claim, ConversationTurn, User
 from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
-from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence
 from src.database.models import Adjuster
 from src.database.claim_workflow import assign_claim, transition_claim
+from src.api.deps import get_current_user, resolve_bearer_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -51,21 +51,9 @@ class UpdateClaimRequest(BaseModel):
 
 
 def _resolve_user(request: Request, db: Session) -> User:
-    """Resolve the authenticated claimant for both HTTP and test requests."""
-    auth = request.headers.get("authorization", "")
-    token = auth[7:] if auth.lower().startswith("bearer ") else None
-    uid = None
-    if token:
-        payload = verify_token(token)
-        uid = payload.get("sub") if payload else None
-    elif settings.ENVIRONMENT == "test":
-        uid = request.headers.get("X-User-ID")
-    if not uid:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    user = db.query(User).filter(User.id == uid).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Authenticated user not found.")
-    return user
+    """Resolve the authenticated claimant. Delegates to the shared revocation-aware
+    implementation in deps.resolve_bearer_user (supports JWT Bearer + test X-User-ID)."""
+    return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
 
 
 def _claim_payload(claim: Claim) -> Dict[str, Any]:

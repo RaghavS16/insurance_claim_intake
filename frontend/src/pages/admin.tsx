@@ -13,9 +13,8 @@ import {
   PasswordResetModal,
   DeleteAdjusterModal,
 } from "@/components/admin/AdminModals";
-import { getAuthToken, clearAuthToken } from "@/lib/auth";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { getAuthToken, clearAuthToken, verifySessionOrRedirect } from "@/lib/auth";
+import { apiFetch, normalizeList } from "@/lib/api";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -100,13 +99,11 @@ export default function AdminPage() {
   const fetchPolicies = async (token: string) => {
     setLoadingPolicies(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies?page_size=200`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPolicies(Array.isArray(data) ? data : data.items || []);
-      }
+      const data = await apiFetch<PolicyItem[] | { items?: PolicyItem[] }>(
+        "/api/v1/admin/policies?page_size=200",
+        { token },
+      );
+      setPolicies(normalizeList(data));
     } catch (err) {
       console.error("Failed to fetch policies", err);
     } finally {
@@ -117,13 +114,11 @@ export default function AdminPage() {
   const fetchAdjusters = async (token: string) => {
     setLoadingAdjusters(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAdjusters(Array.isArray(data) ? data : data.items || []);
-      }
+      const data = await apiFetch<AdjusterItem[] | { items?: AdjusterItem[] }>(
+        "/api/v1/admin/adjusters",
+        { token },
+      );
+      setAdjusters(normalizeList(data));
     } catch (err) {
       console.error("Failed to fetch adjusters", err);
     } finally {
@@ -133,45 +128,23 @@ export default function AdminPage() {
 
   // Authenticate Admin
   useEffect(() => {
-    const token = getAuthToken();
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    const verifyAdmin = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) throw new Error("Unauthorized");
-        const data = await res.json();
-        if (data.role !== "ADMIN") {
-          router.push(data.role === "ADJUSTER" ? "/adjuster" : "/claimant");
-          return;
-        }
-        setCurrentUser(data);
+    verifySessionOrRedirect(router, {
+      requiredRole: "ADMIN",
+      onSuccess: (data) => {
+        const token = getAuthToken()!;
+        setCurrentUser(data as AdminUser);
         fetchPolicies(token);
         fetchAdjusters(token);
-      } catch {
-        clearAuthToken();
-        router.push("/login");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    verifyAdmin();
+      },
+      onFinally: () => setLoading(false),
+    });
   }, [router]);
 
   const handleLogout = async () => {
     const token = getAuthToken();
     if (token) {
       try {
-        await fetch(`${API_BASE}/api/v1/auth/logout`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        await apiFetch("/api/v1/auth/logout", { method: "POST", token });
       } catch {}
     }
     clearAuthToken();
@@ -200,15 +173,14 @@ export default function AdminPage() {
     formData.append("file", csvFile);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies/bulk-import-csv`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to ingest CSV");
-      }
+      const data = await apiFetch<{ detail?: string } & CsvImportResult>(
+        "/api/v1/admin/policies/bulk-import-csv",
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        },
+      );
       setImportResult(data);
       setCsvFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -259,18 +231,15 @@ export default function AdminPage() {
       if (newPolicyDob.trim()) payload.policyholder_dob = newPolicyDob.trim();
       if (newPolicyPhone.trim()) payload.policyholder_phone = newPolicyPhone.trim();
 
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const res = await apiFetch<PolicyItem>(
+        "/api/v1/admin/policies",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to create policy");
-      }
+      );
+      void res;
       setShowAddPolicyModal(false);
       fetchPolicies(token);
     } catch (err: unknown) {
@@ -315,18 +284,14 @@ export default function AdminPage() {
       if (editPolicyDob.trim()) payload.policyholder_dob = editPolicyDob.trim();
       if (editPolicyPhone.trim()) payload.policyholder_phone = editPolicyPhone.trim();
 
-      const res = await fetch(`${API_BASE}/api/v1/admin/policies/${editingPolicy.policy_number}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      await apiFetch(
+        `/api/v1/admin/policies/${editingPolicy.policy_number}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to update policy");
-      }
+      );
       setEditingPolicy(null);
       fetchPolicies(token);
     } catch (err: unknown) {
@@ -358,19 +323,14 @@ export default function AdminPage() {
         specialization: newAdjusterSpec,
       };
 
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      await apiFetch(
+        "/api/v1/admin/adjusters",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to create adjuster account");
-      }
-      setCreatedAdjusterData(data);
+      );
       setNewAdjusterName("");
       setNewAdjusterEmail("");
       setNewAdjusterPhone("");
@@ -403,23 +363,19 @@ export default function AdminPage() {
     setEditError("");
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${editingAdjuster.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      await apiFetch(
+        `/api/v1/admin/adjusters/${editingAdjuster.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            name: editName.trim(),
+            phone: editPhone.trim(),
+            specialization: editSpec,
+            is_active: editActive,
+          }),
         },
-        body: JSON.stringify({
-          name: editName.trim(),
-          phone: editPhone.trim(),
-          specialization: editSpec,
-          is_active: editActive,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to update adjuster");
-      }
+      );
       setEditingAdjuster(null);
       fetchAdjusters(token);
     } catch (err: unknown) {
@@ -436,18 +392,11 @@ export default function AdminPage() {
 
     setResettingPasswordId(adj.id);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${adj.id}/reset-password`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to reset password");
-      }
-      setPasswordResetData({
-        adjuster: adj,
-        tempPass: data.temporary_password,
-      });
+      const data = await apiFetch<{ temporary_password?: string }>(
+        `/api/v1/admin/adjusters/${adj.id}/reset-password`,
+        { method: "POST", token },
+      );
+      setPasswordResetData({ adjuster: adj, tempPass: data.temporary_password ?? "" });
       setCopiedResetPass(false);
     } catch (err: unknown) {
       alert(`Password reset failed: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -464,14 +413,10 @@ export default function AdminPage() {
 
     setDeletingLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/admin/adjusters/${deletingAdjuster.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to delete adjuster");
-      }
+      await apiFetch(
+        `/api/v1/admin/adjusters/${deletingAdjuster.id}`,
+        { method: "DELETE", token },
+      );
       setDeletingAdjuster(null);
       fetchAdjusters(token);
     } catch (err: unknown) {

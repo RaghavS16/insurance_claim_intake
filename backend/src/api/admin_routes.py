@@ -20,14 +20,22 @@ from sqlalchemy.orm import Session
 from src.database.session import get_db
 from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
-from src.utils.validators import validate_email, validate_full_name, validate_phone
+from src.utils.validators import (
+    validate_email,
+    validate_full_name,
+    validate_phone,
+    CANONICAL_POLICY_TYPES,  # single source of truth; do not redeclare locally
+)
 from src.utils.logger import app_logger
-from src.api.deps import get_current_user
+from src.api.deps import (
+    get_current_user,
+    resolve_bearer_user,
+    get_adjuster_or_404,
+    db_commit_or_500,
+)
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
-
-CANONICAL_POLICY_TYPES = {"health", "senior_health", "home", "travel", "motor", "cyber"}
 
 
 # ---------------------------------------------------------------------------
@@ -82,25 +90,35 @@ class UpdatePolicyRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helper: resolve admin user
+# Internal helpers
 # ---------------------------------------------------------------------------
-def _resolve_admin(request: Request, db: Session) -> User:
-    """Ensure caller is an authenticated user with ADMIN role."""
-    from fastapi.security import HTTPAuthorizationCredentials
 
-    auth_header = request.headers.get("authorization", "")
-    credentials = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+def _require_admin(request: Request, db: Session) -> User:
+    """Ensure the caller is an authenticated ADMIN user."""
+    return resolve_bearer_user(request, db, ["ADMIN"])
 
-    current_user = get_current_user(request=request, credentials=credentials, db=db)
-    if current_user.role != "ADMIN":
+
+
+def validate_policy_type(value: str) -> str:
+    """Normalise and validate a policy type string. Raises HTTP 400 on failure."""
+    normalised = value.strip().lower()
+    if normalised not in CANONICAL_POLICY_TYPES:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied: Role '{current_user.role}' does not have administrative privileges.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid policy_type '{value}'. Must be one of {sorted(CANONICAL_POLICY_TYPES)}",
         )
-    return current_user
+    return normalised
+
+
+def parse_date(value: str, field_name: str) -> date:
+    """Parse a YYYY-MM-DD date string. Raises HTTP 400 with a clear message on failure."""
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be in YYYY-MM-DD format.",
+        )
 
 
 def _find_policy(db: Session, identifier: str) -> Optional[Policy]:
@@ -113,8 +131,36 @@ def _find_policy(db: Session, identifier: str) -> Optional[Policy]:
             return pol
     except (ValueError, AttributeError):
         pass
-
     return db.query(Policy).filter(Policy.policy_number == clean_id.upper()).first()
+
+
+def _adjuster_dict(a: Adjuster) -> Dict[str, Any]:
+    """Serialise an Adjuster ORM object to the standard API response dict."""
+    return {
+        "id": a.id,
+        "name": a.name,
+        "email": a.email,
+        "phone": a.phone,
+        "specialization": a.specialization,
+        "claims_assigned": a.claims_assigned,
+        "is_active": a.is_active,
+    }
+
+
+def _policy_dict(p: Policy) -> Dict[str, Any]:
+    """Serialise a Policy ORM object to the standard API response dict."""
+    return {
+        "id": p.id,
+        "policy_number": p.policy_number,
+        "policy_type": p.policy_type,
+        "coverage_amount": p.coverage_amount,
+        "deductible": p.deductible,
+        "effective_date": str(p.effective_date),
+        "expiry_date": str(p.expiry_date),
+        "is_active": p.is_active,
+        "policyholder_name": p.policyholder_name,
+        "policyholder_phone": p.policyholder_phone,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +177,7 @@ async def import_policies_csv(
     Import policies from a CSV file.
     Upserts policy details. For existing policies, NEVER overwrites customer_id or linked_at.
     """
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(
@@ -248,15 +294,7 @@ async def import_policies_csv(
             db.add(new_policy)
             created_count += 1
 
-    try:
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to commit CSV imported policies")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save imported policies to database.",
-        )
+    db_commit_or_500(db, logger, "Failed to save imported policies to database.", "Failed to commit CSV imported policies")
 
     return {
         "imported": created_count,
@@ -276,7 +314,7 @@ def add_adjuster(
     Create a new Adjuster user account and associated adjuster profile.
     Generates a secure temporary password for initial access.
     """
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     try:
         clean_name = validate_full_name(payload.name)
@@ -326,22 +364,10 @@ def add_adjuster(
 
     db.add(new_user)
     db.add(new_adjuster)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to create adjuster account")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create adjuster account.",
-        )
+    db_commit_or_500(db, logger, "Failed to create adjuster account.", "Failed to create adjuster account")
 
     return {
-        "id": user_id,
-        "name": clean_name,
-        "email": clean_email,
-        "phone": clean_phone,
-        "specialization": spec,
+        **_adjuster_dict(new_adjuster),
         "temporary_password": temp_password,
         "message": "Adjuster account created successfully. Provide the temporary password securely to the adjuster.",
     }
@@ -353,21 +379,10 @@ def list_adjusters(
     db: Session = Depends(get_db),
 ):
     """List all registered adjusters and their assigned claims count."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     adjusters = db.query(Adjuster).order_by(Adjuster.name.asc()).all()
-    return [
-        {
-            "id": a.id,
-            "name": a.name,
-            "email": a.email,
-            "phone": a.phone,
-            "specialization": a.specialization,
-            "claims_assigned": a.claims_assigned,
-            "is_active": a.is_active,
-        }
-        for a in adjusters
-    ]
+    return [_adjuster_dict(a) for a in adjusters]
 
 
 @router.get("/adjusters/{adjuster_id}")
@@ -377,24 +392,10 @@ def get_adjuster(
     db: Session = Depends(get_db),
 ):
     """Retrieve details of a single adjuster."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
-    if not adjuster:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Adjuster not found.",
-        )
-
-    return {
-        "id": adjuster.id,
-        "name": adjuster.name,
-        "email": adjuster.email,
-        "phone": adjuster.phone,
-        "specialization": adjuster.specialization,
-        "claims_assigned": adjuster.claims_assigned,
-        "is_active": adjuster.is_active,
-    }
+    adjuster = get_adjuster_or_404(db, adjuster_id)
+    return _adjuster_dict(adjuster)
 
 
 @router.put("/adjusters/{adjuster_id}")
@@ -408,7 +409,7 @@ def update_adjuster(
     Update an adjuster's information (name, email, phone, specialization, active status).
     Synchronizes the corresponding User account.
     """
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
     if not adjuster:
@@ -469,25 +470,11 @@ def update_adjuster(
         if user:
             user.status = "active" if payload.is_active else "inactive"  # type: ignore[assignment]
 
-    try:
-        db.commit()
-        db.refresh(adjuster)
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to update adjuster %s", adjuster_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update adjuster.",
-        )
+    db_commit_or_500(db, logger, "Failed to update adjuster.", f"Failed to update adjuster {adjuster_id}")
+    db.refresh(adjuster)
 
     return {
-        "id": adjuster.id,
-        "name": adjuster.name,
-        "email": adjuster.email,
-        "phone": adjuster.phone,
-        "specialization": adjuster.specialization,
-        "claims_assigned": adjuster.claims_assigned,
-        "is_active": adjuster.is_active,
+        **_adjuster_dict(adjuster),
         "message": "Adjuster updated successfully.",
     }
 
@@ -501,7 +488,7 @@ def reset_adjuster_password(
     """
     Reset an adjuster's password and generate a new temporary password.
     """
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
     if not adjuster:
@@ -520,15 +507,11 @@ def reset_adjuster_password(
     temp_password = f"Adj!{secrets.token_urlsafe(8)}9#"
     user.password_hash = get_password_hash(temp_password)  # type: ignore[assignment]
 
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to reset password for adjuster %s", adjuster_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to reset adjuster password.",
-        )
+    db_commit_or_500(
+        db, logger,
+        "Failed to reset adjuster password.",
+        f"Failed to reset password for adjuster {adjuster_id}",
+    )
 
     return {
         "id": adjuster.id,
@@ -548,14 +531,9 @@ def delete_adjuster(
     Delete an adjuster and their associated user record.
     Prevents deletion if active claims are assigned (suggests deactivation instead).
     """
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
-    if not adjuster:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Adjuster not found.",
-        )
+    adjuster = get_adjuster_or_404(db, adjuster_id)
 
     if (adjuster.claims_assigned or 0) > 0:
         raise HTTPException(
@@ -565,18 +543,10 @@ def delete_adjuster(
 
     user = db.query(User).filter(User.id == adjuster_id).first()
 
-    try:
-        db.delete(adjuster)
-        if user:
-            db.delete(user)
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to delete adjuster %s", adjuster_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete adjuster.",
-        )
+    db.delete(adjuster)
+    if user:
+        db.delete(user)
+    db_commit_or_500(db, logger, "Failed to delete adjuster.", f"Failed to delete adjuster {adjuster_id}")
 
     return {
         "id": adjuster_id,
@@ -592,7 +562,7 @@ def list_all_policies(
     db: Session = Depends(get_db),
 ):
     """Overview list of all policies in the system and their linking status."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     if page < 1:
         page = 1
@@ -649,7 +619,7 @@ def create_policy(
     db: Session = Depends(get_db),
 ):
     """Create a single new policy record with validation."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     policy_num = payload.policy_number.strip().upper()
     existing = db.query(Policy).filter(Policy.policy_number == policy_num).first()
@@ -659,31 +629,13 @@ def create_policy(
             detail=f"Policy '{policy_num}' already exists.",
         )
 
-    policy_type = payload.policy_type.strip().lower()
-    if policy_type not in CANONICAL_POLICY_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid policy_type '{policy_type}'. Must be one of {sorted(CANONICAL_POLICY_TYPES)}",
-        )
-
-    try:
-        eff_date = datetime.strptime(payload.effective_date.strip(), "%Y-%m-%d").date()
-        exp_date = datetime.strptime(payload.expiry_date.strip(), "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Effective date and expiry date must be in YYYY-MM-DD format.",
-        )
+    policy_type = validate_policy_type(payload.policy_type)
+    eff_date = parse_date(payload.effective_date, "Effective date")
+    exp_date = parse_date(payload.expiry_date, "Expiry date")
 
     holder_dob = None
     if payload.policyholder_dob:
-        try:
-            holder_dob = datetime.strptime(payload.policyholder_dob.strip(), "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Policyholder date of birth must be in YYYY-MM-DD format.",
-            )
+        holder_dob = parse_date(payload.policyholder_dob, "Policyholder date of birth")
 
     phone = None
     if payload.policyholder_phone:
@@ -710,28 +662,11 @@ def create_policy(
     )
 
     db.add(new_policy)
-    try:
-        db.commit()
-        db.refresh(new_policy)
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to create policy")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create policy in database.",
-        )
+    db_commit_or_500(db, logger, "Failed to create policy in database.", "Failed to create policy")
+    db.refresh(new_policy)
 
     return {
-        "id": new_policy.id,
-        "policy_number": new_policy.policy_number,
-        "policy_type": new_policy.policy_type,
-        "coverage_amount": new_policy.coverage_amount,
-        "deductible": new_policy.deductible,
-        "effective_date": str(new_policy.effective_date),
-        "expiry_date": str(new_policy.expiry_date),
-        "is_active": new_policy.is_active,
-        "policyholder_name": new_policy.policyholder_name,
-        "policyholder_phone": new_policy.policyholder_phone,
+        **_policy_dict(new_policy),
         "message": "Policy created successfully.",
     }
 
@@ -744,7 +679,7 @@ def update_policy(
     db: Session = Depends(get_db),
 ):
     """Update existing policy details safely."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     policy = _find_policy(db, policy_id_or_number)
     if not policy:
@@ -757,13 +692,7 @@ def update_policy(
         policy.is_active = payload.is_active  # type: ignore[assignment]
 
     if payload.policy_type is not None:
-        ptype = payload.policy_type.strip().lower()
-        if ptype not in CANONICAL_POLICY_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid policy_type '{ptype}'. Must be one of {sorted(CANONICAL_POLICY_TYPES)}",
-            )
-        policy.policy_type = ptype  # type: ignore[assignment]
+        policy.policy_type = validate_policy_type(payload.policy_type)  # type: ignore[assignment]
 
     if payload.coverage_amount is not None:
         policy.coverage_amount = payload.coverage_amount  # type: ignore[assignment]
@@ -772,22 +701,10 @@ def update_policy(
         policy.deductible = payload.deductible  # type: ignore[assignment]
 
     if payload.effective_date is not None:
-        try:
-            policy.effective_date = datetime.strptime(payload.effective_date.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Effective date must be in YYYY-MM-DD format.",
-            )
+        policy.effective_date = parse_date(payload.effective_date, "Effective date")  # type: ignore[assignment]
 
     if payload.expiry_date is not None:
-        try:
-            policy.expiry_date = datetime.strptime(payload.expiry_date.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Expiry date must be in YYYY-MM-DD format.",
-            )
+        policy.expiry_date = parse_date(payload.expiry_date, "Expiry date")  # type: ignore[assignment]
 
     if payload.policyholder_name is not None:
         policy.policyholder_name = payload.policyholder_name.strip() or None  # type: ignore[assignment]
@@ -796,13 +713,7 @@ def update_policy(
         if payload.policyholder_dob.strip() == "":
             policy.policyholder_dob = None  # type: ignore[assignment]
         else:
-            try:
-                policy.policyholder_dob = datetime.strptime(payload.policyholder_dob.strip(), "%Y-%m-%d").date()  # type: ignore[assignment]
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Policyholder date of birth must be in YYYY-MM-DD format.",
-                )
+            policy.policyholder_dob = parse_date(payload.policyholder_dob, "Policyholder date of birth")  # type: ignore[assignment]
 
     if payload.policyholder_phone is not None:
         p = payload.policyholder_phone.strip()
@@ -817,28 +728,15 @@ def update_policy(
     if payload.policyholder_phone_last4 is not None:
         policy.policyholder_phone_last4 = payload.policyholder_phone_last4.strip()  # type: ignore[assignment]
 
-    try:
-        db.commit()
-        db.refresh(policy)
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to update policy %s", policy_id_or_number)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update policy in database.",
-        )
+    db_commit_or_500(
+        db, logger,
+        "Failed to update policy in database.",
+        f"Failed to update policy {policy_id_or_number}",
+    )
+    db.refresh(policy)
 
     return {
-        "id": policy.id,
-        "policy_number": policy.policy_number,
-        "policy_type": policy.policy_type,
-        "coverage_amount": policy.coverage_amount,
-        "deductible": policy.deductible,
-        "effective_date": str(policy.effective_date),
-        "expiry_date": str(policy.expiry_date),
-        "is_active": policy.is_active,
-        "policyholder_name": policy.policyholder_name,
-        "policyholder_phone": policy.policyholder_phone,
+        **_policy_dict(policy),
         "message": "Policy updated successfully.",
     }
 
@@ -850,7 +748,7 @@ def delete_policy(
     db: Session = Depends(get_db),
 ):
     """Delete a policy by ID or policy number."""
-    _resolve_admin(request, db)
+    _require_admin(request, db)
 
     policy = _find_policy(db, policy_id_or_number)
     if not policy:
@@ -860,15 +758,11 @@ def delete_policy(
         )
 
     db.delete(policy)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to delete policy %s", policy_id_or_number)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete policy from database.",
-        )
+    db_commit_or_500(
+        db, logger,
+        "Failed to delete policy from database.",
+        f"Failed to delete policy {policy_id_or_number}",
+    )
 
     return {
         "message": f"Policy '{policy_id_or_number}' deleted successfully.",

@@ -23,7 +23,10 @@ async def process_claimant_turn(
     turn_number: int | None = None,
 ) -> Dict[str, Any]:
     """Process one claimant turn without blocking the event loop during LLM work."""
-    if claim.status == "submitted" or claim.conversation_status in {"submitted", "confirmed"}:
+    from src.agents.policy_check import verify_policy_for_claim
+    from src.database.claim_workflow import assign_claim, transition_claim
+
+    if claim.status in {"submitted", "assigned", "under_review", "closed"}:
         prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
         logical_turn = (prior_turns // 2) + 1
         agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters."
@@ -34,10 +37,7 @@ async def process_claimant_turn(
         except Exception:
             db.rollback()
         state = dict(getattr(claim, "pipeline_state", None) or {})
-        return {**state, "next_question": agent_reply, "message": agent_reply, "conversation_status": "confirmed"}
-
-    if claim.conversation_status in {"pending_verification", "verified", "verification_failed", "escalated"}:
-        return dict(getattr(claim, "pipeline_state", None) or {})
+        return {**state, "next_question": agent_reply, "message": agent_reply, "conversation_status": "submitted"}
 
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     logical_turn = (prior_turns // 2) + 1
@@ -47,6 +47,62 @@ async def process_claimant_turn(
     # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
     result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
     extracted = result.get("extracted_data", {}) or {}
+
+    # Stage 2: Policy Verification Trigger upon Baseline Confirmation
+    if result.get("confirmed") and claim.status not in {"verified", "submitted", "assigned"}:
+        verification = verify_policy_for_claim(
+            policy_id=extracted.get("policy_id"),
+            event_date_str=extracted.get("event_date"),
+            claimant_user_id=str(claim.claimant_id),
+            insurance_type=extracted.get("insurance_type"),
+            db=db,
+            claim_id=claim.id,
+        )
+        result["policy_verification"] = verification
+        if verification.get("valid"):
+            result["policy_valid"] = True
+            try:
+                transition_claim(db, claim, "verified", str(claim.claimant_id), "policy verification successful")
+            except Exception:
+                claim.status = "verified"
+            if result.get("dynamic_missing") or result.get("missing_evidence"):
+                result["conversation_status"] = "collecting_dynamic"
+            else:
+                result["conversation_status"] = "final_review"
+        else:
+            result["policy_valid"] = False
+            try:
+                transition_claim(db, claim, "verification_failed", str(claim.claimant_id), verification.get("reason", "policy verification failed"))
+            except Exception:
+                claim.status = "verification_failed"
+            result["conversation_status"] = "verification_failed"
+
+    # Stage 4: Final Submission to Adjuster upon Final Confirmation
+    dynamic_rem = result.get("dynamic_missing") or []
+    missing_ev = result.get("missing_evidence") or []
+    is_final_turn = (
+        claim.status == "verified"
+        and not dynamic_rem
+        and not missing_ev
+        and result.get("confirmed")
+        and (result.get("last_intent") in {"confirmation", "claim_detail"} or prior_state.get("conversation_status") == "final_review")
+    )
+
+    if is_final_turn and claim.status != "submitted":
+        try:
+            assigned = assign_claim(db, claim, str(claim.claimant_id))
+            transition_claim(db, claim, "assigned", str(claim.claimant_id), "assigned to adjuster")
+            result["assigned_adjuster_id"] = assigned.id
+            result["assigned_adjuster_name"] = assigned.name
+            result["assigned_adjuster"] = {"id": assigned.id, "name": assigned.name, "specialization": assigned.specialization}
+            claim.status = "submitted"
+            result["conversation_status"] = "submitted"
+            result["status"] = "submitted"
+            submission_msg = f"Your claim #{claim.ticket_id} has been submitted and assigned to adjuster {assigned.name}. You're all set! We will update you as it is processed."
+            result["next_question"] = submission_msg
+            result["message"] = submission_msg
+        except Exception as exc:
+            logger.warning("Assignment failed during conversational final confirmation: %s", exc)
 
     claim.pipeline_state = dict(result)
     claim.insurance_type = extracted.get("insurance_type")

@@ -41,20 +41,27 @@ class Settings(BaseSettings):
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
     CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
     CLOUD_LLM_API_KEY: Optional[str] = None
-    EMBEDDING_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "qwen/qwen3-embedding-0.6b"
+    GEMINI_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None
+    EMBEDDING_PROVIDER: str = "ollama"
+    EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
+    EMBEDDING_MODEL: str = "nomic-embed-text"
+    EMBEDDING_API_KEY: Optional[str] = None
     EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
-    RERANK_MODEL: Optional[str] = "qwen/qwen3-reranker-0.6b"
+    RERANK_MODEL: Optional[str] = None
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
-    AWS_REGION: str = "eu-north-1"
+    AWS_REGION: str = "ap-south-1"
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_SESSION_TOKEN: Optional[str] = None
     S3_BUCKET: Optional[str] = None
     S3_ENDPOINT_URL: Optional[str] = None
     S3_SERVER_SIDE_ENCRYPTION: str = "AES256"
     S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
     S3_EVIDENCE_PREFIX: str = "claims"
-    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 150 * 1024 * 1024
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
 
     STT_MODEL_SIZE: str = "small"

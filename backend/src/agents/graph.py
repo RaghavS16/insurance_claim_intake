@@ -11,30 +11,22 @@ from src.agents.turn_guard import conversation_turn_processor
 from src.agents.dynamic_requirements import build_dynamic_context, extract_answers
 
 
-_RESPONSE_SYSTEM_PROMPT = """You are the conversation planner for a voice-first insurance claim assistant.
+_RESPONSE_SYSTEM_PROMPT = """You are an intelligent, empathetic conversation planner for an insurance claim intake assistant.
 
-Your job is NOT to run through a questionnaire. You are an intelligent conversational agent that happens to collect
-insurance claim information. Decide what the most helpful thing to say next from the latest claimant utterance, the
-conversation, and the authoritative claim facts below.
+Your goal is to guide the claimant through a smooth, natural conversation across 4 stages:
+1. Baseline Details Gathering: Collect incident description, insurance type, incident date, incident location, approximate damage/loss amount, and policy number. Acknowledge facts provided, respond empathetically, and ask only for what is still needed.
+2. Baseline Confirmation & Policy Verification: Once all baseline details are present, present a concise recap and ask the claimant if the details are accurate. Once verified, transition smoothly to specific details.
+3. Dynamic Requirements & Evidence Files: Gather domain-specific details (from RAG) and remind them to upload supporting documents or photos if needed.
+4. Final Review & Submission: Once all specific details and evidence are in place, ask if they would like to submit the claim directly to the claims adjuster.
 
 Rules:
-- Respond naturally to what the claimant just said. Do not mechanically continue a previous question.
-- If the claimant asked a question, answer it when the available information supports an answer. Never invent policy,
-  coverage, regulatory, legal, or claim facts. If the answer requires policy/regulatory documents that are not yet
-  available, say that briefly and continue the intake naturally.
-- If the claimant corrected a fact, acknowledge the correction and use the corrected value.
-- If the claimant supplied several facts, acknowledge the useful information together; do not ask for facts already known.
-- If information is missing, ask only for the smallest useful set of missing baseline details. Group related details when
-  that sounds natural, rather than asking one field per turn. Do not enumerate fields like a form.
-- If all baseline facts are present, do not ask another intake question. If confirmation is pending, use the grounded
-  recap supplied by the application.
-- If the claimant is simply thinking, pausing, thanking you, greeting you, or making process/social conversation, respond
-  to that intent instead of forcing an intake question. Keep the response short for voice.
-- Do not mention internal state, fields, schemas, extraction, LangGraph, agents, prompts, or "missing fields".
-- Do not use bullets or numbered lists. Keep the response to one or two natural sentences suitable for speech.
-
-Authoritative baseline fields are: policy number, incident date, insurance type, incident description, incident location,
-and approximate claim/loss amount.
+- Speak naturally and conversationally. Do not sound like a rigid questionnaire or form.
+- If the claimant provided several facts at once, acknowledge them together.
+- If the claimant made a correction (e.g. "my policy number is POL-1409-XI"), warmly acknowledge the correction and use the updated value.
+- If the claimant asks a question, answer it helpfully based on available information or insurance context.
+- Never invent policy numbers, coverage decisions, or legal facts.
+- Do not mention internal variables, schemas, JSON, LangGraph, agents, or "missing fields".
+- Keep voice-friendly: 1 to 2 clear, natural sentences suitable for text and speech.
 """
 
 _FIELD_LABELS = {
@@ -51,7 +43,7 @@ def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
     """Safe, non-form-like fallback when the response model is unavailable."""
     if not missing:
         return "I have the claim details I need. Is everything correct?"
-    labels = [_FIELD_LABELS[field] for field in missing[:3]]
+    labels = [_FIELD_LABELS[field] for field in missing[:3] if field in _FIELD_LABELS]
     if len(missing) >= 5 and not data:
         return (
             "Tell me whatever you know about what happened, when and where it happened, your insurance type, "
@@ -61,7 +53,7 @@ def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
         return f"Whenever you're ready, tell me {labels[0]}."
     if len(labels) == 2:
         return f"Whenever you're ready, tell me {labels[0]} and {labels[1]}."
-    return f"Whenever you're ready, tell me {labels[0]}, {labels[1]}, and {labels[2]}."
+    return f"Whenever you're ready, tell me {', '.join(labels)}."
 
 
 def _message_text(result: Any) -> str:
@@ -80,27 +72,13 @@ def _message_text(result: Any) -> str:
 
 
 def _response_is_usable(response: str, missing: list[str], data: dict[str, Any]) -> bool:
-    if not response or len(response) > 500:
+    if not response or len(response) > 600:
         return False
     low = response.lower()
     if "<" in response or ">" in response:
         return False
     if any(token in low for token in ("json", "schema", "langgraph", "extracted_data", "missing_fields")):
         return False
-
-    # Prevent the response model from asking for a fact that is already authoritative.
-    supplied_markers = {
-        "policy_id": ("policy number", "policy id", "policy no"),
-        "event_date": ("when the incident", "incident date", "date of the incident"),
-        "insurance_type": ("type of insurance", "insurance type"),
-        "event_description": ("what happened", "describe the incident", "incident description"),
-        "event_location": ("where it happened", "where the incident", "incident location"),
-        "estimated_claim_amount": ("loss", "repair cost", "claim amount", "estimated cost"),
-    }
-    for field, markers in supplied_markers.items():
-        if field not in missing and data.get(field) not in (None, "", nodes.UNKNOWN_SENTINEL):
-            if any(marker in low for marker in markers):
-                return False
     return True
 
 
@@ -134,13 +112,18 @@ def _model_response(state: ClaimState) -> str:
     return _natural_fallback(missing, data)
 
 
-
 def _dynamic_fallback(state: ClaimState) -> str:
     remaining = state.get("dynamic_missing") or []
-    if not remaining:
-        return _natural_fallback(list(state.get("missing_fields", [])), state.get("extracted_data", {}))
-    first = remaining[0]
-    return f"Thanks. To complete this claim, could you tell me about {first.get('label', 'that detail').lower()}?"
+    missing_ev = state.get("missing_evidence") or []
+    data = state.get("extracted_data") or {}
+    if remaining:
+        first = remaining[0]
+        hint = first.get("question_hint") or f"could you provide your {first.get('label', 'details').lower()}?"
+        return f"To proceed with your {data.get('insurance_type', '')} claim, {hint}".strip()
+    if missing_ev:
+        first_ev = missing_ev[0]
+        return f"Please upload {first_ev.get('label', 'the supporting document').lower()} when you have it so we can continue."
+    return _natural_fallback(list(state.get("missing_fields", [])), data)
 
 
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
@@ -162,9 +145,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["conversation_status"] = "waiting_for_knowledge"
         return state
     extract_answers(state)
-    if state.get("dynamic_missing") or state.get("missing_evidence"):
-        state["awaiting_confirmation"] = False
-        state["confirmed"] = False
+    if state.get("confirmed") and (state.get("dynamic_missing") or state.get("missing_evidence")):
         state["conversation_status"] = "collecting_dynamic"
     return state
 
@@ -175,13 +156,16 @@ def _response_planner(state: ClaimState) -> ClaimState:
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
-    missing_evidence = list(state.get("missing_evidence", []))
-    if state.get("awaiting_confirmation") and not dynamic_missing and not missing_evidence:
+    missing_evidence = list(state.get("missing_evidence") or [])
+    
+    # Stage 1 complete -> Baseline Confirmation Prompt
+    if state.get("awaiting_confirmation") and not state.get("confirmed") and not missing:
         state["next_question_field"] = "confirmation"
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
         state["message"] = state["next_question"]
         return state
-    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing:
+
+    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing and not state.get("dynamic_requirements"):
         state["next_question_field"] = "knowledge"
     elif missing:
         state["next_question_field"] = missing[0]
@@ -190,16 +174,26 @@ def _response_planner(state: ClaimState) -> ClaimState:
     elif missing_evidence:
         state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
     else:
-        state["next_question_field"] = "confirmation"
-    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing:
+        state["next_question_field"] = "final_confirmation"
+
+    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing and not state.get("dynamic_requirements"):
         state["next_question"] = "I have the baseline claim details. I’m checking the claim-specific policy requirements before we continue."
     else:
         state["next_question"] = _model_response(state)
-    if missing_evidence and not dynamic_missing:
+
+    # Safety Guard: Never ask for final adjuster submission if dynamic fields or evidence are still pending
+    if (dynamic_missing or missing_evidence) and not missing:
+        resp_low = state["next_question"].lower()
+        if (
+            state["next_question"] == _natural_fallback(missing, data)
+            or any(term in resp_low for term in ("submit this claim", "submit your claim", "claims adjuster", "ready to submit"))
+        ):
+            state["next_question"] = _dynamic_fallback(state)
+    elif missing_evidence and not dynamic_missing and not missing:
         item = missing_evidence[0]
-        state["next_question"] = f"Please upload the {str(item.get('label', 'supporting document')).lower()} when you have it, and then we can continue."
-    elif dynamic_missing and state["next_question"] == _natural_fallback(missing, data):
-        state["next_question"] = _dynamic_fallback(state)
+        if not state["next_question"] or state["next_question"] == _natural_fallback(missing, data):
+            state["next_question"] = f"Please upload the {str(item.get('label', 'supporting document')).lower()} when you have it, and then we can continue."
+
     state["message"] = state["next_question"]
     return state
 
@@ -228,10 +222,12 @@ _conversation_graph = _build_conversation_graph()
 
 
 def build_conversation_graph():
+    """Return the compiled LangGraph conversation graph singleton."""
     return _conversation_graph
 
 
 def build_intake_graph():
+    """Backward-compatibility alias for build_conversation_graph. Prefer that name."""
     return _conversation_graph
 
 

@@ -1,9 +1,11 @@
 """
 Shared FastAPI dependency functions for authentication and authorization.
 
-Centralizes get_current_user, get_current_user_id, and require_role so that
-other route modules (admin_routes, policy_routes, claim_routes) can import
-from here instead of from main.py, eliminating circular import risks.
+Centralizes get_current_user, get_current_user_id, require_role,
+resolve_bearer_user, get_claim_or_404, get_adjuster_or_404, and
+db_commit_or_500 so that other route modules (admin_routes, policy_routes,
+claim_routes, adjuster_routes) can import from here instead of each
+defining their own boilerplate, eliminating circular import risks.
 """
 from typing import List, Optional
 
@@ -13,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db
-from src.database.models import RevokedToken, User
+from src.database.models import Adjuster, Claim, RevokedToken, User
 from src.utils.auth import get_password_hash, is_token_revoked, verify_token
 from src.utils.logger import app_logger
 
@@ -152,3 +154,94 @@ def require_role(allowed_roles: List[str]):
         return current_user
 
     return dependency
+
+
+# ---------------------------------------------------------------------------
+# Shared request helpers
+# ---------------------------------------------------------------------------
+
+def resolve_bearer_user(
+    request: Request,
+    db: Session,
+    allowed_roles: List[str],
+) -> User:
+    """Extract the Bearer token from the Authorization header, authenticate the
+    caller via ``get_current_user``, and assert the user's role is in
+    ``allowed_roles``.
+
+    This consolidates the three near-identical ``_resolve_admin``,
+    ``_resolve_adjuster``, and ``_resolve_user`` functions that were
+    copy-pasted across admin_routes, adjuster_routes, claim_routes, and
+    policy_routes.
+    """
+    auth_header = request.headers.get("authorization", "")
+    credentials: Optional[HTTPAuthorizationCredentials] = None
+    if auth_header.lower().startswith("bearer "):
+        credentials = HTTPAuthorizationCredentials(
+            scheme="Bearer", credentials=auth_header[7:]
+        )
+    user = get_current_user(request=request, credentials=credentials, db=db)
+    if user.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: Role '{user.role}' is not permitted.",
+        )
+    return user
+
+
+def get_claim_or_404(db: Session, ticket_id: str) -> Claim:
+    """Fetch a Claim by ticket_id and raise HTTP 404 if not found.
+
+    Replaces the repeated pattern::
+
+        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+        if not claim:
+            raise HTTPException(status_code=404, detail="Claim not found.")
+    """
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found.")
+    return claim
+
+
+def get_adjuster_or_404(db: Session, adjuster_id: str) -> Adjuster:
+    """Fetch an Adjuster by id and raise HTTP 404 if not found.
+
+    Replaces the repeated pattern::
+
+        adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+        if not adjuster:
+            raise HTTPException(status_code=404, detail="Adjuster not found.")
+    """
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    if not adjuster:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjuster not found.")
+    return adjuster
+
+
+def db_commit_or_500(
+    db: Session,
+    logger,  # type: ignore[type-arg]
+    error_detail: str,
+    log_message: str = "",
+) -> None:
+    """Commit the current DB transaction, rolling back and raising HTTP 500 on failure.
+
+    Replaces the repeated pattern::
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("...")
+            raise HTTPException(status_code=500, detail="...")
+    """
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(log_message or error_detail)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail,
+        )
