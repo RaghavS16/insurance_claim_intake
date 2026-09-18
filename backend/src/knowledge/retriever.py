@@ -53,6 +53,15 @@ class KnowledgeRetriever:
         except Exception:
             requirements = []
 
+        if not requirements:
+            return {
+                "available": False,
+                "status": "REQUIREMENT_PLAN_UNAVAILABLE",
+                "requirements": [],
+                "policy": policy,
+                "regulations": guidance,
+            }
+
         return {
             "available": True,
             "status": "OK",

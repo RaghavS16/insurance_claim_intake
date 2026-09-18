@@ -257,3 +257,54 @@ class TestExtractAnswers:
 
         assert "injected_key" not in state.get("extracted_data", {})
         assert state["extracted_data"].get("allowed_key") == "valid"
+
+
+def test_rag_documents_without_requirement_plan_do_not_unlock_submission():
+    from src.knowledge.retriever import KnowledgeRetriever
+    with patch("src.knowledge.retriever.search", side_effect=[[{"id":"p1"}],[{"id":"g1"}]]),          patch("src.knowledge.retriever.rerank", side_effect=lambda q, items, top_n=5: items),          patch("src.knowledge.retriever.get_configured_llm", return_value=MagicMock()),          patch("src.knowledge.retriever.get_requirements_from_context", return_value=[]):
+        result = KnowledgeRetriever().retrieve(insurance_type="motor", policy_number="POL-1409-XI", query="bike accident")
+    assert result["available"] is False
+    assert result["status"] == "REQUIREMENT_PLAN_UNAVAILABLE"
+
+
+def test_response_planner_blocks_final_submission_without_rag_plan():
+    from src.agents.graph import _response_planner
+    result = _response_planner({
+        "confirmed": True,
+        "missing_fields": [],
+        "extracted_data": {"insurance_type":"motor"},
+        "dynamic_requirements": [],
+        "dynamic_missing": [],
+        "missing_evidence": [],
+        "rag_status": "REQUIREMENT_PLAN_UNAVAILABLE",
+    })
+    assert result["conversation_status"] == "waiting_for_knowledge"
+    assert "submit" not in result["next_question"].lower()
+    assert "adjuster" not in result["next_question"].lower()
+
+
+def test_response_planner_asks_dynamic_question_before_submission():
+    from src.agents.graph import _response_planner
+    result = _response_planner({
+        "confirmed": True,
+        "missing_fields": [],
+        "extracted_data": {"insurance_type":"motor"},
+        "dynamic_requirements": [{
+            "key":"vehicle_registration_number",
+            "label":"Vehicle registration number",
+            "question_hint":"What is your bike's registration number?",
+            "required": True,
+            "evidence_type": None,
+        }],
+        "dynamic_missing": [{
+            "key":"vehicle_registration_number",
+            "label":"Vehicle registration number",
+            "question_hint":"What is your bike's registration number?",
+            "required": True,
+            "evidence_type": None,
+        }],
+        "missing_evidence": [],
+        "rag_status": "OK",
+    })
+    assert result["conversation_status"] == "collecting_dynamic"
+    assert result["next_question"] == "What is your bike's registration number?"

@@ -129,106 +129,146 @@ def _dynamic_fallback(state: ClaimState) -> str:
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
+
     data = state.get("extracted_data") or {}
     insurance_type = data.get("insurance_type")
     if not insurance_type:
         state["dynamic_requirements"] = []
         state["dynamic_missing"] = []
+        state["missing_evidence"] = []
+        state["rag_status"] = "NO_INSURANCE_TYPE"
         return state
+
+    context_key = "|".join(
+        str(data.get(k) or "")
+        for k in ("insurance_type", "policy_id", "event_date", "event_description")
+    )
+    if (
+        state.get("rag_context_key") == context_key
+        and state.get("rag_status") == "OK"
+        and state.get("dynamic_requirements")
+    ):
+        extract_answers(state)
+        if state.get("confirmed") and (
+            state.get("dynamic_missing") or state.get("missing_evidence")
+        ):
+            state["conversation_status"] = "collecting_dynamic"
+        return state
+
     context = build_dynamic_context(state)
     state["rag_status"] = context.get("status", "UNKNOWN")
     state["dynamic_requirements"] = context.get("requirements", [])
     state["knowledge_context"] = context
+    state["rag_context_key"] = context_key
+
     if not context.get("available", False):
-        state["dynamic_missing"] = [{"key": "__rag_unavailable__", "label": "claim-specific knowledge retrieval", "required": True}]
+        state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["conversation_status"] = "waiting_for_knowledge"
         return state
+
     extract_answers(state)
-    if state.get("confirmed") and (state.get("dynamic_missing") or state.get("missing_evidence")):
+    if state.get("confirmed") and (
+        state.get("dynamic_missing") or state.get("missing_evidence")
+    ):
         state["conversation_status"] = "collecting_dynamic"
+    elif state.get("confirmed"):
+        state["conversation_status"] = "final_review"
     return state
 
 
 def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
+
     missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
     missing_evidence = list(state.get("missing_evidence") or [])
-    
-    # Stage 1 complete -> Baseline Confirmation Prompt
+    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") == "OK"
+
     if state.get("awaiting_confirmation") and not state.get("confirmed") and not missing:
         state["next_question_field"] = "confirmation"
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
+        state["conversation_status"] = "reviewing"
         state["message"] = state["next_question"]
         return state
 
-    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing and not state.get("dynamic_requirements"):
+    if state.get("confirmed") and not missing and not plan_ready:
+        state["conversation_status"] = "waiting_for_knowledge"
         state["next_question_field"] = "knowledge"
-    elif missing:
+        status = state.get("rag_status")
+        if status == "REQUIREMENT_PLAN_UNAVAILABLE":
+            state["next_question"] = (
+                "I've verified the basic claim details, but I couldn't determine the claim-specific "
+                "requirements from the available policy guidance yet. The claim cannot be submitted "
+                "until those requirements are available."
+            )
+        elif status == "NO_RELEVANT_KNOWLEDGE":
+            state["next_question"] = (
+                "I've verified the basic claim details, but I couldn't find applicable policy guidance "
+                "for this claim yet. The claim cannot be submitted until the applicable requirements "
+                "are available."
+            )
+        else:
+            state["next_question"] = (
+                "I've verified the basic claim details. I need the applicable claim requirements before "
+                "we continue."
+            )
+        state["message"] = state["next_question"]
+        return state
+
+    if missing:
         state["next_question_field"] = missing[0]
+        state["next_question"] = _natural_fallback(missing, data)
     elif dynamic_missing:
         state["next_question_field"] = dynamic_missing[0].get("key")
+        state["next_question"] = _dynamic_fallback(state)
+        state["conversation_status"] = "collecting_dynamic"
     elif missing_evidence:
         state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
+        state["next_question"] = _dynamic_fallback(state)
+        state["conversation_status"] = "collecting_dynamic"
     else:
         state["next_question_field"] = "final_confirmation"
 
-    if state.get("rag_status") not in {None, "OK", "NO_INSURANCE_TYPE"} and not missing and not state.get("dynamic_requirements"):
-        state["next_question"] = "I have the baseline claim details. I’m checking the claim-specific policy requirements before we continue."
-    else:
-        state["next_question"] = _model_response(state)
-
-    # Baseline confirmation is intentionally separate from final submission approval.
-    # The claimant must explicitly approve submission after all RAG-derived details
-    # and verified evidence are complete.
     if (
         state.get("confirmed")
         and not missing
+        and plan_ready
         and not dynamic_missing
         and not missing_evidence
-        and state.get("rag_status") == "OK"
     ):
         if state.get("awaiting_submission_confirmation"):
             if state.get("last_intent") == "confirmation":
                 state["final_submission_confirmed"] = True
                 state["awaiting_submission_confirmation"] = False
                 state["conversation_status"] = "submitting"
-                state["next_question"] = "Thanks. I’ll submit the completed claim now."
+                state["next_question"] = "Thanks. I'll submit the completed claim now."
             elif state.get("last_intent") == "rejection":
                 state["final_submission_confirmed"] = False
                 state["awaiting_submission_confirmation"] = False
                 state["conversation_status"] = "final_review"
-                state["next_question"] = "No problem. Tell me what you’d like to change before I submit it."
+                state["next_question"] = "No problem. Tell me what you'd like to change before I submit it."
             else:
                 state["final_submission_confirmed"] = False
-                state["next_question"] = "Everything required is ready. Would you like me to submit the claim to the adjuster?"
+                state["next_question"] = (
+                    "I've collected and checked everything required for this claim. "
+                    "Would you like me to submit it to the adjuster?"
+                )
         else:
             state["final_submission_confirmed"] = False
             state["awaiting_submission_confirmation"] = True
             state["conversation_status"] = "final_review"
-            state["next_question"] = "Everything required is ready. Would you like me to submit the claim to the adjuster?"
+            state["next_question"] = (
+                "I've collected the required claim-specific information. "
+                "Would you like me to submit the claim to the adjuster?"
+            )
         state["message"] = state["next_question"]
         return state
 
-    # Safety Guard: Never ask for final adjuster submission if dynamic fields or evidence are still pending
-    if (dynamic_missing or missing_evidence) and not missing:
-        resp_low = state["next_question"].lower()
-        if (
-            state["next_question"] == _natural_fallback(missing, data)
-            or any(term in resp_low for term in ("submit this claim", "submit your claim", "claims adjuster", "ready to submit"))
-        ):
-            state["next_question"] = _dynamic_fallback(state)
-    elif missing_evidence and not dynamic_missing and not missing:
-        item = missing_evidence[0]
-        if not state["next_question"] or state["next_question"] == _natural_fallback(missing, data):
-            state["next_question"] = f"Please upload the {str(item.get('label', 'supporting document')).lower()} when you have it, and then we can continue."
-
-    state["message"] = state["next_question"]
+    state["message"] = state.get("next_question", "")
     return state
-
 
 def _build_conversation_graph():
     graph = StateGraph(ClaimState)  # type: ignore
