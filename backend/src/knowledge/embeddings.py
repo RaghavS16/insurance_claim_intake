@@ -123,7 +123,12 @@ class EmbeddingService:
 
         # 3. OpenAI-compatible / Ollama / Cloud
         raw_url = (settings.EMBEDDING_BASE_URL or "").rstrip("/")
-        if not raw_url or "openrouter.ai" in raw_url:
+        if "openrouter.ai" in raw_url:
+            raise RuntimeError(
+                "OpenRouter does not provide an embeddings endpoint for this application. "
+                "Configure EMBEDDING_PROVIDER=gemini, fastembed, or an actual OpenAI-compatible embedding service."
+            )
+        if not raw_url:
             base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
             model = settings.EMBEDDING_MODEL or "nomic-embed-text"
             api_key = settings.EMBEDDING_API_KEY or ""
