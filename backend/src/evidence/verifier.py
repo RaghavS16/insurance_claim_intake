@@ -48,6 +48,25 @@ def _extract_image_text(content: bytes, filename: str) -> str:
         return ""
 
 
+def validate_evidence_file(content: bytes, filename: str) -> tuple[bool, str]:
+    """Validate payload signatures; never trust browser MIME or filename alone."""
+    if not content:
+        return False, "The uploaded file is empty."
+    ext = os.path.splitext(filename or "")[1].lower()
+    signatures = {
+        ".pdf": content.startswith(b"%PDF-"),
+        ".jpg": content.startswith(b"\xff\xd8\xff"),
+        ".jpeg": content.startswith(b"\xff\xd8\xff"),
+        ".png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        ".webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+    }
+    if ext in signatures and not signatures[ext]:
+        return False, "The file contents do not match the selected file type."
+    if ext == ".docx" and not content.startswith(b"PK\x03\x04"):
+        return False, "The Word document appears corrupted or is not a valid DOCX payload."
+    return True, ""
+
+
 def extract_evidence_text(content: bytes, filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
     if ext in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -72,6 +91,19 @@ def verify_evidence(
     prevents an unavailable/uncertain model from satisfying a required document.
     """
     sha256 = hashlib.sha256(content).hexdigest()
+    valid_file, file_reason = validate_evidence_file(content, filename)
+    if not valid_file:
+        return {
+            "verification_status": "REJECTED",
+            "detected_document_type": "invalid_file",
+            "confidence": 1.0,
+            "reason": file_reason,
+            "extracted_fields": {},
+            "claim_consistency": "UNKNOWN",
+            "consistency_notes": [],
+            "sha256": sha256,
+            "extracted_text_length": 0,
+        }
     text = extract_evidence_text(content, filename)
     if len(text.strip()) < 20:
         return {
@@ -102,6 +134,9 @@ UPLOADED DOCUMENT CONTENT:
 
 Rules:
 1. VERIFIED only when the content clearly represents the requested evidence and is relevant to the claim context.
+1a. Do not use the filename, extension, MIME type, or requested label as evidence of document type.
+1b. A renamed or mislabeled document must be classified by its actual contents.
+1c. If the requested item is a bill/invoice/receipt, verify that the document itself contains bill-like evidence (issuer/provider, transaction/invoice information, line items or amount, and document identity where present); a ticket, itinerary, discharge summary, prescription, or unrelated form is not a bill.
 2. REJECTED when the document is clearly a different evidence type.
 3. REVIEW_REQUIRED when the type is plausible but ambiguous, conflicting, or insufficiently readable/complete.
 4. UNREADABLE only when content cannot be reliably interpreted.
@@ -128,6 +163,10 @@ Rules:
             "consistency_notes": [type(exc).__name__],
         }
     status = str(data.get("verification_status", "REVIEW_REQUIRED")).upper()
+    confidence = float(data.get("confidence") or 0.0)
+    if status == "VERIFIED" and (confidence < 0.85 or str(data.get("claim_consistency", "UNKNOWN")).upper() == "INCONSISTENT"):
+        status = "REVIEW_REQUIRED"
+        data["reason"] = data.get("reason") or "Automatic verification confidence is not high enough for acceptance."
     if status not in {"VERIFIED", "REJECTED", "REVIEW_REQUIRED", "UNREADABLE"}:
         status = "REVIEW_REQUIRED"
     data["verification_status"] = status
