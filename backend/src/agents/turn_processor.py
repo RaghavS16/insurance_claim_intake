@@ -86,7 +86,7 @@ async def process_claimant_turn(
         and not dynamic_rem
         and not missing_ev
         and result.get("confirmed")
-        and (result.get("last_intent") in {"confirmation", "claim_detail"} or prior_state.get("conversation_status") == "final_review")
+        and result.get("final_submission_confirmed")
     )
 
     if is_final_turn and claim.status != "submitted":
