@@ -35,6 +35,10 @@ interface SessionPayload {
   estimated_claim_amount?: number;
   extracted_data?: ExtractedData;
   missing_fields?: string[];
+  dynamic_requirements?: Array<Record<string, unknown>>;
+  dynamic_missing?: Array<Record<string, unknown>>;
+  missing_evidence?: Array<Record<string, unknown>>;
+  evidence?: Array<Record<string, unknown>>;
   field_status?: Record<string, string>;
   awaiting_confirmation?: boolean;
   confirmed?: boolean;
@@ -70,7 +74,8 @@ export default function ClaimantPage() {
   const [submittingClaim, setSubmittingClaim] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
-  const [missingEvidence, setMissingEvidence] = useState<any[]>([]);
+  const [missingEvidence, setMissingEvidence] = useState<Array<Record<string, unknown>>>([]);
+  const [evidenceItems, setEvidenceItems] = useState<Array<Record<string, unknown>>>([]);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -337,6 +342,8 @@ export default function ClaimantPage() {
     setConversationStatus(data.conversation_status || data.status || "collecting");
     setExtractedData(data.extracted_data || {});
     setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+    setMissingEvidence(data.missing_evidence || []);
+    setEvidenceItems(data.evidence || []);
     setPartialSegments(new Map());
     const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
@@ -517,7 +524,7 @@ export default function ClaimantPage() {
     setAgentState("thinking");
     try {
       const activeTid = ticketId || await ensureClaimSession(token);
-      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string }>(
+      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string; missing_evidence?: Array<Record<string, unknown>>; evidence?: Array<Record<string, unknown>> }>(
         `/api/v1/claims/${activeTid}/text-turn`,
         {
           method: "POST",
@@ -533,6 +540,8 @@ export default function ClaimantPage() {
       }
       setExtractedData(data.extracted_data || {});
       setConfirmed(Boolean(data.confirmed || data.status === "submitted"));
+      setMissingEvidence(data.missing_evidence || []);
+      setEvidenceItems(data.evidence || []);
       fetchClaimsList(token);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Unable to process message.");
@@ -551,7 +560,7 @@ export default function ClaimantPage() {
     try {
       const form = new FormData();
       form.append("file", file);
-      await apiFetch(
+      const result = await apiFetch<{ missing_evidence?: Array<Record<string, unknown>>; evidence_items?: Array<Record<string, unknown>>; message?: string }>(
         `/api/v1/claims/${ticketId}/evidence`,
         {
           method: "POST",
@@ -559,10 +568,12 @@ export default function ClaimantPage() {
           body: form,
         },
       );
+      setMissingEvidence(result.missing_evidence || []);
+      setEvidenceItems(result.evidence_items || []);
       setHistory((prev) => [...prev, {
         turn: prev.length + 1,
         speaker: "agent",
-        text: `I received “${file.name}”. I'll include it with your claim evidence.`,
+        text: result.message || `I checked “${file.name}” against the claim evidence requirements.`,
         timestamp: Date.now(),
       }]);
     } catch (err: unknown) {
