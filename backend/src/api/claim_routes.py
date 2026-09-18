@@ -5,6 +5,7 @@ Phase 1 owns the persistent claimant conversation: draft sessions can be
 resumed after navigation, browser refresh, or a disconnected voice socket.
 """
 import uuid
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
@@ -22,6 +23,7 @@ from src.agents.dynamic_requirements import missing_evidence
 from src.database.models import Adjuster
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement
 from src.evidence.verifier import verify_evidence
+from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim
 from src.api.deps import get_current_user, resolve_bearer_user
 
