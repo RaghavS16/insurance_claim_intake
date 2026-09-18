@@ -11,6 +11,8 @@ interface CollectedDetailsPanelProps {
   submittingClaim?: boolean;
   confirmed: boolean;
   submitted?: boolean;
+  missingEvidence?: Array<Record<string, unknown>>;
+  evidenceItems?: Array<Record<string, unknown>>;
   ticketId: string;
 }
 
@@ -19,6 +21,8 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   onOpenEdit,
   confirmed,
   submitted = false,
+  missingEvidence = [],
+  evidenceItems = [],
 }) => {
   const pendingCount = [
     !extractedData.policy_id,
@@ -221,6 +225,48 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
             {extractedData.event_description || <span className="text-[#94a3b8] italic">No description recorded yet</span>}
           </p>
         </div>
+        <div className="bg-white border border-[#cbd5e1] rounded-xl p-4 flex flex-col gap-3 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">Claim-specific evidence</span>
+            <span className="text-[10px] font-semibold text-[#64748b]">
+              {missingEvidence.length ? `${missingEvidence.length} remaining` : evidenceItems.length ? "Verified / reviewed" : "Not required yet"}
+            </span>
+          </div>
+          {missingEvidence.length > 0 && (
+            <div className="space-y-2">
+              {missingEvidence.slice(0, 4).map((item, index) => (
+                <div key={String(item.key || index)} className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-900">{String(item.label || item.key || "Supporting evidence")}</p>
+                  <p className="text-[11px] text-amber-800 mt-1">{String(item.question_hint || "Please provide the requested supporting evidence.")}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {evidenceItems.length > 0 && (
+            <div className="space-y-2">
+              {evidenceItems.slice(-4).map((item, index) => {
+                const status = String(item.verification_status || item.status || "review_required").toUpperCase();
+                const label = status === "VERIFIED" ? "Verified" : status === "REJECTED" ? "Rejected" : status === "UNREADABLE" ? "Unreadable" : "Review required";
+                return (
+                  <div key={String(item.id || index)} className="rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-800 truncate">{String(item.name || "Evidence")}</p>
+                      <span className="text-[10px] font-bold uppercase text-slate-600">{label}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1">
+                      Requested: {String(item.requested_evidence_type || item.evidence_key || "supporting evidence")}
+                      {item.detected_document_type ? ` · Detected: ${String(item.detected_document_type)}` : ""}
+                    </p>
+                    {item.verification_reason && (
+                      <p className="text-[11px] text-slate-500 mt-1">{String(item.verification_reason)}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
       </div>
 
       {/* Conversational Assistant Footer */}
