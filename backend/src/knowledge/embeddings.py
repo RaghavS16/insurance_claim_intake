@@ -128,14 +128,18 @@ class EmbeddingService:
                 "OpenRouter does not provide an embeddings endpoint for this application. "
                 "Configure EMBEDDING_PROVIDER=gemini, fastembed, or an actual OpenAI-compatible embedding service."
             )
-        if not raw_url:
-            base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
+        if provider == "openai":
+            if not raw_url:
+                raise RuntimeError("EMBEDDING_BASE_URL is required when EMBEDDING_PROVIDER=openai.")
+            base_url = raw_url
+            model = settings.EMBEDDING_MODEL
+            api_key = settings.EMBEDDING_API_KEY or ""
+        elif provider == "ollama":
+            base_url = raw_url or f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
             model = settings.EMBEDDING_MODEL or "nomic-embed-text"
             api_key = settings.EMBEDDING_API_KEY or ""
         else:
-            base_url = raw_url
-            model = settings.EMBEDDING_MODEL
-            api_key = settings.EMBEDDING_API_KEY or settings.CLOUD_LLM_API_KEY or ""
+            raise RuntimeError(f"Unsupported remote embedding provider: {provider}")
 
         try:
             return self._embed_openai_compatible(texts, base_url, model, api_key)
