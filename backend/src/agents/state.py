@@ -18,6 +18,8 @@ class ClaimState(TypedDict, total=False):
     deferral_message: Optional[str]
     awaiting_confirmation: bool
     confirmed: bool
+    awaiting_submission_confirmation: bool
+    final_submission_confirmed: bool
     message: str
 
     conversation_status: str
