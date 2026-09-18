@@ -336,6 +336,8 @@ export default function ClaimantPage() {
     setHistory([]);
     setConfirmed(false);
     setClaimSubmitted(false);
+    setMissingEvidence([]);
+    setEvidenceItems([]);
     setSubmittedMessage("");
     setPartialSegments(new Map());
     setErrorBanner("");
