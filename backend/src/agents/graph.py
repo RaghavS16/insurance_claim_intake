@@ -181,6 +181,38 @@ def _response_planner(state: ClaimState) -> ClaimState:
     else:
         state["next_question"] = _model_response(state)
 
+    # Baseline confirmation is intentionally separate from final submission approval.
+    # The claimant must explicitly approve submission after all RAG-derived details
+    # and verified evidence are complete.
+    if (
+        state.get("confirmed")
+        and not missing
+        and not dynamic_missing
+        and not missing_evidence
+        and state.get("rag_status") == "OK"
+    ):
+        if state.get("awaiting_submission_confirmation"):
+            if state.get("last_intent") == "confirmation":
+                state["final_submission_confirmed"] = True
+                state["awaiting_submission_confirmation"] = False
+                state["conversation_status"] = "submitting"
+                state["next_question"] = "Thanks. I’ll submit the completed claim now."
+            elif state.get("last_intent") == "rejection":
+                state["final_submission_confirmed"] = False
+                state["awaiting_submission_confirmation"] = False
+                state["conversation_status"] = "final_review"
+                state["next_question"] = "No problem. Tell me what you’d like to change before I submit it."
+            else:
+                state["final_submission_confirmed"] = False
+                state["next_question"] = "Everything required is ready. Would you like me to submit the claim to the adjuster?"
+        else:
+            state["final_submission_confirmed"] = False
+            state["awaiting_submission_confirmation"] = True
+            state["conversation_status"] = "final_review"
+            state["next_question"] = "Everything required is ready. Would you like me to submit the claim to the adjuster?"
+        state["message"] = state["next_question"]
+        return state
+
     # Safety Guard: Never ask for final adjuster submission if dynamic fields or evidence are still pending
     if (dynamic_missing or missing_evidence) and not missing:
         resp_low = state["next_question"].lower()
