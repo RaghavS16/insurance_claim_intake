@@ -20,6 +20,8 @@ from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence
 from src.database.models import Adjuster
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement
+from src.evidence.verifier import verify_evidence
 from src.database.claim_workflow import assign_claim, transition_claim
 from src.api.deps import get_current_user, resolve_bearer_user
 
@@ -413,33 +415,154 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
 
 @router.post("/{ticket_id}/evidence")
-async def upload_claim_evidence(ticket_id:str,request:Request,file:UploadFile=File(...),evidence_key:Optional[str]=None,db:Session=Depends(get_db)):
-    """Upload claimant evidence to S3 and persist claim-safe metadata."""
-    current_user=_resolve_user(request,db)
-    claim=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
-    if not claim: raise HTTPException(status_code=404,detail="Claim not found.")
-    enforce_claim_ownership(claim,current_user)
-    if claim.status not in ("draft","pending_confirmation"): raise HTTPException(status_code=400,detail="Evidence can only be uploaded while intake is in progress.")
-    if not file.filename: raise HTTPException(status_code=400,detail="A file is required.")
-    allowed={".pdf",".jpg",".jpeg",".png",".webp",".doc",".docx",".txt"}
+async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFile = File(...), evidence_key: Optional[str] = None, db: Session = Depends(get_db)):
+    """Store claimant evidence in S3 and verify it against the dynamic requirement.
+
+    Upload presence never satisfies a requirement. The file must be semantically
+    verified as the requested evidence before missing_evidence() considers it complete.
+    """
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation", "verified"):
+        raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+
+    allowed = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}
     from pathlib import Path
-    ext=Path(file.filename).suffix.lower()
-    if ext not in allowed: raise HTTPException(status_code=400,detail="Unsupported evidence format.")
-    content=await file.read()
-    if len(content)>settings.MAX_UPLOAD_SIZE_BYTES: raise HTTPException(status_code=413,detail="Evidence file is too large.")
-    state=dict(claim.pipeline_state or {})
-    evidence=list(state.get("evidence") or [])
-    outstanding=missing_evidence(state)
-    if not evidence_key and outstanding: evidence_key=outstanding[0].get("key")
-    from src.storage.s3 import put_bytes
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported evidence format.")
+    content = await file.read()
+    if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+
+    state = dict(claim.pipeline_state or {})
+    evidence = list(state.get("evidence") or [])
+    outstanding = missing_evidence(state)
+    if evidence_key:
+        requested = next((r for r in outstanding if str(r.get("key")) == str(evidence_key)), None)
+        if requested is None:
+            raise HTTPException(status_code=400, detail="That evidence requirement is not currently outstanding.")
+    elif outstanding:
+        requested = outstanding[0]
+        evidence_key = requested.get("key")
+    else:
+        raise HTTPException(status_code=400, detail="There are no outstanding evidence requirements for this claim.")
+
+    # Resolve the durable requirement when available so adjusters can trace evidence
+    # back to the exact generated requirement and its provenance.
+    requirement_row = None
     try:
-        s3=put_bytes(content,prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/evidence",filename=file.filename,content_type=file.content_type)
+        requirement_row = db.query(ClaimRequirement).filter(
+            ClaimRequirement.claim_id == claim.id,
+            ClaimRequirement.requirement_key == str(evidence_key),
+        ).first()
+    except Exception:
+        logger.debug("Durable claim requirement lookup unavailable for %s", ticket_id)
+
+    claim_context = {
+        "ticket_id": claim.ticket_id,
+        "insurance_type": state.get("extracted_data", {}).get("insurance_type"),
+        "event_date": state.get("extracted_data", {}).get("event_date"),
+        "event_location": state.get("extracted_data", {}).get("event_location"),
+        "claimant_name": state.get("extracted_data", {}).get("claimant_name"),
+        "event_description": state.get("extracted_data", {}).get("event_description"),
+    }
+    try:
+        s3 = put_bytes(
+            content,
+            prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/evidence",
+            filename=file.filename,
+            content_type=file.content_type or "application/octet-stream",
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502,detail=f"Evidence storage is unavailable: {exc}")
-    item={"id":str(uuid.uuid4()),"name":file.filename,"s3_uri":s3["uri"],"s3_key":s3["key"],"evidence_key":evidence_key,"content_type":file.content_type or "application/octet-stream","size":len(content),"status":"uploaded","review":"pending"}
-    evidence.append(item); state["evidence"]=evidence; state["missing_evidence"]=missing_evidence(state)
-    claim.pipeline_state=state; db.commit()
-    return {"success":True,"evidence":item,"evidence_items":evidence,"missing_evidence":state["missing_evidence"]}
+        raise HTTPException(status_code=502, detail=f"Evidence storage is unavailable: {exc}")
+
+    analysis = await asyncio.to_thread(
+        verify_evidence,
+        content=content,
+        filename=file.filename,
+        requested_evidence=requested,
+        claim_context=claim_context,
+    )
+    verification_status = str(analysis.get("verification_status", "REVIEW_REQUIRED")).upper()
+    item_id = str(uuid.uuid4())
+    item = {
+        "id": item_id,
+        "name": file.filename,
+        "s3_uri": s3["uri"],
+        "s3_key": s3["key"],
+        "evidence_key": evidence_key,
+        "requirement_id": str(requirement_row.id) if requirement_row else None,
+        "content_type": file.content_type or "application/octet-stream",
+        "size": len(content),
+        "status": verification_status.lower(),
+        "review": "complete" if verification_status in {"VERIFIED", "REJECTED", "UNREADABLE"} else "pending",
+        "verification_status": verification_status,
+        "verification_confidence": analysis.get("confidence"),
+        "detected_document_type": analysis.get("detected_document_type"),
+        "requested_evidence_type": analysis.get("requested_evidence_type") or requested.get("evidence_type"),
+        "verification_reason": analysis.get("reason"),
+        "claim_consistency": analysis.get("claim_consistency"),
+        "consistency_notes": analysis.get("consistency_notes") or [],
+        "extracted_fields": analysis.get("extracted_fields") or {},
+        "sha256": analysis.get("sha256"),
+    }
+    evidence.append(item)
+    state["evidence"] = evidence
+    state["missing_evidence"] = missing_evidence(state)
+    state["last_evidence_verification"] = {
+        "evidence_id": item_id,
+        "requirement_key": evidence_key,
+        **analysis,
+    }
+    claim.pipeline_state = state
+
+    db_evidence = ClaimEvidence(
+        id=item_id,
+        claim_id=claim.id,
+        uploaded_by=current_user.id,
+        requirement_id=str(requirement_row.id) if requirement_row else None,
+        object_key=s3["key"],
+        original_filename=file.filename,
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=len(content),
+        sha256=analysis.get("sha256"),
+        status=verification_status.lower(),
+        document_type=analysis.get("detected_document_type"),
+        verification_status=verification_status,
+        verification_confidence=analysis.get("confidence"),
+        detected_document_type=analysis.get("detected_document_type"),
+        requested_evidence_type=analysis.get("requested_evidence_type") or requested.get("evidence_type"),
+        analysis_json=analysis,
+    )
+    db.add(db_evidence)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Evidence verification result could not be persisted.")
+
+    if verification_status == "VERIFIED":
+        message = f"Your {requested.get('label') or requested.get('key') or 'evidence'} was verified successfully."
+    elif verification_status == "REJECTED":
+        message = analysis.get("reason") or "This file does not match the requested evidence. Please upload the correct document."
+    elif verification_status == "UNREADABLE":
+        message = analysis.get("reason") or "I couldn't read this file reliably. Please upload a clearer copy."
+    else:
+        message = analysis.get("reason") or "I couldn't verify this evidence automatically. It remains pending review."
+
+    return {
+        "success": True,
+        "message": message,
+        "evidence": item,
+        "evidence_items": evidence,
+        "missing_evidence": state["missing_evidence"],
+    }
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
