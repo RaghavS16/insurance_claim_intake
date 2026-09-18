@@ -206,6 +206,9 @@ export default function ClaimantPage() {
       timestamp?: number;
       extracted_data?: ExtractedData;
       confirmed?: boolean;
+      status?: string;
+      missing_evidence?: Array<Record<string, unknown>>;
+      evidence?: Array<Record<string, unknown>>;
     };
     try {
       msg = JSON.parse(event.data);
@@ -270,6 +273,9 @@ export default function ClaimantPage() {
     if (msg.type === "state_update") {
       setExtractedData(msg.extracted_data || {});
       setConfirmed(Boolean(msg.confirmed));
+      if (msg.status) setClaimSubmitted(msg.status === "submitted");
+      if (msg.missing_evidence) setMissingEvidence(msg.missing_evidence);
+      if (msg.evidence) setEvidenceItems(msg.evidence);
       return;
     }
   }, [enqueueAudio]);
