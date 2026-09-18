@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
+from src.database.hardening_models import ClaimRequirement
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -104,6 +105,43 @@ async def process_claimant_turn(
         except Exception as exc:
             logger.warning("Assignment failed during conversational final confirmation: %s", exc)
 
+    # Persist the RAG-generated requirement plan as durable claim state. The JSON
+    # pipeline_state remains a cache for conversation speed, but requirements are
+    # independently auditable and survive graph/state refactors.
+    requirements = result.get("dynamic_requirements") or []
+    if requirements:
+        existing_rows = {
+            row.requirement_key: row
+            for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
+        }
+        outstanding_dynamic = {str(x.get("key")) for x in (result.get("dynamic_missing") or []) if x.get("key")}
+        outstanding_evidence = {str(x.get("key")) for x in (result.get("missing_evidence") or []) if x.get("key")}
+        for req in requirements:
+            key = str(req.get("key") or "").strip()
+            if not key:
+                continue
+            row = existing_rows.get(key)
+            if row is None:
+                row = ClaimRequirement(claim_id=str(claim.id), requirement_key=key,
+                    label=str(req.get("label") or key), question_hint=req.get("question_hint"),
+                    required=bool(req.get("required", True)), evidence_type=req.get("evidence_type"),
+                    condition_json={"condition": req.get("condition")},
+                    provenance_json=req.get("provenance") or {})
+                db.add(row)
+                existing_rows[key] = row
+            else:
+                row.label = str(req.get("label") or row.label)
+                row.question_hint = req.get("question_hint") or row.question_hint
+                row.required = bool(req.get("required", row.required))
+                row.evidence_type = req.get("evidence_type") or row.evidence_type
+                row.condition_json = {"condition": req.get("condition")}
+                row.provenance_json = req.get("provenance") or row.provenance_json
+            if key in outstanding_evidence:
+                row.status = "evidence_required"
+            elif key in outstanding_dynamic:
+                row.status = "information_required"
+            else:
+                row.status = "satisfied"
     claim.pipeline_state = dict(result)
     claim.insurance_type = extracted.get("insurance_type")
     claim.event_description = extracted.get("event_description")
