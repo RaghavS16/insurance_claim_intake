@@ -225,6 +225,14 @@ def _strip_incident_noise(value: Any) -> str:
     text = re.sub(r"\b(?:yesterday|today|tomorrow|the day before|day before yesterday|this morning|this afternoon|this evening)\b", "", text, flags=re.I)
     return re.sub(r"\s{2,}", " ", text).strip(" ,.-")
 
+def _incident_description_from_text(text: str, current: dict[str, Any] | None = None) -> Optional[str]:
+    """Return an incident narrative from claimant text without copying metadata into it."""
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return None
+    return _normalize_description(raw, raw)
+
+
 def _normalize_description(value: Any, raw: str) -> Optional[str]:
     candidate = _strip_incident_noise(value); raw_clean = " ".join(raw.split()).strip()
     if not candidate or len(candidate) < 4: return None
