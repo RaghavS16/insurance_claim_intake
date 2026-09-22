@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
-from src.agents.llm_factory import get_configured_llm
+from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
 from src.agents.state import ClaimState
 from src.utils.logger import app_logger
 
@@ -75,10 +75,15 @@ def _audit(state: ClaimState, message: str) -> None: state.setdefault("audit_log
 
 def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
     try:
-        result = model.with_structured_output(schema).invoke(prompt)
+        result = invoke_with_retry(
+            lambda: structured_output(model, schema).invoke(prompt),
+            operation_name="baseline structured extraction",
+            attempts=3,
+        )
         if isinstance(result, schema): return result
         if isinstance(result, dict): return schema.model_validate(result)
-    except Exception as exc: logger.warning("Structured extraction failed: %s", exc)
+    except Exception as exc:
+        logger.warning("Structured extraction failed: %s", exc)
     return None
 
 def _history_text(state: ClaimState, limit: int = 8) -> str:
