@@ -44,8 +44,25 @@ async def process_claimant_turn(
     logical_turn = (prior_turns // 2) + 1
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     workflow_event = None
+
+    # A verified claim is already past policy verification even if an older
+    # pipeline_state snapshot did not persist the verification payload. Rehydrate
+    # the workflow gate from the durable claim status so the next claimant turn
+    # can enter RAG instead of getting stuck on "I need the claim requirements".
+    if claim.status == "verified":
+        prior_state["policy_valid"] = True
+        policy_state = prior_state.get("policy_verification") or {}
+        if not isinstance(policy_state, dict) or not policy_state.get("valid"):
+            prior_state["policy_verification"] = {
+                "valid": True,
+                "reason": "Claim is already in the verified workflow state.",
+            }
+        if prior_state.get("confirmed"):
+            workflow_event = "policy_verified"
+
     if user_text.startswith("[System Event] Uploaded evidence"):
         workflow_event = "evidence_verified"
+
     graph_input = {
         **prior_state,
         "claim_text": "" if workflow_event else user_text,
