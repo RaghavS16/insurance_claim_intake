@@ -23,6 +23,7 @@ langgraph>=0.2.0
 langchain>=0.2.0
 langchain-ollama>=0.1.0
 langchain-openai>=0.1.0
+langchain-google-genai>=4.0.0
 
 # Real-time voice: Pipecat + Faster Whisper + WebRTC VAD + Piper TTS
 pipecat-ai[whisper,websocket]==1.8.1
