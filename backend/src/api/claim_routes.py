@@ -274,8 +274,8 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    if claim.status not in ("draft", "pending_confirmation"):
-        raise HTTPException(status_code=400, detail="Only draft claims can be deleted.")
+    if claim.status == "submitted":
+        raise HTTPException(status_code=400, detail="Submitted claims cannot be deleted.")
     
     # Delete associated conversation turns first
     db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()

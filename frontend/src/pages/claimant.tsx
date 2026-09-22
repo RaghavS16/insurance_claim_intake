@@ -420,7 +420,7 @@ export default function ClaimantPage() {
   const handleDeleteClaim = useCallback(async (targetTicketId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!token || !targetTicketId) return;
-    if (!window.confirm(`Discard draft for claim #${targetTicketId}?`)) return;
+    if (!window.confirm(`Delete conversation for claim #${targetTicketId}?`)) return;
     try {
       await apiFetch(
         `/api/v1/claims/${targetTicketId}`,
