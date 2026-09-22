@@ -61,7 +61,14 @@ def _compact_knowledge_context(context: dict[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {
         "available": context.get("available", False),
         "status": context.get("status"),
-        "requirements": context.get("requirements") or [],
+        "requirements": [
+            {
+                k: req.get(k)
+                for k in ("key", "label", "question_hint", "required", "evidence_type", "condition")
+                if req.get(k) is not None
+            }
+            for req in (context.get("requirements") or [])
+        ],
     }
     for key in ("policy", "regulations"):
         rows = []
@@ -111,8 +118,14 @@ def _model_response(state: ClaimState) -> str:
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
-        f"Still-needed claim-specific information: {state.get('dynamic_missing', [])}\n"
-        f"Still-needed evidence uploads: {state.get('missing_evidence', [])}\n"
+        f"Still-needed claim-specific information: {[
+            {k: item.get(k) for k in ('key', 'label', 'question_hint', 'required', 'evidence_type')}
+            for item in (state.get('dynamic_missing') or [])
+        ]}\n"
+        f"Still-needed evidence uploads: {[
+            {k: item.get(k) for k in ('key', 'label', 'question_hint', 'required', 'evidence_type')}
+            for item in (state.get('missing_evidence') or [])
+        ]}\n"
         f"Grounding context: {_compact_knowledge_context(state.get('knowledge_context', {}))}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
