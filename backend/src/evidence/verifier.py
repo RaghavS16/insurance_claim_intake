@@ -162,6 +162,8 @@ Rules:
         result = get_configured_llm().with_structured_output(EvidenceAnalysis).invoke(prompt)
         if isinstance(result, EvidenceAnalysis):
             data = result.model_dump()
+        elif isinstance(result, BaseModel):
+            data = EvidenceAnalysis.model_validate(result.model_dump()).model_dump()
         elif isinstance(result, dict):
             data = EvidenceAnalysis.model_validate(result).model_dump()
         else:
