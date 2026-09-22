@@ -151,7 +151,7 @@ def _dynamic_fallback(state: ClaimState) -> str:
     if remaining:
         first = remaining[0]
         hint = first.get("question_hint") or f"could you provide your {first.get('label', 'details').lower()}?"
-        return f"To proceed with your {data.get('insurance_type', '')} claim, {hint}".strip()
+        return str(hint).strip()
     if missing_ev:
         first_ev = missing_ev[0]
         return f"Please upload {first_ev.get('label', 'the supporting document').lower()} when you have it so we can continue."
