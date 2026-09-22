@@ -103,21 +103,15 @@ def _get_google_api_key() -> str:
     return key
 
 
-def _build_gemini() -> BaseChatModel:
-    """Build the direct Google Gemini chat client.
-
-    Gemini 3.8 Flash is used for fast conversational extraction, dynamic
-    requirement planning, and response generation. Structured output is handled
-    by LangChain's native Gemini integration rather than an OpenAI-compatible
-    router.
-    """
+def _build_gemini(model_name: str | None = None) -> BaseChatModel:
+    """Build a direct Google Gemini client for the requested workload."""
     return ChatGoogleGenerativeAI(
-        model=settings.GEMINI_MODEL,
+        model=model_name or settings.GEMINI_MODEL,
         google_api_key=_get_google_api_key(),
         temperature=0,
         max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
-        max_retries=1,
+        max_retries=0,
     )
 
 
@@ -145,6 +139,14 @@ def _build_openai_compatible() -> BaseChatModel:
         max_retries=0,
         timeout=settings.LLM_TIMEOUT_SECONDS,
     )
+
+
+def get_fast_llm() -> BaseChatModel:
+    """Return the low-latency model used for baseline turns and response wording."""
+    provider = (settings.LLM_PROVIDER or "gemini").lower().strip()
+    if provider in ("gemini", "google"):
+        return _build_gemini(settings.GEMINI_FAST_MODEL)
+    return get_configured_llm()
 
 
 def get_configured_llm() -> BaseChatModel:
