@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 from pydantic import BaseModel, Field
-from src.agents.llm_factory import get_configured_llm
+from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
 from src.knowledge.retriever import KnowledgeRetriever
 from src.agents.state import ClaimState
 
@@ -113,7 +113,11 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
         f"Latest claimant utterance: {utterance}"
     )
     try:
-        result: Any = get_configured_llm().with_structured_output(DynamicExtraction).invoke(prompt)
+        result: Any = invoke_with_retry(
+            lambda: structured_output(get_configured_llm(), DynamicExtraction).invoke(prompt),
+            operation_name="claim-specific structured extraction",
+            attempts=3,
+        )
         if isinstance(result, BaseModel):
             values = result.model_dump().get("values", {})
         elif isinstance(result, dict):
@@ -125,6 +129,7 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
                 state.setdefault("extracted_data", {})[str(key)] = value
     except Exception as exc:
         state["dynamic_extraction_error"] = type(exc).__name__
+        state["dynamic_extraction_error_message"] = str(exc)[:500]
 
     state["dynamic_missing"] = unresolved(state)
     state["missing_evidence"] = missing_evidence(state)
