@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     S3_EVIDENCE_PREFIX: str = "claims"
     KNOWLEDGE_MAX_UPLOAD_BYTES: int = 150 * 1024 * 1024
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
+    LLM_RETRY_ATTEMPTS: int = Field(3, ge=1, le=5)
+    LLM_RETRY_BASE_DELAY_SECONDS: float = Field(1.0, ge=0.1, le=10.0)
 
     STT_MODEL_SIZE: str = "small"
     STT_LANGUAGE: str = "en"
