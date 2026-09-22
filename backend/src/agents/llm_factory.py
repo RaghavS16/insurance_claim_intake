@@ -6,6 +6,7 @@ available when explicitly selected.
 """
 from __future__ import annotations
 
+import json
 import random
 import time
 from typing import Any, Callable, TypeVar
@@ -63,10 +64,62 @@ def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attemp
     raise LLMTransientError(f"{operation_name} failed: {last_exc}") from last_exc
 
 
+class _GeminiJsonStructured:
+    """Parse JSON directly from Gemini without automatic function calling."""
+
+    def __init__(self, model: ChatGoogleGenerativeAI, schema: type[T]):
+        self.model = model
+        self.schema = schema
+
+    @staticmethod
+    def _content_to_text(result: Any) -> str:
+        content = getattr(result, "content", result)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item["text"]))
+            return "".join(parts)
+        return str(content)
+
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        try:
+            json.loads(cleaned)
+            return cleaned
+        except json.JSONDecodeError:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start >= 0 and end > start:
+                candidate = cleaned[start:end + 1]
+                json.loads(candidate)
+                return candidate
+            raise
+
+    def invoke(self, prompt: Any) -> T:
+        schema_json = json.dumps(self.schema.model_json_schema(), ensure_ascii=False)
+        instruction = (
+            "\n\nReturn ONLY one valid JSON object. Do not use Markdown, code fences, "
+            "explanations, or tool/function calls. The JSON must conform exactly to "
+            f"this schema:\n{schema_json}"
+        )
+        result = self.model.invoke(f"{prompt}{instruction}")
+        payload = json.loads(self._extract_json(self._content_to_text(result)))
+        return self.schema.model_validate(payload)
+
+
 def structured_output(model: Any, schema: type[T]) -> Any:
-    """Use Gemini native JSON schema instead of tool/AFC-based structured output."""
+    """Return structured parsing without Gemini automatic function calling."""
     if isinstance(model, ChatGoogleGenerativeAI):
-        return model.with_structured_output(schema, method="json_schema")
+        return _GeminiJsonStructured(model, schema)
     return model.with_structured_output(schema)
 
 
