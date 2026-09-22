@@ -114,12 +114,29 @@ def conversation_turn_processor(state):
     state = nodes.conversation_turn_processor(state)
 
     if _is_conversational_filler(raw) and not state.get("recently_extracted_fields"):
+        # After baseline confirmation, short acknowledgements such as "okay",
+        # "sure", and "go ahead" mean "continue". They must not terminate the
+        # graph when RAG/policy processing is waiting or retryable.
+        knowledge_retry = bool(
+            state.get("confirmed")
+            and state.get("rag_status") in {
+                "LLM_TEMPORARILY_UNAVAILABLE",
+                "REQUIREMENT_PLAN_UNAVAILABLE",
+                "NO_RELEVANT_KNOWLEDGE",
+                "WAITING_FOR_POLICY_VERIFICATION",
+            }
+        )
+        if not knowledge_retry:
+            state["last_intent"] = "filler"
+            state["_skip_all"] = True
+            state["spoken_response"] = ""
+            state["next_question"] = "I'm listening. Take your time; continue when you're ready."
+            state["message"] = state["next_question"]
+            return state
         state["last_intent"] = "filler"
-        state["_skip_all"] = True
         state["spoken_response"] = ""
-        state["next_question"] = "I'm listening. Take your time; continue when you're ready."
-        state["message"] = state["next_question"]
-        return state
+        state["_skip_all"] = False
+        state["conversation_status"] = "retrying_knowledge"
 
     if not state.get("extracted_data", {}).get("event_description"):
         description = _incident_description_from_text(raw, state)
