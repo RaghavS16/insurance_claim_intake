@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
-from src.agents.llm_factory import get_fast_llm, invoke_with_retry, structured_output
+from src.agents.llm_factory import get_configured_llm, get_fast_llm, invoke_with_retry, is_transient_llm_error, structured_output
 from src.agents.state import ClaimState
 from src.utils.logger import app_logger
 
@@ -83,7 +83,23 @@ def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
         if isinstance(result, schema): return result
         if isinstance(result, dict): return schema.model_validate(result)
     except Exception as exc:
-        logger.warning("Structured extraction failed: %s", exc)
+        # The low-latency model is preferred for every new turn. If it is
+        # temporarily overloaded, retry once on the configured primary model
+        # before falling back to deterministic extraction.
+        if is_transient_llm_error(exc):
+            try:
+                fallback = get_configured_llm()
+                result = invoke_with_retry(
+                    lambda: structured_output(fallback, schema).invoke(prompt),
+                    operation_name="baseline fallback extraction",
+                    attempts=1,
+                )
+                if isinstance(result, schema): return result
+                if isinstance(result, dict): return schema.model_validate(result)
+            except Exception as fallback_exc:
+                logger.warning("Baseline fallback extraction failed: %s", fallback_exc)
+        else:
+            logger.warning("Structured extraction failed: %s", exc)
     return None
 
 def _history_text(state: ClaimState, limit: int = 8) -> str:
