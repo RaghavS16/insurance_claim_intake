@@ -397,7 +397,19 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
                 "WAITING_FOR_POLICY_VERIFICATION",
             }
         )
-        if intent in {"greeting", "gratitude", "closing", "filler", "escalation"} and not knowledge_retry:
+        # A confirmation must be consumed before the generic social/filler shortcut.
+        # Otherwise a simple "yes" is incorrectly treated as filler and baseline
+        # confirmation never reaches policy verification.
+        if awaiting and intent == "confirmation":
+            state["confirmed"] = True
+            state["awaiting_confirmation"] = False
+            state["conversation_status"] = "pending_verification"
+        elif awaiting and intent == "rejection":
+            state["confirmed"] = False
+            state["awaiting_confirmation"] = False
+            state["conversation_status"] = "collecting"
+            state["_rejection_active"] = True
+        elif intent in {"greeting", "gratitude", "closing", "filler", "escalation"} and not knowledge_retry:
             state["_skip_all"] = True; responses = {"greeting":"Hi. Tell me what happened and I'll collect the details as we go.","gratitude":"You're welcome. Tell me what happened whenever you're ready.","closing":"Okay. We can continue whenever you're ready.","filler":"I'm listening. Tell me what happened whenever you're ready.","escalation":"I understand. I'll connect you with a human claims specialist who can help you directly."}; state["next_question"] = responses[intent]; state["message"] = state["next_question"]
             if intent == "escalation": state["escalate_to_human"] = True; state["escalation_reason"] = "user_requested"; state["conversation_status"] = "escalated"
             return state
