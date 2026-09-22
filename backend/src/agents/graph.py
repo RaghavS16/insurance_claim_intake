@@ -256,13 +256,13 @@ def _response_planner(state: ClaimState) -> ClaimState:
         if status == "REQUIREMENT_PLAN_UNAVAILABLE":
             state["next_question"] = (
                 "I've verified the basic claim details, but I couldn't determine the claim-specific "
-                "requirements from the available policy guidance yet. The claim cannot be submitted "
+                "requirements from the available policy guidance yet. I can't finalize the claim "
                 "until those requirements are available."
             )
         elif status == "NO_RELEVANT_KNOWLEDGE":
             state["next_question"] = (
                 "I've verified the basic claim details, but I couldn't find applicable policy guidance "
-                "for this claim yet. The claim cannot be submitted until the applicable requirements "
+                "for this claim yet. I can't finalize the claim until the applicable requirements "
                 "are available."
             )
         else:
