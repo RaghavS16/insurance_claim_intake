@@ -39,24 +39,25 @@ def is_transient_llm_error(exc: BaseException) -> bool:
     ))
 
 
-def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attempts: int = 3) -> T:
+def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attempts: int | None = None) -> T:
     """Run an LLM operation with bounded exponential backoff for transient failures."""
     last_exc: BaseException | None = None
-    for attempt in range(1, max(1, attempts) + 1):
+    max_attempts = attempts if attempts is not None else settings.LLM_RETRY_ATTEMPTS
+    for attempt in range(1, max(1, max_attempts) + 1):
         try:
             return operation()
         except Exception as exc:
             last_exc = exc
-            if not is_transient_llm_error(exc) or attempt >= attempts:
+            if not is_transient_llm_error(exc) or attempt >= max_attempts:
                 if is_transient_llm_error(exc):
                     raise LLMTransientError(
                         f"{operation_name} failed after {attempt} attempts: {exc}"
                     ) from exc
                 raise
-            delay = min(8.0, 1.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.35)
+            delay = min(8.0, settings.LLM_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))) + random.uniform(0.0, 0.35)
             logger.warning(
                 "%s transient LLM failure (attempt %s/%s): %s; retrying in %.2fs",
-                operation_name, attempt, attempts, exc, delay,
+                operation_name, attempt, max_attempts, exc, delay,
             )
             time.sleep(delay)
     raise LLMTransientError(f"{operation_name} failed: {last_exc}") from last_exc
