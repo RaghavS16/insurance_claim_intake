@@ -208,7 +208,7 @@ def _policy_is_suspicious(value: Any) -> bool: return _clean_policy_candidate(va
 _LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight"}
 
 def _deterministic_location(text: str) -> Optional[str]:
-    patterns = [r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)", r"\b(?:location|place)\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)"]
+    patterns = [r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)", r"\b(?:admitted|hospitalized|treated)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:location|place)\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)"]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if not match: continue
