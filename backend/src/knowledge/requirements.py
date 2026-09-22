@@ -53,7 +53,7 @@ Analyze the retrieved authoritative policy wording, regulatory circulars, and cl
 
 Based SOLELY on these retrieved documents:
 1. Identify specific follow-up information details required from the claimant to process and assess coverage for this claim.
-2. Identify all required supporting evidence, photographs, or document uploads mandated by the policy wording or claim conditions (e.g., photos of damage, bills, discharge summary, FIR copy, driving license, travel tickets).
+2. Identify all required supporting evidence or document uploads explicitly mandated by the retrieved policy wording, regulatory guidance, or claim conditions. Do not infer a document requirement from general insurance practice; only return evidence requirements that are supported by the retrieved sources.
 
 Do NOT repeat the 6 baseline fields already collected: policy number, incident date, insurance type, incident description, incident location, estimated loss amount.
 
@@ -67,11 +67,12 @@ Authoritative Regulatory & Guidance Documents (RAG):
 {regulatory_prompt_context}
 
 Return a structured RequirementPlan with requirements where:
-- key: concise snake_case identifier (e.g., vehicle_registration_number, driving_license_details, damage_photos, repair_estimate, medical_bills)
-- label: clear claimant-friendly title
+- key: concise snake_case identifier derived from the terminology used in the retrieved sources
+- label: clear claimant-friendly title grounded in the retrieved sources
 - question_hint: natural, conversational question the assistant should ask the user to collect this detail
-- required: true if necessary under the policy terms to process the claim
-- evidence_type: 'photo' for photographs/images, 'document' for paper documents/bills/invoices/reports, or null for text/data details
+- required: true only when the retrieved sources make the requirement necessary to process or assess the claim
+- evidence_type: use 'photo' or 'document' only when the retrieved sources explicitly require that kind of evidence; otherwise use null
+- condition: include any source-supported condition under which the requirement applies, otherwise null
 """
     plan: RequirementPlan | None = None
     try:
