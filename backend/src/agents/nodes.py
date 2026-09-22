@@ -61,7 +61,13 @@ _GENERIC_POLICY_WORDS = {
     "DATE", "LOCATION", "PLACE", "DAMAGE", "COST", "LOSS", "BIKE", "CAR", "ACCIDENT", "INCIDENT"
 }
 _SOCIAL_EXACT = {"hi", "hello", "hey", "thanks", "thank you", "thx", "bye", "goodbye", "ok", "okay", "great", "fine", "perfect", "sure", "got it", "alright", "all right", "yes", "yeah", "yep", "no", "nope"}
-_INCIDENT_TERMS = re.compile(r"\b(accident|crash|collision|damage|damaged|stolen|theft|lost|loss|fire|flood|injur|hospital|burglary|break[- ]?in|leak|broken|fell|hit|destroyed|ransomware|phishing|breach)\b", re.I)
+_INCIDENT_TERMS = re.compile(
+    r"\b(accident|crash|collision|damage|damaged|stolen|theft|lost|loss|fire|flood|injur|"
+    r"hospital|hospitalized|admitted|admission|fever|illness|viral|infection|diagnos|"
+    r"treatment|surgery|doctor|medical|burglary|break[- ]?in|leak|broken|fell|hit|"
+    r"destroyed|ransomware|phishing|breach)\b",
+    re.I,
+)
 
 
 def _now_iso() -> str: return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -84,7 +90,9 @@ def _safe_date(raw: Any, reference: date) -> Optional[str]:
     text = str(raw).strip().lower().replace(",", "")
     aliases = {"today": reference, "this day": reference, "yesterday": reference - timedelta(days=1), "the day before": reference - timedelta(days=1), "day before yesterday": reference - timedelta(days=2), "tomorrow": reference + timedelta(days=1), "the next day": reference + timedelta(days=1)}
     if text in aliases: return aliases[text].isoformat()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y", "%B %d %Y", "%b %d %Y", "%d %B %Y", "%d %b %Y"):
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y",
+             "%B %d %Y", "%b %d %Y", "%d %B %Y", "%d %b %Y", "%d %B", "%d %b",
+             "%B %d", "%b %d"):
         try: return datetime.strptime(text, fmt).date().isoformat()
         except ValueError: continue
     return None
@@ -95,11 +103,41 @@ def _deterministic_date(text: str, reference: date) -> Optional[str]:
     if re.search(r"\b(yesterday\s+(?:morning|afternoon|evening)|yesterday|the day before)\b", low): return (reference - timedelta(days=1)).isoformat()
     if re.search(r"\b(this\s+(?:morning|afternoon|evening|day)|today\s+(?:morning|afternoon|evening)|today|earlier today|just now)\b", low): return reference.isoformat()
     if re.search(r"\b(tomorrow|the next day)\b", low): return (reference + timedelta(days=1)).isoformat()
-    for pattern in (r"\b(\d{4}-\d{1,2}-\d{1,2})\b", r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{4})\b", r"\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4})\b", r"\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\s+\d{4})\b"):
+    for pattern in (
+        r"\b(\d{4}-\d{1,2}-\d{1,2})\b",
+        r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{4})\b",
+        r"\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4})\b",
+        r"\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\s+\d{4})\b",
+    ):
         match = re.search(pattern, low)
         if match:
             normalized = _safe_date(match.group(1), reference)
             if normalized: return normalized
+
+    # Natural claim conversations frequently omit the year ("17 Sept", "Sept 17").
+    # Resolve the missing year to the current reference year; do not ask the LLM to
+    # guess when a deterministic date is unambiguous.
+    month_pattern = r"\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b"
+    reverse_pattern = r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:\s+(\d{4}))?\b"
+    month_map = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10,
+        "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    for pattern, reverse in ((month_pattern, False), (reverse_pattern, True)):
+        match = re.search(pattern, low)
+        if not match:
+            continue
+        if reverse:
+            month_name, day, year = match.group(1), int(match.group(2)), match.group(3)
+        else:
+            day, month_name, year = int(match.group(1)), match.group(2), match.group(3)
+        try:
+            parsed = date(int(year) if year else reference.year, month_map[month_name], day)
+            return parsed.isoformat()
+        except (KeyError, ValueError):
+            continue
     return None
 
 def _parse_indian_amount(text: str) -> Optional[float]:
@@ -170,7 +208,7 @@ def _policy_is_suspicious(value: Any) -> bool: return _clean_policy_candidate(va
 _LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight"}
 
 def _deterministic_location(text: str) -> Optional[str]:
-    patterns = [r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this)\b|[,.!?]|$)", r"\b(?:location|place)\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)"]
+    patterns = [r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)", r"\b(?:location|place)\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)"]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if not match: continue
