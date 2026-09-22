@@ -114,18 +114,20 @@ def _model_response(state: ClaimState) -> str:
         f"{turn.get('speaker', 'unknown')}: {turn.get('text', '')}" for turn in history
     ) or "No previous conversation."
 
+    dynamic_missing = [
+        {k: item.get(k) for k in ("key", "label", "question_hint", "required", "evidence_type")}
+        for item in (state.get("dynamic_missing") or [])
+    ]
+    missing_evidence_items = [
+        {k: item.get(k) for k in ("key", "label", "question_hint", "required", "evidence_type")}
+        for item in (state.get("missing_evidence") or [])
+    ]
     prompt = (
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
-        f"Still-needed claim-specific information: {[
-            {k: item.get(k) for k in ('key', 'label', 'question_hint', 'required', 'evidence_type')}
-            for item in (state.get('dynamic_missing') or [])
-        ]}\n"
-        f"Still-needed evidence uploads: {[
-            {k: item.get(k) for k in ('key', 'label', 'question_hint', 'required', 'evidence_type')}
-            for item in (state.get('missing_evidence') or [])
-        ]}\n"
+        f"Still-needed claim-specific information: {dynamic_missing}\n"
+        f"Still-needed evidence uploads: {missing_evidence_items}\n"
         f"Grounding context: {_compact_knowledge_context(state.get('knowledge_context', {}))}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
