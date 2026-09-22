@@ -6,6 +6,10 @@ available when explicitly selected.
 """
 from __future__ import annotations
 
+import random
+import time
+from typing import Any, Callable, TypeVar
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
@@ -15,6 +19,54 @@ from src.config import settings
 from src.utils.logger import app_logger
 
 logger = app_logger
+
+T = TypeVar("T")
+
+
+class LLMTransientError(RuntimeError):
+    """A retryable upstream LLM/service failure after bounded retries."""
+
+
+def is_transient_llm_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+    return any(token in text for token in (
+        "429", "500", "502", "503", "504", "rate limit", "rate_limit",
+        "unavailable", "temporarily unavailable", "timeout", "timed out",
+        "deadline exceeded", "service busy", "high demand",
+    ))
+
+
+def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attempts: int = 3) -> T:
+    """Run an LLM operation with bounded exponential backoff for transient failures."""
+    last_exc: BaseException | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            last_exc = exc
+            if not is_transient_llm_error(exc) or attempt >= attempts:
+                if is_transient_llm_error(exc):
+                    raise LLMTransientError(
+                        f"{operation_name} failed after {attempt} attempts: {exc}"
+                    ) from exc
+                raise
+            delay = min(8.0, 1.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.35)
+            logger.warning(
+                "%s transient LLM failure (attempt %s/%s): %s; retrying in %.2fs",
+                operation_name, attempt, attempts, exc, delay,
+            )
+            time.sleep(delay)
+    raise LLMTransientError(f"{operation_name} failed: {last_exc}") from last_exc
+
+
+def structured_output(model: Any, schema: type[T]) -> Any:
+    """Use Gemini native JSON schema instead of tool/AFC-based structured output."""
+    if isinstance(model, ChatGoogleGenerativeAI):
+        return model.with_structured_output(schema, method="json_schema")
+    return model.with_structured_output(schema)
 
 
 def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
@@ -89,7 +141,7 @@ def _build_openai_compatible() -> BaseChatModel:
         base_url=base_url,
         temperature=0,
         max_tokens=2048,
-        max_retries=1,
+        max_retries=0,
         timeout=settings.LLM_TIMEOUT_SECONDS,
     )
 
