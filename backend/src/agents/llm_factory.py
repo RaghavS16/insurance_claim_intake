@@ -1,8 +1,13 @@
-"""Centralized LLM factory supporting local Ollama and cloud OpenAI-compatible endpoints."""
+"""Centralized LLM factory for production insurance-claim conversations.
+
+Primary cloud path is direct Google Gemini (no model router). Local Ollama remains
+available for development/offline testing, and OpenAI-compatible endpoints remain
+available when explicitly selected.
+"""
 from __future__ import annotations
 
-import typing
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
@@ -11,14 +16,11 @@ from src.utils.logger import app_logger
 
 logger = app_logger
 
-_DEFAULT_CLOUD_FALLBACK_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
-]
-
 
 def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
     try:
         import ollama
+
         client = ollama.Client(host=base_url)
         available = [getattr(m, "model", "") for m in client.list().models]
         for model in available:
@@ -28,64 +30,89 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
         for fallback in fallbacks:
             for model in available:
                 if model == fallback or model.split(":")[0] == fallback.split(":")[0]:
-                    logger.warning("Configured Ollama model '%s' unavailable; using '%s'.", requested_model, model)
+                    logger.warning(
+                        "Configured Ollama model '%s' unavailable; using '%s'.",
+                        requested_model,
+                        model,
+                    )
                     return model
     except Exception as exc:
         logger.debug("Could not verify Ollama model list: %s", exc)
     return requested_model
 
 
-class ClaimChatOpenAI(ChatOpenAI):
-    """OpenAI-compatible chat model with tool/function structured output by default.
-
-    The project extraction schema contains flexible values and provider-backed OpenAI
-    JSON-schema response_format rejects that shape. Function calling supports the same
-    Pydantic extraction contract without requiring the provider's strict response schema.
-    """
-
-    def with_structured_output(self, schema=None, *, method: typing.Literal["function_calling", "json_mode", "json_schema"] = "function_calling", include_raw=False, strict=None, tools=None, **kwargs):
-        return super().with_structured_output(
-            schema,
-            method=method,
-            include_raw=include_raw,
-            strict=strict,
-            tools=tools,
-            **kwargs,
+def _get_google_api_key() -> str:
+    key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY
+    if not key:
+        raise RuntimeError(
+            "GEMINI_API_KEY (or GOOGLE_API_KEY) is required when LLM_PROVIDER=gemini."
         )
+    return key
+
+
+def _build_gemini() -> BaseChatModel:
+    """Build the direct Google Gemini chat client.
+
+    Gemini 3.8 Flash is used for fast conversational extraction, dynamic
+    requirement planning, and response generation. Structured output is handled
+    by LangChain's native Gemini integration rather than an OpenAI-compatible
+    router.
+    """
+    return ChatGoogleGenerativeAI(
+        model=settings.GEMINI_MODEL,
+        google_api_key=_get_google_api_key(),
+        temperature=0,
+        max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
+
+
+def _build_openai_compatible() -> BaseChatModel:
+    base_url = (settings.CLOUD_LLM_BASE_URL or "").strip()
+    if not base_url:
+        raise RuntimeError("CLOUD_LLM_BASE_URL is required when LLM_PROVIDER=openai.")
+
+    if "openrouter.ai" in base_url.lower():
+        raise RuntimeError(
+            "OpenRouter is intentionally unsupported for production claim intake. "
+            "Use LLM_PROVIDER=gemini for the primary cloud path or configure a direct "
+            "OpenAI-compatible provider."
+        )
+
+    if not settings.CLOUD_LLM_API_KEY:
+        raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
+
+    return ChatOpenAI(
+        model=settings.CLOUD_LLM_MODEL,
+        api_key=settings.CLOUD_LLM_API_KEY,
+        base_url=base_url,
+        temperature=0,
+        max_tokens=2048,
+        max_retries=1,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+    )
 
 
 def get_configured_llm() -> BaseChatModel:
-    provider = (settings.LLM_PROVIDER or "ollama").lower().strip()
-    timeout = settings.LLM_TIMEOUT_SECONDS
-    if provider in ("cloud", "openai", "openrouter", "dashscope", "together"):
-        kwargs: dict[str, typing.Any] = dict(
-            model=settings.CLOUD_LLM_MODEL,
-            api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
-            base_url=settings.CLOUD_LLM_BASE_URL,
-            temperature=0,
-            max_tokens=2048,
-            max_retries=1,
-            timeout=timeout,
-        )
-        if "openrouter.ai" in (settings.CLOUD_LLM_BASE_URL or ""):
-            kwargs["extra_body"] = {
-                "models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
-                or _DEFAULT_CLOUD_FALLBACK_MODELS,
-                # Structured extraction is a hard requirement in this application.
-                # Do not route a tool/structured request to a provider that silently
-                # ignores the requested parameters. Latency sorting keeps voice/text
-                # turns responsive once eligible providers are selected.
-                "provider": {
-                    "require_parameters": True,
-                    "sort": "latency",
-                },
-            }
-        return ClaimChatOpenAI(**kwargs)
+    provider = (settings.LLM_PROVIDER or "gemini").lower().strip()
 
-    resolved_model = _resolve_ollama_model(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
-    return ChatOllama(
-        base_url=settings.OLLAMA_BASE_URL,
-        model=resolved_model,
-        temperature=0,
-        timeout=timeout,
+    if provider in ("gemini", "google"):
+        return _build_gemini()
+
+    if provider in ("openai", "cloud"):
+        return _build_openai_compatible()
+
+    if provider == "ollama":
+        resolved_model = _resolve_ollama_model(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
+        return ChatOllama(
+            base_url=settings.OLLAMA_BASE_URL,
+            model=resolved_model,
+            temperature=0,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+
+    raise RuntimeError(
+        f"Unsupported LLM_PROVIDER='{provider}'. "
+        "Supported providers: gemini, openai, ollama."
     )
