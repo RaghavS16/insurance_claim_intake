@@ -33,6 +33,21 @@ def get_requirements_from_context(
     if not policy_context and not regulatory_context:
         return []
 
+    def _prompt_context(rows: list[dict]) -> list[dict]:
+        # Keep RAG prompts bounded; retrieval provenance is persisted separately.
+        return [
+            {
+                "source_name": row.get("source_name"),
+                "document_type": row.get("document_type"),
+                "score": row.get("rerank_score", row.get("score")),
+                "text": str(row.get("text") or "")[:3500],
+            }
+            for row in rows[:3]
+        ]
+
+    policy_prompt_context = _prompt_context(policy_context)
+    regulatory_prompt_context = _prompt_context(regulatory_context)
+
     prompt = f"""You are an expert insurance claims specialist.
 Analyze the retrieved authoritative policy wording, regulatory circulars, and claim guidelines provided below for this {insurance_type} insurance claim.
 
@@ -46,10 +61,10 @@ Insurance Type: {insurance_type}
 Claimant Incident Summary: {incident_description}
 
 Authoritative Policy Documents (RAG):
-{policy_context}
+{policy_prompt_context}
 
 Authoritative Regulatory & Guidance Documents (RAG):
-{regulatory_context}
+{regulatory_prompt_context}
 
 Return a structured RequirementPlan with requirements where:
 - key: concise snake_case identifier (e.g., vehicle_registration_number, driving_license_details, damage_photos, repair_estimate, medical_bills)
