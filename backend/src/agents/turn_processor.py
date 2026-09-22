@@ -66,10 +66,20 @@ async def process_claimant_turn(
                 transition_claim(db, claim, "verified", str(claim.claimant_id), "policy verification successful")
             except Exception:
                 claim.status = "verified"
-            if result.get("dynamic_missing") or result.get("missing_evidence"):
-                result["conversation_status"] = "collecting_dynamic"
-            else:
-                result["conversation_status"] = "final_review"
+
+            # Continue the same workflow after policy verification without asking the
+            # claimant to send another message. The second graph pass is an internal
+            # workflow event: it runs RAG + claim-specific planning, but does not
+            # re-extract the claimant's last utterance.
+            result["_workflow_event"] = "policy_verified"
+            result = await asyncio.to_thread(build_conversation_graph().invoke, result)
+            result["policy_verification"] = verification
+            result["policy_valid"] = True
+            result["conversation_status"] = (
+                "collecting_dynamic"
+                if result.get("dynamic_missing") or result.get("missing_evidence")
+                else "final_review"
+            )
         else:
             result["policy_valid"] = False
             try:
@@ -104,6 +114,13 @@ async def process_claimant_turn(
             result["message"] = submission_msg
         except Exception as exc:
             logger.warning("Assignment failed during conversational final confirmation: %s", exc)
+
+    # A system workflow event (evidence upload/verification) must immediately
+    # re-enter the conversational planner so the claimant gets the next natural
+    # step without having to type "continue".
+    if result.get("_workflow_event") == "evidence_verified":
+        result = await asyncio.to_thread(build_conversation_graph().invoke, result)
+        result.pop("_workflow_event", None)
 
     # Persist the RAG-generated requirement plan as durable claim state. The JSON
     # pipeline_state remains a cache for conversation speed, but requirements are
