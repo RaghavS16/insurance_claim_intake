@@ -34,15 +34,17 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
     REDIS_URL: Optional[str] = None
 
-    LLM_PROVIDER: str = "ollama"
+    LLM_PROVIDER: str = "gemini"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
-    CLOUD_LLM_MODEL: str = "google/gemma-4-26b-a4b-it:free"
-    CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    CLOUD_LLM_FALLBACK_MODELS: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    CLOUD_LLM_MODEL: str = ""
+    CLOUD_LLM_BASE_URL: Optional[str] = None
+    CLOUD_LLM_FALLBACK_MODELS: str = ""
     CLOUD_LLM_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_MAX_OUTPUT_TOKENS: int = Field(2048, ge=256, le=65536)
     EMBEDDING_PROVIDER: str = "ollama"
     EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
     EMBEDDING_MODEL: str = "nomic-embed-text"
@@ -93,6 +95,15 @@ class Settings(BaseSettings):
             raise ValueError(f"ENVIRONMENT must be one of {valid_envs}, got '{v}'")
         return norm
 
+    @field_validator("LLM_PROVIDER")
+    @classmethod
+    def validate_llm_provider(cls, v: str) -> str:
+        norm = v.lower().strip()
+        allowed = {"gemini", "google", "openai", "cloud", "ollama"}
+        if norm not in allowed:
+            raise ValueError(f"LLM_PROVIDER must be one of {sorted(allowed)}.")
+        return "gemini" if norm == "google" else ("openai" if norm == "cloud" else norm)
+
     @field_validator("EMBEDDING_PROVIDER")
     @classmethod
     def validate_embedding_provider(cls, v: str) -> str:
@@ -130,6 +141,8 @@ class Settings(BaseSettings):
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.LLM_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):
+            raise RuntimeError("A Gemini/Google API key is required when LLM_PROVIDER=gemini.")
         if self.ENVIRONMENT in ("production", "staging") and self.EMBEDDING_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY or self.EMBEDDING_API_KEY):
             raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
         if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
