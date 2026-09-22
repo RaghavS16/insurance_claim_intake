@@ -43,3 +43,27 @@ def test_gemini_structured_output_uses_native_json_schema():
     # A generic mock remains compatible with non-Gemini providers.
     assert structured_output(fake_model, dict) == "structured"
     fake_model.with_structured_output.assert_called_once_with(dict)
+
+
+def test_retriever_surfaces_transient_requirement_planning_failure():
+    from src.agents.llm_factory import LLMTransientError
+    from src.knowledge.retriever import KnowledgeRetriever
+
+    with patch(
+        "src.knowledge.retriever.search",
+        side_effect=[[{"id": "p1"}], [{"id": "g1"}]],
+    ), patch(
+        "src.knowledge.retriever.rerank",
+        side_effect=lambda q, items, top_n=5: items,
+    ), patch(
+        "src.knowledge.retriever.get_requirements_from_context",
+        side_effect=LLMTransientError("503 UNAVAILABLE"),
+    ):
+        result = KnowledgeRetriever().retrieve(
+            insurance_type="health",
+            policy_number="POL-1042-JX",
+            query="viral fever hospital admission",
+        )
+
+    assert result["available"] is False
+    assert result["status"] == "LLM_TEMPORARILY_UNAVAILABLE"
