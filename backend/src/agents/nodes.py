@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
-from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
+from src.agents.llm_factory import get_fast_llm, invoke_with_retry, structured_output
 from src.agents.state import ClaimState
 from src.utils.logger import app_logger
 
@@ -19,7 +19,7 @@ _llm = None
 
 def _get_llm():
     global _llm
-    if _llm is None: _llm = get_configured_llm()
+    if _llm is None: _llm = get_fast_llm()
     return _llm
 
 T = TypeVar("T", bound=BaseModel)
@@ -78,7 +78,7 @@ def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
         result = invoke_with_retry(
             lambda: structured_output(model, schema).invoke(prompt),
             operation_name="baseline structured extraction",
-            attempts=3,
+            attempts=1,
         )
         if isinstance(result, schema): return result
         if isinstance(result, dict): return schema.model_validate(result)
