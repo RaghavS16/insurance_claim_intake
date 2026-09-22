@@ -57,8 +57,12 @@ async def process_claimant_turn(
                 "valid": True,
                 "reason": "Claim is already in the verified workflow state.",
             }
-        if prior_state.get("confirmed"):
-            workflow_event = "policy_verified"
+        # Durable verified status means baseline confirmation and policy verification
+        # already succeeded. Re-enter RAG even if an older pipeline_state snapshot
+        # lost the transient confirmed flag.
+        prior_state["confirmed"] = True
+        prior_state["awaiting_confirmation"] = False
+        workflow_event = "policy_verified"
 
     if user_text.startswith("[System Event] Uploaded evidence"):
         workflow_event = "evidence_verified"
