@@ -105,7 +105,7 @@ class TestMissingEvidence:
 
     def test_uploaded_evidence_key_excluded(self):
         reqs = [{"key": "damage_photo", "required": True, "evidence_type": "photo"}]
-        state = {"dynamic_requirements": reqs, "evidence": [{"evidence_key": "damage_photo"}]}
+        state = {"dynamic_requirements": reqs, "evidence": [{"evidence_key": "damage_photo", "verification_status": "VERIFIED"}]}
         assert self._call(state) == []
 
     def test_optional_evidence_excluded(self):
@@ -123,7 +123,7 @@ class TestMissingEvidence:
             {"key": "photo1", "required": True, "evidence_type": "photo"},
             {"key": "photo2", "required": True, "evidence_type": "photo"},
         ]
-        state = {"dynamic_requirements": reqs, "evidence": [{"evidence_key": "photo1"}]}
+        state = {"dynamic_requirements": reqs, "evidence": [{"evidence_key": "photo1", "verification_status": "VERIFIED"}]}
         result = self._call(state)
         assert len(result) == 1
         assert result[0]["key"] == "photo2"
