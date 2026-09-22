@@ -136,7 +136,13 @@ def _model_response(state: ClaimState) -> str:
         "Write only the exact sentence(s) the assistant should say to the claimant."
     )
     try:
-        response = _message_text(nodes._get_llm().invoke(prompt))
+        response = _message_text(
+            nodes.invoke_with_retry(
+                lambda: nodes._get_llm().invoke(prompt),
+                operation_name="conversational response planning",
+                attempts=3,
+            )
+        )
         if _response_is_usable(response, missing, data):
             return response
     except Exception as exc:
@@ -253,7 +259,12 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["conversation_status"] = "waiting_for_knowledge"
         state["next_question_field"] = "knowledge"
         status = state.get("rag_status")
-        if status == "REQUIREMENT_PLAN_UNAVAILABLE":
+        if status == "LLM_TEMPORARILY_UNAVAILABLE":
+            state["next_question"] = (
+                "I have the basic claim details confirmed. The claim requirements service is temporarily "
+                "busy, so I’m retrying that step. Please give me a moment, and we’ll continue from here."
+            )
+        elif status == "REQUIREMENT_PLAN_UNAVAILABLE":
             state["next_question"] = (
                 "I've verified the basic claim details, but I couldn't determine the claim-specific "
                 "requirements from the available policy guidance yet. I can't finalize the claim "
