@@ -43,7 +43,16 @@ async def process_claimant_turn(
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     logical_turn = (prior_turns // 2) + 1
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
-    graph_input = {**prior_state, "claim_text": user_text, "ticket_id": claim.ticket_id, "input_mode": input_mode}
+    workflow_event = None
+    if user_text.startswith("[System Event] Uploaded evidence"):
+        workflow_event = "evidence_verified"
+    graph_input = {
+        **prior_state,
+        "claim_text": "" if workflow_event else user_text,
+        "ticket_id": claim.ticket_id,
+        "input_mode": input_mode,
+        **({"_workflow_event": workflow_event} if workflow_event else {}),
+    }
 
     # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
     result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
@@ -187,7 +196,8 @@ async def process_claimant_turn(
 
     agent_text = result.get("next_question") or result.get("message", "")
     try:
-        db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
+        if not workflow_event:
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
         if agent_text:
             db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_text))
         db.commit()
