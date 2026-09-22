@@ -56,6 +56,23 @@ def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
     return f"Whenever you're ready, tell me {', '.join(labels)}."
 
 
+def _compact_knowledge_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Keep conversational prompts small while preserving RAG provenance."""
+    compact: dict[str, Any] = {
+        "available": context.get("available", False),
+        "status": context.get("status"),
+        "requirements": context.get("requirements") or [],
+    }
+    for key in ("policy", "regulations"):
+        rows = []
+        for row in (context.get(key) or [])[:3]:
+            item = dict(row)
+            item["text"] = str(item.get("text") or "")[:3500]
+            rows.append(item)
+        compact[key] = rows
+    return compact
+
+
 def _message_text(result: Any) -> str:
     content = getattr(result, "content", result)
     if isinstance(content, str):
@@ -96,7 +113,7 @@ def _model_response(state: ClaimState) -> str:
         f"Still-needed baseline information: {missing}\n"
         f"Still-needed claim-specific information: {state.get('dynamic_missing', [])}\n"
         f"Still-needed evidence uploads: {state.get('missing_evidence', [])}\n"
-        f"Grounding context: {state.get('knowledge_context', {})}\n"
+        f"Grounding context: {_compact_knowledge_context(state.get('knowledge_context', {}))}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
         f"Latest claimant utterance: {state.get('last_user_utterance', '')}\n\n"
@@ -128,6 +145,29 @@ def _dynamic_fallback(state: ClaimState) -> str:
 
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
+        return state
+
+    # Claim-specific RAG starts only after baseline confirmation AND successful
+    # policy verification. This avoids expensive RAG/LLM work during baseline intake.
+    if not state.get("confirmed"):
+        state["dynamic_missing"] = []
+        state["missing_evidence"] = []
+        state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
+        state["conversation_status"] = "reviewing" if state.get("awaiting_confirmation") else "collecting"
+        return state
+
+    policy_verification = state.get("policy_verification") or {}
+    if policy_verification and not policy_verification.get("valid"):
+        state["dynamic_missing"] = []
+        state["missing_evidence"] = []
+        state["rag_status"] = "POLICY_VERIFICATION_FAILED"
+        state["conversation_status"] = "verification_failed"
+        return state
+    if not policy_verification.get("valid"):
+        state["dynamic_missing"] = []
+        state["missing_evidence"] = []
+        state["rag_status"] = "WAITING_FOR_POLICY_VERIFICATION"
+        state["conversation_status"] = "pending_verification"
         return state
 
     data = state.get("extracted_data") or {}
@@ -270,14 +310,24 @@ def _response_planner(state: ClaimState) -> ClaimState:
     state["message"] = state.get("next_question", "")
     return state
 
+def _workflow_event_router(state: ClaimState) -> str:
+    return "workflow_event" if state.get("_workflow_event") else "user_turn"
+
+
 def _build_conversation_graph():
     graph = StateGraph(ClaimState)  # type: ignore
+    graph.add_node("workflow_event_router", lambda state: state)
     graph.add_node("conversation_turn_processor", conversation_turn_processor)
     graph.add_node("claim_extractor", nodes.claim_extractor)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
     graph.add_node("next_question_generator", _response_planner)
-    graph.set_entry_point("conversation_turn_processor")
+    graph.set_entry_point("workflow_event_router")
+    graph.add_conditional_edges(
+        "workflow_event_router",
+        _workflow_event_router,
+        {"user_turn": "conversation_turn_processor", "workflow_event": "mandatory_field_checker"},
+    )
     graph.add_conditional_edges(
         "conversation_turn_processor",
         lambda state: "done" if state.get("_skip_all") else "continue",
