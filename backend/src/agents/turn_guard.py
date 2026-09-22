@@ -117,14 +117,22 @@ def conversation_turn_processor(state):
         # After baseline confirmation, short acknowledgements such as "okay",
         # "sure", and "go ahead" mean "continue". They must not terminate the
         # graph when RAG/policy processing is waiting or retryable.
+        policy_verified = bool(
+            state.get("policy_valid")
+            or (state.get("policy_verification") or {}).get("valid")
+            or state.get("_workflow_event") == "policy_verified"
+        )
         knowledge_retry = bool(
             state.get("confirmed")
-            and state.get("rag_status") in {
-                "LLM_TEMPORARILY_UNAVAILABLE",
-                "REQUIREMENT_PLAN_UNAVAILABLE",
-                "NO_RELEVANT_KNOWLEDGE",
-                "WAITING_FOR_POLICY_VERIFICATION",
-            }
+            and (
+                policy_verified
+                or state.get("rag_status") in {
+                    "LLM_TEMPORARILY_UNAVAILABLE",
+                    "REQUIREMENT_PLAN_UNAVAILABLE",
+                    "NO_RELEVANT_KNOWLEDGE",
+                    "WAITING_FOR_POLICY_VERIFICATION",
+                }
+            )
         )
         if not knowledge_retry:
             state["last_intent"] = "filler"
