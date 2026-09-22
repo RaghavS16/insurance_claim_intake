@@ -70,7 +70,15 @@ def get_configured_llm() -> BaseChatModel:
         if "openrouter.ai" in (settings.CLOUD_LLM_BASE_URL or ""):
             kwargs["extra_body"] = {
                 "models": [m.strip() for m in getattr(settings, "CLOUD_LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
-                or _DEFAULT_CLOUD_FALLBACK_MODELS
+                or _DEFAULT_CLOUD_FALLBACK_MODELS,
+                # Structured extraction is a hard requirement in this application.
+                # Do not route a tool/structured request to a provider that silently
+                # ignores the requested parameters. Latency sorting keeps voice/text
+                # turns responsive once eligible providers are selected.
+                "provider": {
+                    "require_parameters": True,
+                    "sort": "latency",
+                },
             }
         return ClaimChatOpenAI(**kwargs)
 
