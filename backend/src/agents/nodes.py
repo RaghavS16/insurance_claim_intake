@@ -292,6 +292,19 @@ def _rule_changes(raw: str, state: ClaimState) -> List[FieldChange]:
         replace_location = old_location not in (None, "", UNKNOWN_SENTINEL)
         if old_location in (None, "", UNKNOWN_SENTINEL) or old_location != location:
             changes.append(FieldChange(field="event_location", operation="replace" if replace_location else "set", value=location, evidence=raw, confidence=.92))
+    # A complete natural-language incident narrative should not depend on a
+    # second LLM call just to populate the baseline description. This keeps the
+    # first turn fast even when the upstream model is busy.
+    if not current.get("event_description") or current.get("event_description") == UNKNOWN_SENTINEL:
+        description = _incident_description_from_text(raw, current)
+        if description:
+            changes.append(FieldChange(
+                field="event_description",
+                operation="set",
+                value=description,
+                evidence=raw,
+                confidence=.96,
+            ))
     return changes
 
 def _merge_change(state: ClaimState, change: FieldChange, turn: int) -> bool:
@@ -356,10 +369,33 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     awaiting = bool(state.get("awaiting_confirmation")); low = raw.lower().strip(" .!?")
     if low in _SOCIAL_EXACT or (re.search(r"\b(human|person|representative|agent|adjuster)\b", low) and re.search(r"\b(speak|talk|connect|transfer)\b", low)):
         intent = _fallback_intent(raw, awaiting); state["last_intent"] = intent; state["spoken_response"] = ""
-        if intent in {"greeting", "gratitude", "closing", "filler", "escalation"}:
-            state["_skip_all"] = True; responses = {"greeting":"Hi. Tell me what happened and I'll collect the claim details as we go.","gratitude":"You're welcome. Tell me what happened whenever you're ready.","closing":"Okay. We can continue whenever you're ready.","filler":"I'm listening. Tell me what happened whenever you're ready.","escalation":"I understand. I'll connect you with a human claims specialist who can help you directly."}; state["next_question"] = responses[intent]; state["message"] = state["next_question"]
+        # Once baseline facts are confirmed, short acknowledgements such as
+        # "okay", "sure", or "go ahead" are workflow-driving turns, not dead
+        # ends. Let the graph retry RAG/requirement planning on these turns.
+        knowledge_retry = bool(
+            state.get("confirmed")
+            and state.get("rag_status") in {
+                "LLM_TEMPORARILY_UNAVAILABLE",
+                "REQUIREMENT_PLAN_UNAVAILABLE",
+                "NO_RELEVANT_KNOWLEDGE",
+                "WAITING_FOR_POLICY_VERIFICATION",
+            }
+        )
+        if intent in {"greeting", "gratitude", "closing", "filler", "escalation"} and not knowledge_retry:
+            state["_skip_all"] = True; responses = {"greeting":"Hi. Tell me what happened and I'll collect the details as we go.","gratitude":"You're welcome. Tell me what happened whenever you're ready.","closing":"Okay. We can continue whenever you're ready.","filler":"I'm listening. Tell me what happened whenever you're ready.","escalation":"I understand. I'll connect you with a human claims specialist who can help you directly."}; state["next_question"] = responses[intent]; state["message"] = state["next_question"]
             if intent == "escalation": state["escalate_to_human"] = True; state["escalation_reason"] = "user_requested"; state["conversation_status"] = "escalated"
             return state
+        if knowledge_retry and intent in {"filler", "gratitude"}:
+            state["conversation_status"] = "retrying_knowledge"
+            state["next_question"] = ""
+            state["message"] = ""
+            # Continue through the graph so the knowledge layer gets another
+            # chance without forcing the claimant to repeat a question.
+        elif awaiting and intent == "confirmation":
+            state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
+        elif awaiting and intent == "rejection":
+            state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"
+            state["_rejection_active"] = True
         elif awaiting and intent == "confirmation":
             state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
         elif awaiting and intent == "rejection":
