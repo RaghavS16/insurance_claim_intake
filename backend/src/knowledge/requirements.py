@@ -7,6 +7,7 @@ guidelines retrieved via RAG.
 from __future__ import annotations
 from typing import Any
 from pydantic import BaseModel, Field
+from src.agents.llm_factory import LLMTransientError, invoke_with_retry, structured_output
 
 class Requirement(BaseModel):
     key: str = Field(min_length=2)
@@ -76,9 +77,15 @@ Return a structured RequirementPlan with requirements where:
 """
     plan: RequirementPlan | None = None
     try:
-        result = llm.with_structured_output(RequirementPlan).invoke(prompt)
+        result = invoke_with_retry(
+            lambda: structured_output(llm, RequirementPlan).invoke(prompt),
+            operation_name="dynamic requirement planning",
+            attempts=3,
+        )
         if isinstance(result, RequirementPlan) and result.requirements:
             plan = result
+    except LLMTransientError:
+        raise
     except Exception:
         plan = None
 
@@ -86,7 +93,11 @@ Return a structured RequirementPlan with requirements where:
         try:
             import json
             import re
-            raw = llm.invoke(prompt)
+            raw = invoke_with_retry(
+                lambda: llm.invoke(prompt),
+                operation_name="dynamic requirement JSON fallback",
+                attempts=3,
+            )
             content = getattr(raw, "content", str(raw))
             json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
             if json_match:
@@ -96,6 +107,8 @@ Return a structured RequirementPlan with requirements where:
             if data_str:
                 data = json.loads(data_str)
                 plan = RequirementPlan.model_validate(data)
+        except LLMTransientError:
+            raise
         except Exception:
             plan = None
 
