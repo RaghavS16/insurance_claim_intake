@@ -37,9 +37,9 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "ollama"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
-    CLOUD_LLM_MODEL: str = "Qwen/Qwen3.5-27B"
+    CLOUD_LLM_MODEL: str = "google/gemma-4-26b-a4b-it:free"
     CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
+    CLOUD_LLM_FALLBACK_MODELS: str = "nvidia/nemotron-3-super-120b-a12b:free"
     CLOUD_LLM_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
