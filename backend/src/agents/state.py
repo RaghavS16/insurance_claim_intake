@@ -42,6 +42,7 @@ class ClaimState(TypedDict, total=False):
     dynamic_extraction_error: Optional[str]
 
     _skip_all: bool
+    _workflow_event: Optional[str]
     _skip_extraction: bool
     _confirmation_pending: bool
     _rejection_active: bool
