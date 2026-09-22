@@ -247,6 +247,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
               {evidenceItems.slice(-4).map((item, index) => {
                 const status = String(item.verification_status || item.status || "review_required").toUpperCase();
                 const label = status === "VERIFIED" ? "Verified" : status === "REJECTED" ? "Rejected" : status === "UNREADABLE" ? "Unreadable" : "Review required";
+                const verificationReason = item.verification_reason == null ? "" : String(item.verification_reason);
                 return (
                   <div key={String(item.id || index)} className="rounded-lg border border-slate-200 p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -257,8 +258,8 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
                       Requested: {String(item.requested_evidence_type || item.evidence_key || "supporting evidence")}
                       {item.detected_document_type ? ` · Detected: ${String(item.detected_document_type)}` : ""}
                     </p>
-                    {item.verification_reason && (
-                      <p className="text-[11px] text-slate-500 mt-1">{String(item.verification_reason)}</p>
+                    {verificationReason && (
+                      <p className="text-[11px] text-slate-500 mt-1">{verificationReason}</p>
                     )}
                   </div>
                 );
