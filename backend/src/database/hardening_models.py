@@ -3,9 +3,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import uuid
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Index, JSON
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from src.database.models import Base
+from src.database.models import Base, _UUID, _JSONB
 
 def _now(): return datetime.now(timezone.utc)
 def _uuid(): return str(uuid.uuid4())
@@ -14,9 +13,9 @@ class ClaimAssignment(Base):
     __tablename__="claim_assignments"
     __table_args__=(Index("ix_claim_assignments_active","claim_id","is_active"),Index("ix_claim_assignments_adjuster","adjuster_id","is_active"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
-    claim_id: Mapped[uuid.UUID]=mapped_column(UUID(as_uuid=True),ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
-    adjuster_id: Mapped[uuid.UUID]=mapped_column(UUID(as_uuid=True),ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
-    assigned_by: Mapped[Optional[uuid.UUID]]=mapped_column(UUID(as_uuid=True),ForeignKey("users.id",ondelete="SET NULL"))
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
+    adjuster_id: Mapped[str]=_UUID(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
+    assigned_by: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
     reason: Mapped[Optional[str]]=mapped_column(Text)
     is_active: Mapped[bool]=mapped_column(Boolean,nullable=False,default=True)
     assigned_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
@@ -43,7 +42,7 @@ class ClaimEvidence(Base):
     __table_args__=(Index("ix_claim_evidence_claim","claim_id"),Index("ix_claim_evidence_status","status"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
-    uploaded_by: Mapped[Optional[uuid.UUID]]=mapped_column(UUID(as_uuid=True),ForeignKey("users.id",ondelete="SET NULL"))
+    uploaded_by: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
     requirement_id: Mapped[Optional[str]]=mapped_column(ForeignKey("claim_requirements.id",ondelete="SET NULL"))
     object_key: Mapped[str]=mapped_column(String(1000),nullable=False,unique=True)
     original_filename: Mapped[str]=mapped_column(String(500),nullable=False)
@@ -84,7 +83,7 @@ class ClaimAuditEvent(Base):
     __tablename__="claim_audit_events"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
-    actor_user_id: Mapped[Optional[uuid.UUID]]=mapped_column(UUID(as_uuid=True),ForeignKey("users.id",ondelete="SET NULL"))
+    actor_user_id: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
     event_type: Mapped[str]=mapped_column(String(100),nullable=False,index=True)
     old_value_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
     new_value_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)

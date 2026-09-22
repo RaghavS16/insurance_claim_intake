@@ -106,17 +106,31 @@ def verify_evidence(
         }
     text = extract_evidence_text(content, filename)
     if len(text.strip()) < 20:
-        return {
-            "verification_status": "UNREADABLE",
-            "detected_document_type": "unknown",
-            "confidence": 0.0,
-            "reason": "The uploaded evidence could not be read reliably. Please upload a clearer document or image.",
-            "extracted_fields": {},
-            "claim_consistency": "UNKNOWN",
-            "consistency_notes": [],
-            "sha256": sha256,
-            "extracted_text_length": len(text),
-        }
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            return {
+                "verification_status": "REVIEW_REQUIRED",
+                "detected_document_type": "photograph",
+                "confidence": 0.0,
+                "reason": "This image does not contain readable text and has been queued for manual review.",
+                "extracted_fields": {},
+                "claim_consistency": "UNKNOWN",
+                "consistency_notes": ["No text detected; manual review required."],
+                "sha256": sha256,
+                "extracted_text_length": len(text),
+            }
+        else:
+            return {
+                "verification_status": "UNREADABLE",
+                "detected_document_type": "unknown",
+                "confidence": 0.0,
+                "reason": "The uploaded evidence could not be read reliably. Please upload a clearer document or image.",
+                "extracted_fields": {},
+                "claim_consistency": "UNKNOWN",
+                "consistency_notes": [],
+                "sha256": sha256,
+                "extracted_text_length": len(text),
+            }
 
     prompt = f"""You are an insurance evidence verification service.
 Determine what document the claimant actually uploaded and whether it satisfies the requested evidence requirement.
@@ -143,6 +157,7 @@ Rules:
 5. Never infer a field that is not present in the document.
 6. Return the actual detected document type, not the requested type when they differ.
 """
+    data: dict[str, Any] = {}
     try:
         result = get_configured_llm().with_structured_output(EvidenceAnalysis).invoke(prompt)
         if isinstance(result, EvidenceAnalysis):
@@ -150,7 +165,20 @@ Rules:
         elif isinstance(result, dict):
             data = EvidenceAnalysis.model_validate(result).model_dump()
         else:
-            raise ValueError("Evidence model returned an unsupported response type")
+            if hasattr(result, "content") and result.content:
+                import json
+                try:
+                    msg_content = str(result.content)
+                    start = msg_content.find('{')
+                    end = msg_content.rfind('}')
+                    if start != -1 and end != -1:
+                        data = EvidenceAnalysis.model_validate_json(msg_content[start:end+1]).model_dump()
+                    else:
+                        raise ValueError("No JSON found in response")
+                except Exception:
+                    raise ValueError("Evidence model returned an unsupported response type")
+            else:
+                raise ValueError("Evidence model returned an unsupported response type")
     except Exception as exc:
         logger.exception("Evidence verification failed for %s", filename)
         data = {
@@ -163,7 +191,8 @@ Rules:
             "consistency_notes": [type(exc).__name__],
         }
     status = str(data.get("verification_status", "REVIEW_REQUIRED")).upper()
-    confidence = float(data.get("confidence") or 0.0)
+    c = data.get("confidence")
+    confidence = float(c) if c is not None else 0.0
     if status == "VERIFIED" and (confidence < 0.85 or str(data.get("claim_consistency", "UNKNOWN")).upper() == "INCONSISTENT"):
         status = "REVIEW_REQUIRED"
         data["reason"] = data.get("reason") or "Automatic verification confidence is not high enough for acceptance."

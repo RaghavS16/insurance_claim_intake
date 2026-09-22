@@ -28,6 +28,21 @@ def build_dynamic_context(state: ClaimState | dict[str, Any]) -> dict[str, Any]:
         query=str(data.get("event_description") or ""),
     )
 
+def is_evidence_req(r: dict[str, Any]) -> bool:
+    ev_type = r.get("evidence_type")
+    if ev_type:
+        return True
+    
+    key = str(r.get("key", "")).lower()
+    label = str(r.get("label", "")).lower()
+    hint = str(r.get("question_hint", "")).lower()
+    
+    if "upload" in hint:
+        return True
+    if any(word in key or word in label for word in ["photo", "image", "document", "bill", "invoice", "report", "copy", "certificate"]):
+        return True
+    return False
+
 def unresolved(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
     """Return required conversational data fields that are still missing from extracted_data."""
     requirements = state.get("dynamic_requirements") or []
@@ -35,7 +50,7 @@ def unresolved(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
     return [
         r for r in requirements
         if r.get("required", True)
-        and r.get("evidence_type") != "photo"
+        and not is_evidence_req(r)
         and r.get("key")
         and data.get(str(r.get("key"))) in (None, "", "UNKNOWN")
     ]
@@ -55,7 +70,7 @@ def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]
     }
     return [
         r for r in requirements
-        if r.get("required", True) and r.get("evidence_type") and str(r.get("key")) not in verified_keys
+        if r.get("required", True) and is_evidence_req(r) and str(r.get("key")) not in verified_keys
     ]
 
 

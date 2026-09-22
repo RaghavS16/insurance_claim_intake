@@ -1,6 +1,7 @@
 """Centralized LLM factory supporting local Ollama and cloud OpenAI-compatible endpoints."""
 from __future__ import annotations
 
+import typing
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -42,7 +43,7 @@ class ClaimChatOpenAI(ChatOpenAI):
     Pydantic extraction contract without requiring the provider's strict response schema.
     """
 
-    def with_structured_output(self, schema=None, *, method="function_calling", include_raw=False, strict=None, tools=None, **kwargs):
+    def with_structured_output(self, schema=None, *, method: typing.Literal["function_calling", "json_mode", "json_schema"] = "function_calling", include_raw=False, strict=None, tools=None, **kwargs):
         return super().with_structured_output(
             schema,
             method=method,
@@ -57,7 +58,7 @@ def get_configured_llm() -> BaseChatModel:
     provider = (settings.LLM_PROVIDER or "ollama").lower().strip()
     timeout = settings.LLM_TIMEOUT_SECONDS
     if provider in ("cloud", "openai", "openrouter", "dashscope", "together"):
-        kwargs = dict(
+        kwargs: dict[str, typing.Any] = dict(
             model=settings.CLOUD_LLM_MODEL,
             api_key=settings.CLOUD_LLM_API_KEY or "not-needed",
             base_url=settings.CLOUD_LLM_BASE_URL,

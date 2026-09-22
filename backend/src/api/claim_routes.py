@@ -577,8 +577,9 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     db.add(db_evidence)
     try:
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        logger.exception("Evidence verification result could not be persisted. DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Evidence verification result could not be persisted.")
 
     if verification_status == "VERIFIED":
@@ -590,12 +591,23 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     else:
         message = analysis.get("reason") or "I couldn't verify this evidence automatically. It remains pending review."
 
+    try:
+        prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+        user_msg = f"[System Event] Uploaded evidence for: {requested.get('label') or requested.get('key') or 'evidence'}. Verification Status: {verification_status}."
+        agent_result = await process_claimant_turn(db, claim, user_msg, "text", prior_turns // 2 + 1)
+        agent_message = agent_result.get("next_question") or agent_result.get("message", "")
+        if agent_message:
+            message = f"{message}\n\n{agent_message}"
+        state = dict(claim.pipeline_state or {})
+    except Exception as exc:
+        logger.exception("Claim conversation processing failed after evidence upload")
+
     return {
         "success": True,
         "message": message,
         "evidence": item,
         "evidence_items": evidence,
-        "missing_evidence": state["missing_evidence"],
+        "missing_evidence": state.get("missing_evidence", []),
     }
 
 @router.patch("/{ticket_id}")
