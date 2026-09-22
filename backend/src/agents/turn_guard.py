@@ -134,7 +134,11 @@ def conversation_turn_processor(state):
                 }
             )
         )
-        if not knowledge_retry:
+        # A confirmation that just set confirmed=True is itself a workflow-driving
+        # turn. Do not swallow it as filler merely because policy verification has
+        # not run yet. The outer turn processor will verify the policy and then
+        # immediately enter the RAG requirement-planning stage.
+        if not state.get("confirmed") and not knowledge_retry:
             state["last_intent"] = "filler"
             state["_skip_all"] = True
             state["spoken_response"] = ""
