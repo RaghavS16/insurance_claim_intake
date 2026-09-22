@@ -12,7 +12,7 @@ from src.utils.logger import app_logger
 logger = app_logger
 
 _DEFAULT_CLOUD_FALLBACK_MODELS = [
-    "openrouter/free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
 ]
 
 
