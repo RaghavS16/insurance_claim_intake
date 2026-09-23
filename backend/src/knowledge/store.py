@@ -156,9 +156,6 @@ def ingest_document(
     logger.info("[Knowledge] Extracted %d characters from '%s'. Inferring metadata...", len(text), filename)
     meta = infer_metadata(text, filename, document_type)
     insurance_type = insurance_type or meta.insurance_type
-    policy_number = policy_number or meta.policy_number
-    effective_from = effective_from or (meta.effective_from.isoformat() if meta.effective_from else None)
-    effective_to = effective_to or (meta.effective_to.isoformat() if meta.effective_to else None)
     content_sha256 = hashlib.sha256(content).hexdigest()
     
     db = SessionLocal()
@@ -185,7 +182,6 @@ def ingest_document(
                 "source_uri": existing.source_uri,
                 "chunks": len(existing.chunks),
                 "insurance_type": existing.insurance_type,
-                "policy_number": existing.policy_number,
                 "duplicate": True,
             }
     finally:
@@ -217,18 +213,12 @@ def ingest_document(
     logger.info("[Knowledge] Persisting %d chunks into PostgreSQL pgvector...", len(chunks))
     db = SessionLocal()
     try:
-        def as_date(v: str | None) -> date | None:
-            return date.fromisoformat(v) if v else None
-            
         doc = KnowledgeDocument(
             id=str(uuid.uuid4()),
             source_name=filename,
             source_uri=s3["uri"],
             document_type=document_type or meta.document_type or "unknown",
             insurance_type=insurance_type,
-            policy_number=policy_number,
-            effective_from=as_date(effective_from),
-            effective_to=as_date(effective_to),
             content_sha256=content_sha256,
             uploaded_by=uploaded_by,
             metadata_json={"title": meta.title, "scope": meta.document_scope},
@@ -256,7 +246,6 @@ def ingest_document(
             "source_uri": s3["uri"],
             "chunks": len(chunks),
             "insurance_type": insurance_type,
-            "policy_number": policy_number,
         }
     except Exception:
         db.rollback()
@@ -278,13 +267,8 @@ def search(
         conditions: list[Any] = []
         if insurance_type:
             conditions.append((KnowledgeDocument.insurance_type == insurance_type) | (KnowledgeDocument.insurance_type.is_(None)))
-        if policy_number:
-            conditions.append((KnowledgeDocument.policy_number == policy_number) | (KnowledgeDocument.policy_number.is_(None)))
         if document_types:
             conditions.append(KnowledgeDocument.document_type.in_(document_types))
-        if incident_date:
-            conditions.append((KnowledgeDocument.effective_from.is_(None)) | (KnowledgeDocument.effective_from <= incident_date))
-            conditions.append((KnowledgeDocument.effective_to.is_(None)) | (KnowledgeDocument.effective_to >= incident_date))
         distance = KnowledgeChunk.embedding.cosine_distance(vector)
         stmt = (
             select(KnowledgeChunk, KnowledgeDocument, distance.label("distance"))
@@ -305,7 +289,6 @@ def search(
                 "source_uri": d.source_uri,
                 "document_type": d.document_type,
                 "insurance_type": d.insurance_type,
-                "policy_number": d.policy_number,
                 "score": round(1 - float(dist), 6),
             }
             for c, d, dist in rows

@@ -8,9 +8,6 @@ class DocumentMetadata(BaseModel):
     title: str = ""
     document_type: str = "unknown"
     insurance_type: str | None = None
-    policy_number: str | None = None
-    effective_from: date | None = None
-    effective_to: date | None = None
     document_scope: str = Field(default="general", description="Short description of what this document governs.")
 
 def infer_metadata(text: str, filename: str, document_type_hint: str | None = None) -> DocumentMetadata:

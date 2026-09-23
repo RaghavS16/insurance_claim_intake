@@ -97,8 +97,7 @@ class TestIngestDocument:
         return [
             patch("src.knowledge.store._extract_text", return_value="A " * 100),
             patch("src.knowledge.store.infer_metadata", return_value=MagicMock(
-                insurance_type="motor", policy_number=None, effective_from=None,
-                effective_to=None, document_type="policy_wording",
+                insurance_type="motor", document_type="policy_wording",
                 title="Test", document_scope="test"
             )),
             patch("src.knowledge.store.embed_documents", return_value=[[0.1] * 768] * 10),
@@ -127,7 +126,6 @@ class TestIngestDocument:
         mock_existing.source_uri = "s3://bucket/doc.pdf"
         mock_existing.chunks = [MagicMock()] * 5
         mock_existing.insurance_type = "motor"
-        mock_existing.policy_number = "POL-001"
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.first.return_value = mock_existing
@@ -136,8 +134,7 @@ class TestIngestDocument:
 
         with patch("src.knowledge.store._extract_text", return_value="A " * 100), \
              patch("src.knowledge.store.infer_metadata", return_value=MagicMock(
-                 insurance_type="motor", policy_number=None, effective_from=None,
-                 effective_to=None, document_type="policy_wording",
+                 insurance_type="motor", document_type="policy_wording",
                  title="T", document_scope="s"
              )), \
              patch("src.knowledge.store.SessionLocal", return_value=mock_db):
@@ -154,8 +151,7 @@ class TestIngestDocument:
 
         with patch("src.knowledge.store._extract_text", return_value="A " * 1000), \
              patch("src.knowledge.store.infer_metadata", return_value=MagicMock(
-                 insurance_type=None, policy_number=None, effective_from=None,
-                 effective_to=None, document_type="policy_wording",
+                 insurance_type=None, document_type="policy_wording",
                  title="T", document_scope="s"
              )), \
              patch("src.knowledge.store.embed_documents", return_value=[[0.1]]),  \
