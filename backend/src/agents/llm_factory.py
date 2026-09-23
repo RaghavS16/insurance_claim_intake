@@ -309,29 +309,3 @@ def get_reasoning_llm() -> BaseChatModel:
 def get_configured_llm() -> BaseChatModel:
     """Return the configured reasoning-capable LLM."""
     return get_reasoning_llm()
-
-def get_fast_llm() -> BaseChatModel:
-    """Return the low-latency model used for baseline turns and response wording."""
-    provider = (settings.LLM_PROVIDER or "gemini").lower().strip()
-    if provider in ("gemini", "google"):
-        return _build_gemini(settings.GEMINI_FAST_MODEL)
-    return get_configured_llm()
-
-
-def get_configured_llm() -> BaseChatModel:
-    provider = (settings.LLM_PROVIDER or "gemini").lower().strip()
-
-    if provider in ("gemini", "google"):
-        return _build_gemini()
-
-    if provider in ("openai", "cloud"):
-        return _build_openai_compatible()
-
-    if provider == "ollama":
-        return _build_ollama()
-
-    raise RuntimeError(
-        f"Unsupported LLM_PROVIDER='{provider}'. "
-        "Supported providers: gemini, openai, ollama."
-    )
-
