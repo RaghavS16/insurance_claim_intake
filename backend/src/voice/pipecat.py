@@ -120,9 +120,9 @@ class PiperHTTPService(TTSService):
 
 class ClaimAgentProcessor(FrameProcessor):
     """Keep STT/transcription live while claim turns are analyzed sequentially."""
-    FINAL_DEBOUNCE_SECONDS=0.8
+    FINAL_DEBOUNCE_SECONDS=settings.VOICE_TURN_SILENCE_SECONDS
     def __init__(self,claim:Claim,*,input_mode:str="voice"):
-        super().__init__(); self._db=SessionLocal(); self._ticket_id=claim.ticket_id; self._input_mode=input_mode; self._segment_number=0; self._pending_text=""; self._pending_at=0.0; self._debounce_task=None; self._turn_queue=asyncio.Queue(); self._worker_task=asyncio.create_task(self._turn_worker()); self._generation=0
+        super().__init__(); self._db=SessionLocal(); self._ticket_id=claim.ticket_id; self._input_mode=input_mode; self._segment_number=0; self._pending_text=""; self._pending_at=0.0; self._debounce_task=None; self._turn_queue=asyncio.Queue(maxsize=settings.VOICE_MAX_QUEUED_TURNS); self._worker_task=asyncio.create_task(self._turn_worker()); self._generation=0
     async def cleanup(self):
         if self._debounce_task and not self._debounce_task.done(): self._debounce_task.cancel()
         if self._worker_task and not self._worker_task.done(): self._worker_task.cancel()
@@ -148,7 +148,7 @@ class ClaimAgentProcessor(FrameProcessor):
                 wait=self.FINAL_DEBOUNCE_SECONDS-(time.monotonic()-self._pending_at)
                 if wait>0: await asyncio.sleep(wait); continue
                 text=self._pending_text.strip(); self._pending_text=""
-                if text: await self._turn_queue.put((text,direction,self._generation))
+                if text:\n                    try:\n                        while self._turn_queue.full():\n                            _ = self._turn_queue.get_nowait()\n                            self._turn_queue.task_done()\n                    except asyncio.QueueEmpty:\n                        pass\n                    await self._turn_queue.put((text,direction,self._generation))
                 return
         except asyncio.CancelledError: return
         except Exception: logger.exception("Debounced voice turn failed")
