@@ -38,6 +38,20 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
     CLOUD_LLM_MODEL: str = ""
+
+    # Production conversational AI routing.
+    FAST_LLM_PROVIDER: str = "groq"
+    FAST_LLM_MODEL: str = "openai/gpt-oss-20b"
+    REASONING_LLM_PROVIDER: str = "groq"
+    REASONING_LLM_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    FAST_LLM_TIMEOUT_SECONDS: float = Field(8.0, ge=2.0, le=60.0)
+    REASONING_LLM_TIMEOUT_SECONDS: float = Field(20.0, ge=3.0, le=120.0)
+    FAST_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
+    REASONING_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
+    VOICE_TURN_SILENCE_SECONDS: float = Field(0.55, ge=0.2, le=2.0)
+    VOICE_MAX_QUEUED_TURNS: int = Field(1, ge=1, le=3)
     CLOUD_LLM_BASE_URL: Optional[str] = None
     CLOUD_LLM_FALLBACK_MODELS: str = ""
     CLOUD_LLM_API_KEY: Optional[str] = None
@@ -102,7 +116,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_llm_provider(cls, v: str) -> str:
         norm = v.lower().strip()
-        allowed = {"gemini", "google", "openai", "cloud", "ollama"}
+        allowed = {"gemini", "google", "openai", "cloud", "ollama", "groq"}
         if norm not in allowed:
             raise ValueError(f"LLM_PROVIDER must be one of {sorted(allowed)}.")
         return "gemini" if norm == "google" else ("openai" if norm == "cloud" else norm)
