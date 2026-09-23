@@ -152,7 +152,7 @@ def _model_response(state: ClaimState) -> str:
             nodes.invoke_with_retry(
                 lambda: nodes._get_llm().invoke(prompt),
                 operation_name="conversational response planning",
-                attempts=3,
+                attempts=1,
             )
         )
         if _response_is_usable(response, missing, data):
