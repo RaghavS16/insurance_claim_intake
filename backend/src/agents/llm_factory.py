@@ -240,6 +240,22 @@ def _build_gemini(model_name: str | None = None) -> BaseChatModel:
     return cast(BaseChatModel, ResilientChatModel(gemini_client, lambda: _build_ollama(fallback_model)))
 
 
+def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
+    """Build an OpenAI-compatible client through Hugging Face Inference Providers."""
+    token = (settings.HF_TOKEN or "").strip()
+    if not token:
+        raise RuntimeError("HF_TOKEN is required when using Hugging Face Inference Providers.")
+    base_url = (settings.HF_BASE_URL or "https://router.huggingface.co/v1").rstrip("/")
+    if "openrouter.ai" in base_url.lower():
+        raise RuntimeError("OpenRouter is not supported by the production LLM routing path.")
+    model = model_name.strip()
+    if ":" not in model:
+        raise RuntimeError("Hugging Face routing requires a provider-qualified model such as openai/gpt-oss-20b:groq.")
+    return ChatOpenAI(
+        model=model, api_key=token, base_url=base_url, temperature=0,
+        max_tokens=2048, max_retries=0, timeout=timeout_seconds,
+    )
+
 def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: float | None = None) -> BaseChatModel:
     base_url = (settings.CLOUD_LLM_BASE_URL or "").strip()
     if not base_url:
@@ -250,32 +266,25 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
         raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
     return ChatOpenAI(
         model=model_name or settings.CLOUD_LLM_MODEL,
-        api_key=settings.CLOUD_LLM_API_KEY,
-        base_url=base_url,
-        temperature=0,
-        max_tokens=2048,
-        max_retries=0,
-        timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
+        api_key=settings.CLOUD_LLM_API_KEY, base_url=base_url, temperature=0,
+        max_tokens=2048, max_retries=0, timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
     )
-
 
 def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
+    """Optional emergency direct-Groq path; HF is the production default."""
     if not settings.GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is required when using Groq.")
+        raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
     return ChatOpenAI(
-        model=model_name,
-        api_key=settings.GROQ_API_KEY,
-        base_url=settings.GROQ_BASE_URL.rstrip("/"),
-        temperature=0,
-        max_tokens=2048,
-        max_retries=0,
-        timeout=timeout_seconds,
+        model=model_name, api_key=settings.GROQ_API_KEY,
+        base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
+        max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
-
 
 def get_fast_llm() -> BaseChatModel:
     """Return the low-latency model used for claimant turns."""
-    provider = (settings.FAST_LLM_PROVIDER or settings.LLM_PROVIDER or "groq").lower().strip()
+    provider = (settings.FAST_LLM_PROVIDER or settings.LLM_PROVIDER or "huggingface").lower().strip()
+    if provider in ("huggingface", "hf", "inference-providers"):
+        return _build_huggingface(model_name=settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
     if provider == "groq":
         return _build_groq(settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
     if provider in ("gemini", "google"):
@@ -286,10 +295,11 @@ def get_fast_llm() -> BaseChatModel:
         return _build_ollama()
     raise RuntimeError(f"Unsupported fast LLM provider: {provider}")
 
-
 def get_reasoning_llm() -> BaseChatModel:
-    """Return the higher-quality model for RAG requirement planning and adjuster analysis."""
-    provider = (settings.REASONING_LLM_PROVIDER or settings.LLM_PROVIDER or "groq").lower().strip()
+    """Return the higher-quality model for RAG and adjuster analysis."""
+    provider = (settings.REASONING_LLM_PROVIDER or settings.LLM_PROVIDER or "huggingface").lower().strip()
+    if provider in ("huggingface", "hf", "inference-providers"):
+        return _build_huggingface(model_name=settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
     if provider == "groq":
         return _build_groq(settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
     if provider in ("gemini", "google"):
@@ -299,7 +309,6 @@ def get_reasoning_llm() -> BaseChatModel:
     if provider == "ollama":
         return _build_ollama()
     raise RuntimeError(f"Unsupported reasoning LLM provider: {provider}")
-
 
 def get_configured_llm() -> BaseChatModel:
     """Return the configured reasoning-capable LLM."""
