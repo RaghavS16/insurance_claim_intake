@@ -587,6 +587,7 @@ export default function ClaimantPage() {
       return;
     }
     setEvidenceUploading(true);
+    setPendingEvidenceName(file.name);
     setErrorBanner("");
     try {
       const form = new FormData();
@@ -606,11 +607,13 @@ export default function ClaimantPage() {
         speaker: "agent",
         text: result.message || `I checked “${file.name}” against the claim evidence requirements.`,
         timestamp: Date.now(),
-      }]);
+        attachment: { name: file.name, size: file.size, type: file.type },
+      } as ConversationTurn]);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Could not upload evidence.");
     } finally {
       setEvidenceUploading(false);
+      setPendingEvidenceName(null);
     }
   };
 
