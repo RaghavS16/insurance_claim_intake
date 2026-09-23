@@ -78,7 +78,7 @@ export default function ClaimantPage() {
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
   const [missingEvidence, setMissingEvidence] = useState<Array<Record<string, unknown>>>([]);
-  const [evidenceItems, setEvidenceItems] = useState<Array<Record<string, unknown>>>([]);
+  const [evidenceItems, setEvidenceItems] = useState<Array<Record<string, unknown>>>([]);\n  const [pendingEvidenceName, setPendingEvidenceName] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState("");
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
