@@ -292,7 +292,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
       )}
 
 
-      {/* Explicit Anchor for smooth and accurate scroll to latest */}
+      {pendingEvidenceName && (\n        <div className="flex gap-3 max-w-[88%] md:max-w-[80%] ml-auto justify-end animate-pulse">\n          <div className="flex flex-col gap-1 items-end">\n            <span className="text-[11px] text-[#00647c] font-semibold">Uploading evidence…</span>\n            <div className="rounded-2xl bg-[#00647c]/10 border border-[#0891B2]/30 px-4 py-3 text-xs text-slate-600">\n              {pendingEvidenceName}\n            </div>\n          </div>\n        </div>\n      )}\n\n      {/* Explicit Anchor for smooth and accurate scroll to latest */}
       <div ref={messagesEndRef} className="h-1 w-full shrink-0" aria-hidden="true" />
 
       {/* Bottom Spacer for fixed VoiceConsole */}
