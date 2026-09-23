@@ -25,6 +25,7 @@ interface ClaimantChatAreaProps {
   onSelectPromptSuggestion?: (text: string) => void;
   onExportTranscript?: () => void;
   onScrollChange?: (isScrolledUp: boolean) => void;
+  pendingEvidenceName?: string | null;
 }
 
 const formatMessageTime = (ts?: number | string | null) => {
@@ -45,6 +46,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   linkedPolicies = [],
   onSelectPromptSuggestion,
   onScrollChange,
+  pendingEvidenceName,
 }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
