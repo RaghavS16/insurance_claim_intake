@@ -245,31 +245,70 @@ def _build_gemini(model_name: str | None = None) -> BaseChatModel:
     return cast(BaseChatModel, ResilientChatModel(gemini_client, lambda: _build_ollama(fallback_model)))
 
 
-def _build_openai_compatible() -> BaseChatModel:
+def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: float | None = None) -> BaseChatModel:
     base_url = (settings.CLOUD_LLM_BASE_URL or "").strip()
     if not base_url:
         raise RuntimeError("CLOUD_LLM_BASE_URL is required when LLM_PROVIDER=openai.")
-
     if "openrouter.ai" in base_url.lower():
-        raise RuntimeError(
-            "OpenRouter is intentionally unsupported for production claim intake. "
-            "Use LLM_PROVIDER=gemini for the primary cloud path or configure a direct "
-            "OpenAI-compatible provider."
-        )
-
+        raise RuntimeError("OpenRouter is not supported by the production routing path.")
     if not settings.CLOUD_LLM_API_KEY:
         raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
-
     return ChatOpenAI(
-        model=settings.CLOUD_LLM_MODEL,
+        model=model_name or settings.CLOUD_LLM_MODEL,
         api_key=settings.CLOUD_LLM_API_KEY,
         base_url=base_url,
         temperature=0,
         max_tokens=2048,
         max_retries=0,
-        timeout=settings.LLM_TIMEOUT_SECONDS,
+        timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
     )
 
+
+def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
+    if not settings.GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is required when using Groq.")
+    return ChatOpenAI(
+        model=model_name,
+        api_key=settings.GROQ_API_KEY,
+        base_url=settings.GROQ_BASE_URL.rstrip("/"),
+        temperature=0,
+        max_tokens=2048,
+        max_retries=0,
+        timeout=timeout_seconds,
+    )
+
+
+def get_fast_llm() -> BaseChatModel:
+    """Return the low-latency model used for claimant turns."""
+    provider = (settings.FAST_LLM_PROVIDER or settings.LLM_PROVIDER or "groq").lower().strip()
+    if provider == "groq":
+        return _build_groq(settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
+    if provider in ("gemini", "google"):
+        return _build_gemini(settings.GEMINI_FAST_MODEL)
+    if provider in ("openai", "cloud"):
+        return _build_openai_compatible(timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
+    if provider == "ollama":
+        return _build_ollama()
+    raise RuntimeError(f"Unsupported fast LLM provider: {provider}")
+
+
+def get_reasoning_llm() -> BaseChatModel:
+    """Return the higher-quality model for RAG requirement planning and adjuster analysis."""
+    provider = (settings.REASONING_LLM_PROVIDER or settings.LLM_PROVIDER or "groq").lower().strip()
+    if provider == "groq":
+        return _build_groq(settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
+    if provider in ("gemini", "google"):
+        return _build_gemini()
+    if provider in ("openai", "cloud"):
+        return _build_openai_compatible(timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
+    if provider == "ollama":
+        return _build_ollama()
+    raise RuntimeError(f"Unsupported reasoning LLM provider: {provider}")
+
+
+def get_configured_llm() -> BaseChatModel:
+    """Return the configured reasoning-capable LLM."""
+    return get_reasoning_llm()
 
 def get_fast_llm() -> BaseChatModel:
     """Return the low-latency model used for baseline turns and response wording."""
