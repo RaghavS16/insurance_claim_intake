@@ -148,7 +148,14 @@ class ClaimAgentProcessor(FrameProcessor):
                 wait=self.FINAL_DEBOUNCE_SECONDS-(time.monotonic()-self._pending_at)
                 if wait>0: await asyncio.sleep(wait); continue
                 text=self._pending_text.strip(); self._pending_text=""
-                if text:\n                    try:\n                        while self._turn_queue.full():\n                            _ = self._turn_queue.get_nowait()\n                            self._turn_queue.task_done()\n                    except asyncio.QueueEmpty:\n                        pass\n                    await self._turn_queue.put((text,direction,self._generation))
+                if text:
+                    try:
+                        while self._turn_queue.full():
+                            _ = self._turn_queue.get_nowait()
+                            self._turn_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    await self._turn_queue.put((text, direction, self._generation))
                 return
         except asyncio.CancelledError: return
         except Exception: logger.exception("Debounced voice turn failed")
