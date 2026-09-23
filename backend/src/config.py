@@ -34,16 +34,18 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
     REDIS_URL: Optional[str] = None
 
-    LLM_PROVIDER: str = "gemini"
+    LLM_PROVIDER: str = "huggingface"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
     CLOUD_LLM_MODEL: str = ""
 
     # Production conversational AI routing.
-    FAST_LLM_PROVIDER: str = "groq"
-    FAST_LLM_MODEL: str = "openai/gpt-oss-20b"
-    REASONING_LLM_PROVIDER: str = "groq"
-    REASONING_LLM_MODEL: str = "openai/gpt-oss-120b"
+    FAST_LLM_PROVIDER: str = "huggingface"
+    FAST_LLM_MODEL: str = "openai/gpt-oss-20b:groq"
+    REASONING_LLM_PROVIDER: str = "huggingface"
+    REASONING_LLM_MODEL: str = "openai/gpt-oss-120b:groq"
+    HF_TOKEN: Optional[str] = None
+    HF_BASE_URL: str = "https://router.huggingface.co/v1"
     GROQ_API_KEY: Optional[str] = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     FAST_LLM_TIMEOUT_SECONDS: float = Field(8.0, ge=2.0, le=60.0)
@@ -116,7 +118,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_llm_provider(cls, v: str) -> str:
         norm = v.lower().strip()
-        allowed = {"gemini", "google", "openai", "cloud", "ollama", "groq"}
+        allowed = {"huggingface", "hf", "inference-providers", "gemini", "google", "openai", "cloud", "ollama", "groq"}
         if norm not in allowed:
             raise ValueError(f"LLM_PROVIDER must be one of {sorted(allowed)}.")
         return "gemini" if norm == "google" else ("openai" if norm == "cloud" else norm)
@@ -160,9 +162,16 @@ class Settings(BaseSettings):
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.LLM_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):
             raise RuntimeError("A Gemini/Google API key is required when LLM_PROVIDER=gemini.")
+        hf_needed = (
+            self.FAST_LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+            or self.REASONING_LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+            or self.LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+        )
+        if self.ENVIRONMENT in ("production", "staging") and hf_needed and not self.HF_TOKEN:
+            raise RuntimeError("HF_TOKEN is required when a production LLM profile uses Hugging Face Inference Providers.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
-            raise RuntimeError("GROQ_API_KEY is required when a production LLM profile uses Groq.")
+            raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")
         if self.ENVIRONMENT in ("production", "staging") and self.EMBEDDING_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY or self.EMBEDDING_API_KEY):
             raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
         if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
