@@ -48,7 +48,7 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
     {onUploadEvidence && (
       <label className="pointer-events-auto mb-3 flex items-center gap-2 px-4 py-2 rounded-full border border-[#bdc8ce] bg-white hover:bg-[#f7f9fb] text-xs font-semibold text-[#505f76] cursor-pointer shadow-sm">
         <span className="material-symbols-outlined text-[17px]">upload_file</span>
-        <span>{evidenceUploading ? "Uploading evidence…" : "Upload supporting evidence"}</span>
+        <span>{evidenceUploading ? "Uploading Evidence…" : "Upload Evidence"}</span>
         <input
           type="file"
           className="hidden"
