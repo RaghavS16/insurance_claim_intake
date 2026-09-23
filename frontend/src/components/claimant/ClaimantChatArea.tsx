@@ -312,7 +312,9 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
             </div>
           </div>
         </div>
-      )}\n\n      {/* Explicit Anchor for smooth and accurate scroll to latest */}
+      )}
+
+      {/* Explicit Anchor for smooth and accurate scroll to latest */}
       <div ref={messagesEndRef} className="h-1 w-full shrink-0" aria-hidden="true" />
 
       {/* Bottom Spacer for fixed VoiceConsole */}
