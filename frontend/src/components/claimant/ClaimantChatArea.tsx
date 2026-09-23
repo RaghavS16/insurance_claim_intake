@@ -156,6 +156,15 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
                   <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
                     {turn.text}
                   </p>
+                  {turn.attachment && (
+                    <div className="mt-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3 py-2">
+                      <span className="material-symbols-outlined text-[#00647c]">description</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-slate-700">{turn.attachment.name}</div>
+                        <div className="text-[10px] text-slate-400">Evidence uploaded</div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Bubble Action Bar on Hover */}
                   <div className="absolute right-2 -bottom-3 hidden group-hover:flex items-center gap-1 bg-white border border-slate-200 shadow-sm rounded-lg px-1 py-0.5 z-10">
