@@ -76,11 +76,13 @@ Return a structured RequirementPlan with requirements where:
 - condition: include any source-supported condition under which the requirement applies, otherwise null
 """
     plan: RequirementPlan | None = None
+    # Structured output is the only normal path. The unstructured fallback is a single
+    # bounded attempt and exists only for providers that ignore structured output.
     try:
         result = invoke_with_retry(
             lambda: structured_output(llm, RequirementPlan).invoke(prompt),
             operation_name="dynamic requirement planning",
-            attempts=3,
+            attempts=1,
         )
         if isinstance(result, RequirementPlan) and result.requirements:
             plan = result
@@ -96,7 +98,7 @@ Return a structured RequirementPlan with requirements where:
             raw = invoke_with_retry(
                 lambda: llm.invoke(prompt),
                 operation_name="dynamic requirement JSON fallback",
-                attempts=3,
+                attempts=1,
             )
             content = getattr(raw, "content", str(raw))
             json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
