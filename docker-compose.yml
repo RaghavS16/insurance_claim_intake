@@ -43,11 +43,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-insurance_claims}
       REDIS_URL: redis://redis:6379/0
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
-      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
-      FAST_LLM_PROVIDER: ${FAST_LLM_PROVIDER:-groq}
-      FAST_LLM_MODEL: ${FAST_LLM_MODEL:-openai/gpt-oss-20b}
-      REASONING_LLM_PROVIDER: ${REASONING_LLM_PROVIDER:-groq}
-      REASONING_LLM_MODEL: ${REASONING_LLM_MODEL:-openai/gpt-oss-120b}
+      LLM_PROVIDER: ${LLM_PROVIDER:-huggingface}
+      FAST_LLM_PROVIDER: ${FAST_LLM_PROVIDER:-huggingface}
+      FAST_LLM_MODEL: ${FAST_LLM_MODEL:-openai/gpt-oss-20b:groq}
+      REASONING_LLM_PROVIDER: ${REASONING_LLM_PROVIDER:-huggingface}
+      REASONING_LLM_MODEL: ${REASONING_LLM_MODEL:-openai/gpt-oss-120b:groq}
+      HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN}
+      HF_BASE_URL: ${HF_BASE_URL:-https://router.huggingface.co/v1}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       FAST_LLM_TIMEOUT_SECONDS: ${FAST_LLM_TIMEOUT_SECONDS:-8}
