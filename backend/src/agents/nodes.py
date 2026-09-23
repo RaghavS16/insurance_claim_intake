@@ -87,17 +87,7 @@ def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
         # temporarily overloaded, retry once on the configured primary model
         # before falling back to deterministic extraction.
         if is_transient_llm_error(exc):
-            try:
-                fallback = get_configured_llm()
-                result = invoke_with_retry(
-                    lambda: structured_output(fallback, schema).invoke(prompt),
-                    operation_name="baseline fallback extraction",
-                    attempts=1,
-                )
-                if isinstance(result, schema): return result
-                if isinstance(result, dict): return schema.model_validate(result)
-            except Exception as fallback_exc:
-                logger.warning("Baseline fallback extraction failed: %s", fallback_exc)
+            logger.warning("Fast extraction provider unavailable; using deterministic extraction for this turn: %s", exc)
         else:
             logger.warning("Structured extraction failed: %s", exc)
     return None
