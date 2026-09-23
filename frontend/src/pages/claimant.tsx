@@ -747,6 +747,7 @@ export default function ClaimantPage() {
               onSelectPromptSuggestion={(txt) => handleSendText(undefined, txt)}
               onExportTranscript={handleExportTranscript}
               onScrollChange={(isUp) => setShowScrollBottom(isUp)}
+              pendingEvidenceName={pendingEvidenceName}
             />
 
             <VoiceConsole
