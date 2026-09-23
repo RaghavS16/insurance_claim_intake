@@ -11,22 +11,27 @@ from src.agents.turn_guard import conversation_turn_processor
 from src.agents.dynamic_requirements import build_dynamic_context, extract_answers
 
 
-_RESPONSE_SYSTEM_PROMPT = """You are an intelligent, empathetic conversation planner for an insurance claim intake assistant.
+from src.agents.gap_analysis import analyze_claim_gaps
 
-Your goal is to guide the claimant through a smooth, natural conversation across 4 stages:
-1. Baseline Details Gathering: Collect incident description, insurance type, incident date, incident location, approximate damage/loss amount, and policy number. Acknowledge facts provided, respond empathetically, and ask only for what is still needed.
-2. Baseline Confirmation & Policy Verification: Once all baseline details are present, present a concise recap and ask the claimant if the details are accurate. Once verified, transition smoothly to specific details.
-3. Dynamic Requirements & Evidence Files: Gather domain-specific details (from RAG) and remind them to upload supporting documents or photos if needed.
-4. Final Review & Submission: Once all specific details and evidence are in place, ask if they would like to submit the claim directly to the claims adjuster.
+_RESPONSE_SYSTEM_PROMPT = """You are an intelligent, empathetic conversational AI dialogue agent for insurance claims intake.
+You operate as a dynamic dialogue partner rather than a static or rigid Q&A chatbot.
+You engage claimants in natural, flowing conversation to progressively gather, validate, and verify all required information.
 
-Rules:
-- Speak naturally and conversationally. Do not sound like a rigid questionnaire or form.
-- If the claimant provided several facts at once, acknowledge them together.
+The conversational flow follows this structured 5-phase progression:
+1. Baseline Information Collection: Open with warm, contextual dialogue to establish rapport while collecting foundational details (policyholder identity/name, policy number, contact phone/email, incident date and time, claim category motor/property/health/travel/cyber, description narrative, location, estimated repair/loss amount). Acknowledge facts provided, respond empathetically to distress or frustration, and ask only for what is still needed.
+2. Identity and Eligibility Verification: Confirm baseline facts and reassure the claimant as their policy status, coverage period, and claim eligibility are verified against underwriting records.
+3. Intelligent RAG-Powered Question Generation & Real-Time Evidence Guidance: Using retrieved policy documents, claim procedures, and regulatory requirements, generate precise, context-adaptive follow-up questions tailored to their claim type (motor: accident dynamics, third-party involvement, police report/FIR, vehicle damage, drivability; property: damage cause, extent, mitigation, affected items; health: hospital admission, diagnosis, attending physician, cashless vs reimbursement). Guide users through uploading, describing, and validating required materials (photos, receipts, police reports, medical bills) in real-time, explaining why each is needed.
+4. Information Validation & Gap Analysis: Continuously cross-check collected data against policy requirements and regulatory mandates, flagging inconsistencies or missing elements conversationally, and circling back smoothly to resolve gaps without restarting.
+5. Adjuster-Ready Submission Package Compilation: Synthesize all verified information and guide the claimant through final confirmation for immediate adjuster review.
+
+Conversation Design Rules:
+- Speak naturally, warmly, and empathetically. Never sound like a rigid questionnaire.
+- If the claimant provided multiple details at once, warmly acknowledge all of them together before asking the next question.
 - If the claimant made a correction (e.g. "my policy number is POL-1409-XI"), warmly acknowledge the correction and use the updated value.
-- If the claimant asks a question, answer it helpfully based on available information or insurance context.
-- Never invent policy numbers, coverage decisions, or legal facts.
-- Do not mention internal variables, schemas, JSON, LangGraph, agents, or "missing fields".
-- Keep voice-friendly: 1 to 2 clear, natural sentences suitable for text and speech.
+- If the claimant is frustrated or distressed, empathize first, provide reassuring clarity, and explain why the remaining detail helps their payout.
+- If the claimant asks a question, answer it helpfully based on available insurance context.
+- Keep voice-friendly: 1 to 3 clear, natural, reassuring sentences suitable for speech and text.
+- Never output raw JSON, schemas, Python code, internal variables, or LangGraph state terms.
 """
 
 _FIELD_LABELS = {
@@ -40,20 +45,20 @@ _FIELD_LABELS = {
 
 
 def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
-    """Safe, non-form-like fallback when the response model is unavailable."""
+    """Safe, conversational fallback when the response model is unavailable."""
     if not missing:
-        return "I have the claim details I need. Is everything correct?"
-    labels = [_FIELD_LABELS[field] for field in missing[:3] if field in _FIELD_LABELS]
+        return "I have all the foundational claim details noted. Does everything look accurate so far?"
+    labels = [_FIELD_LABELS[field] for field in missing if field in _FIELD_LABELS]
     if len(missing) >= 5 and not data:
         return (
-            "Tell me whatever you know about what happened, when and where it happened, your insurance type, "
-            "policy number, and approximate loss or repair cost."
+            "I'm here to help you file your claim quickly and smoothly. Tell me what happened, "
+            "when and where it occurred, your policy number, and any initial loss or repair estimate."
         )
     if len(labels) == 1:
-        return f"Whenever you're ready, tell me {labels[0]}."
+        return f"To help us verify your coverage, could you share {labels[0]} whenever you're ready?"
     if len(labels) == 2:
-        return f"Whenever you're ready, tell me {labels[0]} and {labels[1]}."
-    return f"Whenever you're ready, tell me {', '.join(labels)}."
+        return f"I've noted what you've shared. Could you also share {labels[0]} and {labels[1]}?"
+    return f"I've recorded those details. When you have a moment, could you also tell me {', '.join(labels[:2])}?"
 
 
 def _compact_knowledge_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -122,18 +127,25 @@ def _model_response(state: ClaimState) -> str:
         {k: item.get(k) for k in ("key", "label", "question_hint", "required", "evidence_type")}
         for item in (state.get("missing_evidence") or [])
     ]
+    gap_data = state.get("gap_analysis") or analyze_claim_gaps(state)
+    sentiment = gap_data.get("user_sentiment", "normal")
+    phase = state.get("conversation_phase", "1_baseline")
+
     prompt = (
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
+        f"Active Intake Phase: {phase}\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
         f"Still-needed claim-specific information: {dynamic_missing}\n"
         f"Still-needed evidence uploads: {missing_evidence_items}\n"
+        f"Detected claimant sentiment: {sentiment}\n"
+        f"Identified gaps / consistency notes: {gap_data.get('flagged_gaps', [])}\n"
         f"Grounding context: {_compact_knowledge_context(state.get('knowledge_context', {}))}\n"
         f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
         f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
         f"Latest claimant utterance: {state.get('last_user_utterance', '')}\n\n"
         f"Recent conversation:\n{history_text}\n\n"
-        "Write only the exact sentence(s) the assistant should say to the claimant."
+        "Write 1 to 3 clear, warm, and natural conversational sentences suitable for speech and text."
     )
     try:
         response = _message_text(
@@ -147,6 +159,8 @@ def _model_response(state: ClaimState) -> str:
             return response
     except Exception as exc:
         nodes.logger.warning("Conversational response planning failed: %s", exc)
+    if dynamic_missing or missing_evidence_items:
+        return _dynamic_fallback(state)
     return _natural_fallback(missing, data)
 
 
@@ -160,6 +174,9 @@ def _dynamic_fallback(state: ClaimState) -> str:
         return str(hint).strip()
     if missing_ev:
         first_ev = missing_ev[0]
+        hint = first_ev.get("question_hint")
+        if hint:
+            return str(hint).strip()
         return f"Please upload {first_ev.get('label', 'the supporting document').lower()} when you have it so we can continue."
     return _natural_fallback(list(state.get("missing_fields", [])), data)
 
@@ -174,20 +191,23 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
+        state["conversation_phase"] = "2_verification" if state.get("awaiting_confirmation") else "1_baseline"
         state["conversation_status"] = "reviewing" if state.get("awaiting_confirmation") else "collecting"
         return state
 
-    policy_verification = state.get("policy_verification") or {}
-    if policy_verification and not policy_verification.get("valid"):
+    policy_verification = state.get("policy_verification")
+    if isinstance(policy_verification, dict) and not policy_verification.get("valid"):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["rag_status"] = "POLICY_VERIFICATION_FAILED"
+        state["conversation_phase"] = "2_verification"
         state["conversation_status"] = "verification_failed"
         return state
-    if not policy_verification.get("valid"):
+    if not isinstance(policy_verification, dict) or not policy_verification.get("valid"):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["rag_status"] = "WAITING_FOR_POLICY_VERIFICATION"
+        state["conversation_phase"] = "2_verification"
         state["conversation_status"] = "pending_verification"
         return state
 
@@ -213,6 +233,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         if state.get("confirmed") and (
             state.get("dynamic_missing") or state.get("missing_evidence")
         ):
+            state["conversation_phase"] = "3_rag_intake"
             state["conversation_status"] = "collecting_dynamic"
         return state
 
@@ -232,8 +253,10 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("confirmed") and (
         state.get("dynamic_missing") or state.get("missing_evidence")
     ):
+        state["conversation_phase"] = "3_rag_intake"
         state["conversation_status"] = "collecting_dynamic"
     elif state.get("confirmed"):
+        state["conversation_phase"] = "4_gap_analysis"
         state["conversation_status"] = "final_review"
     return state
 
@@ -248,7 +271,12 @@ def _response_planner(state: ClaimState) -> ClaimState:
     missing_evidence = list(state.get("missing_evidence") or [])
     plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") == "OK"
 
+    # Continuous Gap & Validation Analysis
+    gaps_result = analyze_claim_gaps(state)
+    state["gap_analysis"] = gaps_result
+
     if state.get("awaiting_confirmation") and not state.get("confirmed") and not missing:
+        state["conversation_phase"] = "2_verification"
         state["next_question_field"] = "confirmation"
         state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
         state["conversation_status"] = "reviewing"
@@ -256,6 +284,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         return state
 
     if state.get("confirmed") and not missing and not plan_ready:
+        state["conversation_phase"] = "3_rag_intake"
         state["conversation_status"] = "waiting_for_knowledge"
         state["next_question_field"] = "knowledge"
         status = state.get("rag_status")
@@ -285,17 +314,21 @@ def _response_planner(state: ClaimState) -> ClaimState:
         return state
 
     if missing:
+        state["conversation_phase"] = "1_baseline"
         state["next_question_field"] = missing[0]
         state["next_question"] = _natural_fallback(missing, data)
     elif dynamic_missing:
+        state["conversation_phase"] = "3_rag_intake"
         state["next_question_field"] = dynamic_missing[0].get("key")
-        state["next_question"] = _dynamic_fallback(state)
         state["conversation_status"] = "collecting_dynamic"
+        state["next_question"] = _dynamic_fallback(state)
     elif missing_evidence:
+        state["conversation_phase"] = "3_rag_intake"
         state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
-        state["next_question"] = _dynamic_fallback(state)
         state["conversation_status"] = "collecting_dynamic"
+        state["next_question"] = _dynamic_fallback(state)
     else:
+        state["conversation_phase"] = "4_gap_analysis"
         state["next_question_field"] = "final_confirmation"
 
     if (
@@ -309,32 +342,37 @@ def _response_planner(state: ClaimState) -> ClaimState:
             if state.get("last_intent") == "confirmation":
                 state["final_submission_confirmed"] = True
                 state["awaiting_submission_confirmation"] = False
+                state["conversation_phase"] = "5_completed"
                 state["conversation_status"] = "submitting"
-                state["next_question"] = "Thanks. I'll submit the completed claim now."
+                state["next_question"] = "Thanks. I'll compile your adjuster-ready submission package and submit the completed claim now."
             elif state.get("last_intent") == "rejection":
                 state["final_submission_confirmed"] = False
                 state["awaiting_submission_confirmation"] = False
+                state["conversation_phase"] = "4_gap_analysis"
                 state["conversation_status"] = "final_review"
-                state["next_question"] = "No problem. Tell me what you'd like to change before I submit it."
+                state["next_question"] = "No problem at all. Tell me what you'd like to adjust or add before I submit it."
             else:
                 state["final_submission_confirmed"] = False
+                state["conversation_phase"] = "4_gap_analysis"
                 state["next_question"] = (
-                    "I've collected and checked everything required for this claim. "
-                    "Would you like me to submit it to the adjuster?"
+                    "I've collected and verified all the required information and evidence for your claim. "
+                    "Would you like me to submit your complete dossier directly to the adjuster?"
                 )
         else:
             state["final_submission_confirmed"] = False
             state["awaiting_submission_confirmation"] = True
+            state["conversation_phase"] = "4_gap_analysis"
             state["conversation_status"] = "final_review"
             state["next_question"] = (
-                "I've collected the required claim-specific information. "
-                "Would you like me to submit the claim to the adjuster?"
+                "I've assembled all the required claim-specific details and evidence. "
+                "Would you like me to submit the claim package to the claims adjuster?"
             )
         state["message"] = state["next_question"]
         return state
 
     state["message"] = state.get("next_question", "")
     return state
+
 
 def _workflow_event_router(state: ClaimState) -> str:
     return "workflow_event" if state.get("_workflow_event") else "user_turn"

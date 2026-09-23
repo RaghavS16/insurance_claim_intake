@@ -115,7 +115,15 @@ class EmbeddingService:
         if provider == "gemini" or (gemini_key and (provider not in ("ollama", "openai", "fastembed"))):
             if not gemini_key:
                 raise RuntimeError("GEMINI_API_KEY is required when EMBEDDING_PROVIDER=gemini.")
-            return self._embed_gemini(texts, gemini_key, settings.EMBEDDING_MODEL if "text-embedding" in (settings.EMBEDDING_MODEL or "") else "text-embedding-004")
+            try:
+                return self._embed_gemini(texts, gemini_key, settings.EMBEDDING_MODEL if "text-embedding" in (settings.EMBEDDING_MODEL or "") else "text-embedding-004")
+            except Exception as exc:
+                logger.warning("Gemini embedding endpoint unreachable (%s); falling back to local embeddings.", exc)
+                try:
+                    ollama_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
+                    return self._embed_openai_compatible(texts, ollama_url, "nomic-embed-text", "")
+                except Exception:
+                    return self._embed_fastembed(texts, settings.EMBEDDING_MODEL)
 
         # 2. In-Memory Embedded ONNX (100% Free, zero external network dependency)
         if provider in ("fastembed", "local", "inmemory"):

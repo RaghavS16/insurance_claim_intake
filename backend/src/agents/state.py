@@ -40,6 +40,7 @@ class ClaimState(TypedDict, total=False):
     missing_evidence: List[Dict[str, Any]]
     evidence: List[Dict[str, Any]]
     dynamic_extraction_error: Optional[str]
+    dynamic_extraction_error_message: Optional[str]
 
     _skip_all: bool
     _workflow_event: Optional[str]
@@ -72,5 +73,12 @@ class ClaimState(TypedDict, total=False):
     closure_status: str
     response_message: str
     spoken_response: str
+
+    conversation_phase: str  # "1_baseline" | "2_verification" | "3_rag_intake" | "4_gap_analysis" | "5_completed"
+    policy_verification: Dict[str, Any]
+    policyholder_verification: Dict[str, Any]
+    gap_analysis: Dict[str, Any]
+    submission_package: Dict[str, Any]
+    sentiment_state: Dict[str, Any]
 
     audit_log: List[str]

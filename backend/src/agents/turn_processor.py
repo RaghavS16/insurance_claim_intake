@@ -118,7 +118,7 @@ async def process_claimant_turn(
                 claim.status = "verification_failed"
             result["conversation_status"] = "verification_failed"
 
-    # Stage 4: Final Submission to Adjuster upon Final Confirmation
+    # Stage 5: Final Submission to Adjuster upon Final Confirmation & Package Compilation
     dynamic_rem = result.get("dynamic_missing") or []
     missing_ev = result.get("missing_evidence") or []
     is_final_turn = (
@@ -131,6 +131,7 @@ async def process_claimant_turn(
 
     if is_final_turn and claim.status != "submitted":
         try:
+            from src.agents.submission_synthesizer import synthesize_claims_package
             assigned = assign_claim(db, claim, str(claim.claimant_id))
             transition_claim(db, claim, "assigned", str(claim.claimant_id), "assigned to adjuster")
             result["assigned_adjuster_id"] = assigned.id
@@ -139,11 +140,36 @@ async def process_claimant_turn(
             claim.status = "submitted"
             result["conversation_status"] = "submitted"
             result["status"] = "submitted"
-            submission_msg = f"Your claim #{claim.ticket_id} has been submitted and assigned to adjuster {assigned.name}. You're all set! We will update you as it is processed."
+            result["conversation_phase"] = "5_completed"
+            
+            # Synthesize the standardized adjuster dossier
+            package = synthesize_claims_package(result, db, claim)
+            result["submission_package"] = package
+
+            submission_msg = f"Your claim #{claim.ticket_id} has been submitted and assigned to adjuster {assigned.name}. Your standardized claims package has been compiled for review. You're all set! We will update you as it is processed."
             result["next_question"] = submission_msg
             result["message"] = submission_msg
         except Exception as exc:
-            logger.warning("Assignment failed during conversational final confirmation: %s", exc)
+            logger.warning("Assignment/package compilation failed during conversational final confirmation: %s", exc)
+
+    # Continuous Gap & Validation Analysis and 5-phase tracking
+    try:
+        from src.agents.gap_analysis import analyze_claim_gaps
+        result["gap_analysis"] = analyze_claim_gaps(result)
+        if claim.status in {"submitted", "assigned", "under_review", "closed"} or result.get("conversation_status") == "submitted":
+            result["conversation_phase"] = "5_completed"
+        elif not result.get("confirmed"):
+            result["conversation_phase"] = "2_verification" if result.get("awaiting_confirmation") else "1_baseline"
+        elif claim.status != "verified":
+            result["conversation_phase"] = "2_verification"
+        elif dynamic_rem or missing_ev:
+            result["conversation_phase"] = "3_rag_intake"
+        elif not result.get("final_submission_confirmed"):
+            result["conversation_phase"] = "4_gap_analysis"
+        else:
+            result["conversation_phase"] = "5_completed"
+    except Exception as exc:
+        logger.debug("Gap analysis / phase mapping error: %s", exc)
 
     # A system workflow event (evidence upload/verification) must immediately
     # re-enter the conversational planner so the claimant gets the next natural

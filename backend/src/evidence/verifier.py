@@ -162,10 +162,12 @@ Rules:
         result = get_configured_llm().with_structured_output(EvidenceAnalysis).invoke(prompt)
         if isinstance(result, EvidenceAnalysis):
             data = result.model_dump()
-        elif isinstance(result, BaseModel) or hasattr(result, "model_dump"):
-            data = EvidenceAnalysis.model_validate(result.model_dump()).model_dump()
         elif isinstance(result, dict):
             data = EvidenceAnalysis.model_validate(result).model_dump()
+        elif isinstance(result, BaseModel):
+            data = EvidenceAnalysis.model_validate(result.model_dump()).model_dump()
+        elif hasattr(result, "model_dump") and callable(getattr(result, "model_dump")):
+            data = EvidenceAnalysis.model_validate(getattr(result, "model_dump")()).model_dump()
         else:
             if hasattr(result, "content") and result.content:
                 import json

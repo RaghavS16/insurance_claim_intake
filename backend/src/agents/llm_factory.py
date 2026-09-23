@@ -9,19 +9,21 @@ from __future__ import annotations
 import json
 import random
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Generic, TypeVar, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from src.config import settings
 from src.utils.logger import app_logger
 
 logger = app_logger
 
-T = TypeVar("T")
+T = TypeVar("T", bound=BaseModel)
+R = TypeVar("R")
 
 
 class LLMTransientError(RuntimeError):
@@ -36,11 +38,13 @@ def is_transient_llm_error(exc: BaseException) -> bool:
     return any(token in text for token in (
         "429", "500", "502", "503", "504", "rate limit", "rate_limit",
         "unavailable", "temporarily unavailable", "timeout", "timed out",
-        "deadline exceeded", "service busy", "high demand",
+        "deadline exceeded", "service busy", "high demand", "getaddrinfo failed",
+        "name resolution", "connection error", "connection refused", "connecterror",
+        "gaierror", "socket", "errno 11001",
     ))
 
 
-def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attempts: int | None = None) -> T:
+def invoke_with_retry(operation: Callable[[], R], *, operation_name: str, attempts: int | None = None) -> R:
     """Run an LLM operation with bounded exponential backoff for transient failures."""
     last_exc: BaseException | None = None
     max_attempts = attempts if attempts is not None else settings.LLM_RETRY_ATTEMPTS
@@ -64,7 +68,7 @@ def invoke_with_retry(operation: Callable[[], T], *, operation_name: str, attemp
     raise LLMTransientError(f"{operation_name} failed: {last_exc}") from last_exc
 
 
-class _GeminiJsonStructured:
+class _GeminiJsonStructured(Generic[T]):
     """Parse JSON directly from Gemini without automatic function calling."""
 
     def __init__(self, model: ChatGoogleGenerativeAI, schema: type[T]):
@@ -116,10 +120,71 @@ class _GeminiJsonStructured:
         return self.schema.model_validate(payload)
 
 
+class _ResilientStructured(Generic[T]):
+    def __init__(self, resilient_model: "ResilientChatModel", schema: type[T]):
+        self.resilient_model = resilient_model
+        self.schema = schema
+        self._gemini_structured = _GeminiJsonStructured(resilient_model.primary, schema)
+
+    def invoke(self, prompt: Any) -> T:
+        try:
+            return self._gemini_structured.invoke(prompt)
+        except Exception as exc:
+            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                logger.warning("Primary structured LLM failed (%s); falling back to local Ollama.", exc)
+                fb = self.resilient_model.get_fallback()
+                return structured_output(fb, self.schema).invoke(prompt)
+            raise
+
+
+class ResilientChatModel:
+    """Wraps primary cloud chat model with seamless fallback to local Ollama."""
+
+    def __init__(self, primary: Any, fallback_builder: Callable[[], BaseChatModel]):
+        self.primary = primary
+        self.fallback_builder = fallback_builder
+        self._fallback_instance: BaseChatModel | None = None
+
+    def get_fallback(self) -> BaseChatModel:
+        if self._fallback_instance is None:
+            self._fallback_instance = self.fallback_builder()
+        return self._fallback_instance
+
+    def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return self.primary.invoke(prompt, *args, **kwargs)
+        except Exception as exc:
+            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                logger.warning("Primary LLM invocation failed (%s); falling back to local Ollama.", exc)
+                return self.get_fallback().invoke(prompt, *args, **kwargs)
+            raise
+
+    async def ainvoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            ainvoke_fn = getattr(self.primary, "ainvoke", None)
+            if callable(ainvoke_fn):
+                return await ainvoke_fn(prompt, *args, **kwargs)
+            return self.invoke(prompt, *args, **kwargs)
+        except Exception as exc:
+            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                logger.warning("Primary LLM ainvoke failed (%s); falling back to local Ollama.", exc)
+                fb = self.get_fallback()
+                fb_ainvoke = getattr(fb, "ainvoke", None)
+                if callable(fb_ainvoke):
+                    return await fb_ainvoke(prompt, *args, **kwargs)
+                return fb.invoke(prompt, *args, **kwargs)
+            raise
+
+    def with_structured_output(self, schema: type[T], **kwargs: Any) -> Any:
+        return structured_output(self, schema)
+
+
 def structured_output(model: Any, schema: type[T]) -> Any:
     """Return structured parsing without Gemini automatic function calling."""
     if isinstance(model, ChatGoogleGenerativeAI):
         return _GeminiJsonStructured(model, schema)
+    if isinstance(model, ResilientChatModel):
+        return _ResilientStructured(model, schema)
     return model.with_structured_output(schema)
 
 
@@ -132,7 +197,7 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
         for model in available:
             if model == requested_model or model.split(":")[0] == requested_model.split(":")[0]:
                 return requested_model
-        fallbacks = ["llama3.1:8b", "qwen2.5:1.5b", "llama3:latest", "mistral:latest"]
+        fallbacks = ["qwen2.5:7b-instruct", "qwen2.5:7b", "llama3.1:8b", "qwen2.5:1.5b", "llama3:latest", "mistral:latest"]
         for fallback in fallbacks:
             for model in available:
                 if model == fallback or model.split(":")[0] == fallback.split(":")[0]:
@@ -147,6 +212,17 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
     return requested_model
 
 
+def _build_ollama(model_name: str | None = None) -> BaseChatModel:
+    requested = model_name or settings.OLLAMA_MODEL or "qwen2.5:7b-instruct"
+    resolved = _resolve_ollama_model(settings.OLLAMA_BASE_URL, requested)
+    return ChatOllama(
+        base_url=settings.OLLAMA_BASE_URL,
+        model=resolved,
+        temperature=0,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+    )
+
+
 def _get_google_api_key() -> str:
     key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY
     if not key:
@@ -157,15 +233,16 @@ def _get_google_api_key() -> str:
 
 
 def _build_gemini(model_name: str | None = None) -> BaseChatModel:
-    """Build a direct Google Gemini client for the requested workload."""
-    return ChatGoogleGenerativeAI(
+    """Build a direct Google Gemini client wrapped with automatic Ollama fallback."""
+    gemini_client = ChatGoogleGenerativeAI(
         model=model_name or settings.GEMINI_MODEL,
         google_api_key=_get_google_api_key(),
-        temperature=0,
         max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         max_retries=0,
     )
+    fallback_model = "qwen2.5:1.5b" if model_name == settings.GEMINI_FAST_MODEL else settings.OLLAMA_MODEL
+    return cast(BaseChatModel, ResilientChatModel(gemini_client, lambda: _build_ollama(fallback_model)))
 
 
 def _build_openai_compatible() -> BaseChatModel:
@@ -212,15 +289,10 @@ def get_configured_llm() -> BaseChatModel:
         return _build_openai_compatible()
 
     if provider == "ollama":
-        resolved_model = _resolve_ollama_model(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
-        return ChatOllama(
-            base_url=settings.OLLAMA_BASE_URL,
-            model=resolved_model,
-            temperature=0,
-            timeout=settings.LLM_TIMEOUT_SECONDS,
-        )
+        return _build_ollama()
 
     raise RuntimeError(
         f"Unsupported LLM_PROVIDER='{provider}'. "
         "Supported providers: gemini, openai, ollama."
     )
+

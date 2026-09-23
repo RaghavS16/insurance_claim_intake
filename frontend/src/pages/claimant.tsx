@@ -42,6 +42,8 @@ interface SessionPayload {
   field_status?: Record<string, string>;
   awaiting_confirmation?: boolean;
   confirmed?: boolean;
+  conversation_phase?: string;
+  gap_analysis?: Record<string, unknown>;
   conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; created_at?: string | null }>;
   initial_message?: string;
   resumed?: boolean;
@@ -83,6 +85,8 @@ export default function ClaimantPage() {
   const [partialSegments, setPartialSegments] = useState<Map<string, TranscriptSegment>>(new Map());
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [mobileTab, setMobileTab] = useState<"chat" | "details">("chat");
+  const [conversationPhase, setConversationPhase] = useState("1_baseline");
+  const [gapAnalysis, setGapAnalysis] = useState<Record<string, unknown>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -355,6 +359,8 @@ export default function ClaimantPage() {
     setClaimSubmitted(Boolean(data.status === "submitted"));
     setMissingEvidence(data.missing_evidence || []);
     setEvidenceItems(data.evidence || []);
+    setConversationPhase(data.conversation_phase || "1_baseline");
+    setGapAnalysis(data.gap_analysis || {});
     setPartialSegments(new Map());
     const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
@@ -554,6 +560,12 @@ export default function ClaimantPage() {
       setClaimSubmitted(Boolean(data.status === "submitted"));
       setMissingEvidence(data.missing_evidence || []);
       setEvidenceItems(data.evidence || []);
+      if ((data as Record<string, unknown>).conversation_phase) {
+        setConversationPhase(String((data as Record<string, unknown>).conversation_phase));
+      }
+      if ((data as Record<string, unknown>).gap_analysis) {
+        setGapAnalysis((data as Record<string, unknown>).gap_analysis as Record<string, unknown>);
+      }
       fetchClaimsList(token);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Unable to process message.");
@@ -765,6 +777,8 @@ export default function ClaimantPage() {
               missingEvidence={missingEvidence}
               evidenceItems={evidenceItems}
               ticketId={ticketId}
+              conversationPhase={conversationPhase}
+              gapAnalysis={gapAnalysis}
             />
           </div>
         </div>

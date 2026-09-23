@@ -120,11 +120,36 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
-    return {"claim":_item(c),"extracted_data":state.get("extracted_data",{}),
-            "conversation":[{"speaker":"Claimant" if t.speaker in {"user","claimant"} else "Agent","text":t.text,"turn":t.turn_number} for t in turns],
-            "requirements":state.get("dynamic_requirements",[]),"missing_requirements":state.get("dynamic_missing",[]),"missing_evidence":state.get("missing_evidence",[]),
-            "evidence":state.get("evidence",[]),"policy_verification":state.get("policy_verification",{}),
-            "knowledge_sources":state.get("knowledge_sources",[]),"copilot":state.get("copilot",{})}
+    package = state.get("submission_package")
+    if not package:
+        from src.agents.submission_synthesizer import synthesize_claims_package
+        package = synthesize_claims_package(state, db, c)
+    return {
+        "claim": _item(c),
+        "extracted_data": state.get("extracted_data", {}),
+        "conversation": [{"speaker": "Claimant" if t.speaker in {"user", "claimant"} else "Agent", "text": t.text, "turn": t.turn_number, "timestamp": t.created_at.isoformat() if t.created_at else None} for t in turns],
+        "requirements": state.get("dynamic_requirements", []),
+        "missing_requirements": state.get("dynamic_missing", []),
+        "missing_evidence": state.get("missing_evidence", []),
+        "evidence": state.get("evidence", []),
+        "policy_verification": state.get("policy_verification", {}),
+        "knowledge_sources": state.get("knowledge_sources", []),
+        "copilot": state.get("copilot", {}),
+        "submission_package": package,
+        "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "gap_analysis": state.get("gap_analysis", {}),
+    }
+
+@router.get("/claims/{ticket_id}/package")
+def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    c = get_claim_or_404(db, ticket_id)
+    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+    state = dict(c.pipeline_state or {})
+    package = state.get("submission_package")
+    if not package:
+        from src.agents.submission_synthesizer import synthesize_claims_package
+        package = synthesize_claims_package(state, db, c)
+    return package
 
 @router.patch("/claims/{ticket_id}")
 def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_guard), db: Session = Depends(get_db)):

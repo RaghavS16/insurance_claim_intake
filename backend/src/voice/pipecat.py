@@ -77,7 +77,9 @@ class PiperNativeTTSService(TTSService):
         except Exception as exc: logger.warning("Could not preload native Piper model: %s", exc)
     async def run_tts(self, text: str, context_id: str):
         if not self._voice: yield ErrorFrame(error=f"Piper ONNX model not available at {self._model_path}"); yield TTSStoppedFrame(context_id=context_id); return
-        loop=asyncio.get_running_loop(); queue=asyncio.Queue(); sentinel=object()
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        sentinel = object()
         def synthesize():
             try:
                 for chunk in self._voice.synthesize(text):

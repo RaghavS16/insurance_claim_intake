@@ -65,10 +65,42 @@ export interface CopilotAnalysis {
   [key: string]: unknown;
 }
 
+export interface SubmissionPackage {
+  ticket_id?: string;
+  compiled_at?: string;
+  status?: string;
+  executive_summary?: string;
+  chronological_narrative?: Array<{ timestamp?: string; event?: string; details?: string }>;
+  verified_policyholder_details?: {
+    claimant_name?: string;
+    contact_info?: string;
+    policy_number?: string;
+    insurance_type?: string;
+    policy_status?: string;
+    effective_date?: string;
+    expiry_date?: string;
+    coverage_limit?: number;
+    standard_deductible?: number;
+    verification_protocol?: Array<{ step: string; status: string }>;
+  };
+  qa_transcript?: Array<{ turn: number; speaker: string; text: string; timestamp?: string }>;
+  evidence_index?: Array<{
+    id?: string;
+    label?: string;
+    document_type?: string;
+    verification_status?: string;
+    confidence?: number;
+    s3_key?: string;
+    sha256?: string;
+  }>;
+  risk_assessment_flags?: string[];
+  recommended_next_steps?: string[];
+}
+
 export interface FileData {
   claim: Claim;
   extracted_data: Record<string, unknown>;
-  conversation: { speaker: string; text: string; turn: number }[];
+  conversation: { speaker: string; text: string; turn: number; timestamp?: string }[];
   requirements: RequirementItem[];
   missing_requirements: RequirementItem[];
   missing_evidence: RequirementItem[];
@@ -76,4 +108,8 @@ export interface FileData {
   policy_verification: Record<string, unknown>;
   knowledge_sources: KnowledgeItem[];
   copilot: CopilotAnalysis;
+  submission_package?: SubmissionPackage;
+  conversation_phase?: string;
+  gap_analysis?: Record<string, unknown>;
 }
+

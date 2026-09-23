@@ -81,6 +81,9 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "field_status": state.get("field_status") or {},
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
         "confirmed": bool(state.get("confirmed")),
+        "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "gap_analysis": state.get("gap_analysis") or {},
+        "submission_package": state.get("submission_package") or {},
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
         "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }

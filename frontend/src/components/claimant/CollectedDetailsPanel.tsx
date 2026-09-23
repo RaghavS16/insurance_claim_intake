@@ -14,6 +14,8 @@ interface CollectedDetailsPanelProps {
   missingEvidence?: Array<Record<string, unknown>>;
   evidenceItems?: Array<Record<string, unknown>>;
   ticketId: string;
+  conversationPhase?: string;
+  gapAnalysis?: Record<string, unknown>;
 }
 
 export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
@@ -39,7 +41,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
       <div className="p-4 md:p-5 border-b border-[#e2e8f0] bg-white sticky top-0 z-10 flex justify-between items-center shadow-xs shrink-0">
         <div>
           <h2 className="font-headline text-base md:text-lg font-bold text-[#0f172a]">Claim Summary</h2>
-          <p className="font-label text-xs text-[#64748b]">AI Conversational Intake Progress</p>
+          <p className="font-label text-xs text-[#64748b]">5-Phase Conversational AI Intake</p>
         </div>
         <span
           className={`font-label text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${
@@ -50,16 +52,16 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
               : "bg-slate-100 text-slate-600 border border-slate-200"
           }`}
         >
-          {submitted ? "Submitted" : isBaselineComplete ? "Baseline Verified" : `${pendingCount} Details Needed`}
+          {submitted ? "Package Submitted" : isBaselineComplete ? "Baseline Verified" : `${pendingCount} Details Needed`}
         </span>
       </div>
 
-      {/* 4-Step Conversational Progress Stepper */}
-      <div className="p-4 bg-white border-b border-[#e2e8f0] shrink-0">
-        <div className="flex items-center justify-between text-[11px] font-medium text-[#475569]">
-          <div className="flex items-center gap-1.5">
+      {/* 5-Step Conversational Progress Stepper */}
+      <div className="p-3 bg-white border-b border-[#e2e8f0] shrink-0">
+        <div className="flex items-center justify-between text-[10px] font-medium text-[#475569]">
+          <div className="flex items-center gap-1">
             <span
-              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
                 isBaselineComplete ? "bg-emerald-500 text-white" : "bg-[#00647c] text-white"
               }`}
             >
@@ -69,41 +71,53 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
               Baseline
             </span>
           </div>
-          <span className="text-[#cbd5e1]">→</span>
-          <div className="flex items-center gap-1.5">
+          <span className="text-[#cbd5e1] text-[9px]">→</span>
+          <div className="flex items-center gap-1">
             <span
-              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                confirmed || isBaselineComplete ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500"
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
+                confirmed ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-sky-500 text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
-              {confirmed || isBaselineComplete ? "✓" : "2"}
+              {confirmed ? "✓" : "2"}
             </span>
-            <span className={isBaselineComplete ? "text-emerald-700 font-semibold" : "text-slate-500"}>Verify</span>
+            <span className={confirmed ? "text-emerald-700 font-semibold" : "text-slate-500"}>Verify</span>
           </div>
-          <span className="text-[#cbd5e1]">→</span>
-          <div className="flex items-center gap-1.5">
+          <span className="text-[#cbd5e1] text-[9px]">→</span>
+          <div className="flex items-center gap-1">
             <span
-              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                submitted ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
+                confirmed && missingEvidence.length === 0 ? "bg-emerald-500 text-white" : confirmed ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
-              {submitted ? "✓" : "3"}
+              {confirmed && missingEvidence.length === 0 ? "✓" : "3"}
             </span>
-            <span className={isBaselineComplete ? "text-[#00647c] font-semibold" : "text-slate-500"}>Details</span>
+            <span className={confirmed ? "text-[#00647c] font-semibold" : "text-slate-500"}>Evidence</span>
           </div>
-          <span className="text-[#cbd5e1]">→</span>
-          <div className="flex items-center gap-1.5">
+          <span className="text-[#cbd5e1] text-[9px]">→</span>
+          <div className="flex items-center gap-1">
             <span
-              className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                confirmed ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
+                submitted ? "bg-emerald-500 text-white" : confirmed ? "bg-sky-600 text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
               {submitted ? "✓" : "4"}
             </span>
-            <span className={submitted ? "text-emerald-700 font-bold" : "text-slate-500"}>Submit</span>
+            <span className={submitted ? "text-emerald-700 font-semibold" : "text-slate-500"}>Validation</span>
+          </div>
+          <span className="text-[#cbd5e1] text-[9px]">→</span>
+          <div className="flex items-center gap-1">
+            <span
+              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
+                submitted ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"
+              }`}
+            >
+              {submitted ? "✓" : "5"}
+            </span>
+            <span className={submitted ? "text-emerald-700 font-bold" : "text-slate-500"}>Package</span>
           </div>
         </div>
       </div>
+
 
       {/* Field Cards */}
       <div className="p-4 md:p-5 space-y-3.5 flex-1 overflow-y-auto">

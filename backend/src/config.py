@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     CLOUD_LLM_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_FAST_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_MAX_OUTPUT_TOKENS: int = Field(2048, ge=256, le=65536)
     EMBEDDING_PROVIDER: str = "ollama"
