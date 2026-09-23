@@ -1,9 +1,4 @@
-"""Centralized LLM factory for production insurance-claim conversations.
-
-Primary cloud path is direct Google Gemini (no model router). Local Ollama remains
-available for development/offline testing, and OpenAI-compatible endpoints remain
-available when explicitly selected.
-"""
+"""Centralized LLM factory with separate low-latency and reasoning profiles."""
 from __future__ import annotations
 
 import json
