@@ -241,6 +241,12 @@ export default function ClaimantPage() {
         text = msg.text || "",
         isFinal = Boolean(msg.is_final);
       if (!text) return;
+      if (speaker !== "agent" && !isFinal && (isPlayingRef.current || audioBlobQueueRef.current.length)) {
+        try { activeSourceRef.current?.stop(); } catch {}
+        activeSourceRef.current = null;
+        audioBlobQueueRef.current = [];
+        isPlayingRef.current = false;
+      }
       if (!isFinal) {
         setPartialSegments((prev) => {
           const next = new Map(prev);
