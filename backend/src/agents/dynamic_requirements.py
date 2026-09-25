@@ -105,18 +105,78 @@ def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
-def _deterministic_dynamic_extract(text: str) -> dict[str, str]:
-    """Extract standard domain patterns (vehicle registration, driver license) deterministically."""
-    extracted = {}
-    # Match Indian/US/standard vehicle registration plates e.g. TN-09-CB-1234, MH02AB1234, DL-01-A-1234
+def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Extract high-confidence domain values and map them only to matching dynamic requirements.
+
+    This is a semantic safety net for common structured facts. It does not create a
+    fixed question catalogue; the active RAG requirement still decides which values
+    matter for this claim.
+    """
+    extracted: dict[str, Any] = {}
     match_veh = re.search(r"\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b", text, re.I)
-    if match_veh:
-        extracted["vehicle_registration_number"] = match_veh.group(1).upper().strip()
-    # Match driver license mentions e.g. DL-12345, DL-5678, license: DL12345678
-    match_dl = re.search(r"\b(?:dl|license|licence|driving\s+license)\s*(?:no\.?|number|id|is|:)?\s*([A-Za-z0-9/-]{4,20})\b", text, re.I)
-    if match_dl:
-        extracted["driver_license_number"] = match_dl.group(1).upper().strip()
-        extracted["driving_license_status"] = match_dl.group(1).upper().strip()
+    vehicle_reg = match_veh.group(1).upper().strip() if match_veh else None
+
+    match_dl = re.search(
+        r"\b(?:driving\s+licen[cs]e|licen[cs]e|dl)\s*(?:no\.?|number|id|is|:)?\s*([A-Za-z0-9/-]{4,24})\b",
+        text,
+        re.I,
+    )
+    driver_license = match_dl.group(1).upper().strip() if match_dl else None
+
+    phone = None
+    phone_match = re.search(r"(?<!\d)(?:\+91[ -]?)?[6-9]\d{9}(?!\d)", text)
+    if phone_match:
+        phone = phone_match.group(0).replace(" ", "").replace("-", "")
+
+    # Explicit driver-name constructions avoid swallowing the surrounding sentence.
+    driver_name = None
+    name_match = re.search(
+        r"(?:driver(?:'s|’s)?\s+(?:name\s+)?(?:was|is|:)|driven\s+by)\s*"
+        r"([A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,3}?)(?=\s+(?:during|and|with|who|at|on)\b|[,.;]|$)",
+        text,
+        re.I,
+    )
+    if name_match:
+        driver_name = name_match.group(1).strip()
+
+    # Capture a third-party make/model from phrases such as "it was a silver Hyundai i20".
+    vehicle_make_model = None
+    make_model = re.search(
+        r"(?:it\s+was\s+(?:a|an)\s+|(?:other|oncoming)\s+(?:vehicle|car)\s+(?:was|is)\s+(?:a|an)\s+)"
+        r"([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3}?)(?=\s+registration\s+(?:number|no)|\s+with\s+registration|[,.;]|$)",
+        text,
+        re.I,
+    )
+    if make_model:
+        vehicle_make_model = make_model.group(1).strip()
+
+    police_negative = bool(re.search(r"\b(?:no|didn['’]?t\s+file|wasn['’]?t\s+filed)\b.{0,30}\b(?:police\s+report|fir)\b", text, re.I))
+    police_positive = bool(re.search(r"\b(?:yes|filed|have|has)\b.{0,35}\b(?:police\s+report|fir)\b", text, re.I))
+
+    for req in requirements or []:
+        key = str(req.get("key") or "").lower()
+        semantic = " ".join(str(req.get(k) or "") for k in ("key", "label", "question_hint")).lower()
+        if vehicle_reg and any(term in semantic for term in ("registration", "license plate", "plate number", "vehicle number")):
+            extracted[key] = vehicle_reg
+        if driver_license and any(term in semantic for term in ("driving licence", "driving license", "licence number", "license number", "driver license")):
+            extracted[key] = driver_license
+        if phone and any(term in semantic for term in ("contact number", "contact information", "phone number", "mobile number", "telephone")):
+            extracted[key] = phone
+        if driver_name and any(term in semantic for term in ("driver name", "driver's name", "driver’s name", "name of the driver")):
+            extracted[key] = driver_name
+        if vehicle_make_model and any(term in semantic for term in ("make and model", "make/model", "vehicle make", "car make", "vehicle model")):
+            extracted[key] = vehicle_make_model
+        if "police" in semantic or "fir" in semantic:
+            if police_negative:
+                extracted[key] = False
+            elif police_positive:
+                extracted[key] = True
+
+    # Preserve backwards-compatible canonical keys for the existing requirement aliases.
+    if vehicle_reg:
+        extracted.setdefault("vehicle_registration_number", vehicle_reg)
+    if driver_license:
+        extracted.setdefault("driver_license_number", driver_license)
     return extracted
 
 
@@ -124,7 +184,7 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
     utterance = str(state.get("last_user_utterance") or "").strip()
     if utterance:
         # 1. Always run deterministic pattern extraction into extracted_data
-        quick_vals = _deterministic_dynamic_extract(utterance)
+        quick_vals = _deterministic_dynamic_extract(utterance, state.get("dynamic_requirements") or [])
         for k, v in quick_vals.items():
             state.setdefault("extracted_data", {})[k] = v
 
