@@ -387,7 +387,7 @@ def _fallback_intent(text: str, awaiting: bool) -> IntentType:
 
 
 def _repair_stale_baseline_fields(state: ClaimState) -> None:
-    """Repair obviously corrupted legacy draft fields from the claimant's own history."""
+    """Repair obviously corrupted legacy baseline fields from claimant history."""
     data = state.setdefault("extracted_data", {})
     bad_location = _looks_like_temporal_location(str(data.get("event_location") or ""))
     bad_description = False
@@ -398,9 +398,6 @@ def _repair_stale_baseline_fields(state: ClaimState) -> None:
             cleaned_existing.casefold() != existing_description.casefold()
             and not _normalize_description(cleaned_existing, cleaned_existing)
         )
-
-    if not bad_location and not bad_description:
-        return
 
     history = state.get("conversation_history") or []
     for item in history:
@@ -435,8 +432,28 @@ def _repair_stale_baseline_fields(state: ClaimState) -> None:
                     "updated_at": _now_iso(),
                 }
                 bad_description = False
-        if not bad_location and not bad_description:
-            break
+    # Legacy claims can contain a loss value accidentally copied from IDV/deductible.
+    # Only replace it when the claimant explicitly stated a claim/loss/repair amount.
+    current_amount = data.get("estimated_claim_amount")
+    if current_amount not in (None, "", UNKNOWN_SENTINEL):
+        for item in history:
+            if item.get("speaker") != "user":
+                continue
+            text = str(item.get("text") or "").strip()
+            if not re.search(r"\b(?:claim|loss|repair\s+cost|estimated\s+(?:loss|cost)|damage\s+cost)\b", text, re.I):
+                continue
+            recovered_amount = _deterministic_amount(text)
+            if recovered_amount is not None and float(recovered_amount) != float(current_amount):
+                data["estimated_claim_amount"] = recovered_amount
+                state.setdefault("field_status", {})["estimated_claim_amount"] = "recovered"
+                state.setdefault("field_metadata", {})["estimated_claim_amount"] = {
+                    "status": "recovered",
+                    "source_turn": item.get("turn", 0),
+                    "confidence": 0.99,
+                    "evidence": text,
+                    "updated_at": _now_iso(),
+                }
+                break
 
 
 def _rule_changes(raw: str, state: ClaimState) -> List[FieldChange]:
