@@ -329,6 +329,9 @@ def _deterministic_location(text: str) -> Optional[str]:
     # Prefer explicit place cues and iterate all generic location matches. Natural
     # speech often contains "in the evening ... near <place>" in one sentence.
     patterns = [
+        # Explicit "near <place> here in <city>" is common in speech. Capture the
+        # complete place/city phrase rather than stopping at a temporal word.
+        r"\b(?:near|at|by)\s+(?:the\s+)?([A-Za-z][A-Za-z .'-]{1,80}?)\s+here\s+in\s+([A-Za-z][A-Za-z .'-]{1,60}?)(?=\s+(?:when|while|and|but|with|my|the)\b|[,.!?]|$)",
         r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)",
         r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)",
         r"\b(?:admitted|hospitalized|treated)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)",
@@ -338,7 +341,8 @@ def _deterministic_location(text: str) -> Optional[str]:
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
-            value = " ".join(match.group(1).split()).strip(" .,")
+            groups = [g for g in match.groups() if g]
+            value = " ".join(groups).strip(" .,")
             value = re.sub(r"^the\s+", "", value, flags=re.I)
             value = re.sub(r"\s+here\s+in\s+", ", ", value, flags=re.I)
             if value.lower() in _LOCATION_STOPWORDS or _looks_like_temporal_location(value):
@@ -389,7 +393,13 @@ def _fallback_intent(text: str, awaiting: bool) -> IntentType:
 def _repair_stale_baseline_fields(state: ClaimState) -> None:
     """Repair obviously corrupted legacy baseline fields from claimant history."""
     data = state.setdefault("extracted_data", {})
-    bad_location = _looks_like_temporal_location(str(data.get("event_location") or ""))
+    current_location = str(data.get("event_location") or "").strip()
+    bad_location = (
+        not current_location
+        or _looks_like_temporal_location(current_location)
+        or current_location.casefold() in _LOCATION_STOPWORDS
+        or len(current_location) < 3
+    )
     bad_description = False
     existing_description = str(data.get("event_description") or "").strip()
     if existing_description:
