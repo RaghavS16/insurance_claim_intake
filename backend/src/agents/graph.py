@@ -228,8 +228,21 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
 
     # Bump when requirement-planning workflow semantics change so claims do not
     # reuse a stale RAG plan generated under an older intake context.
+    # Requirement planning should be stable across ordinary claim-specific
+    # answers. Re-running the reasoning model after every dynamic answer caused a
+    # transient RAG failure to erase an already-valid requirement plan (for example
+    # after the claimant answered an alcohol question). Re-plan only when baseline
+    # claim context or evidence state changes.
+    planning_fact_keys = (
+        "policy_id",
+        "event_date",
+        "insurance_type",
+        "event_description",
+        "event_location",
+        "estimated_claim_amount",
+    )
     context_payload = {
-        "facts": data,
+        "baseline_facts": {key: data.get(key) for key in planning_fact_keys},
         "evidence": [
             {
                 "evidence_key": item.get("evidence_key"),
