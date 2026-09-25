@@ -10,7 +10,7 @@ from langgraph.graph import END, StateGraph
 from src.agents import nodes
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
-from src.agents.dynamic_requirements import build_dynamic_context, extract_answers
+from src.agents.dynamic_requirements import build_dynamic_context, extract_answers, missing_evidence, pending_evidence_review
 
 
 from src.agents.gap_analysis import analyze_claim_gaps
@@ -192,6 +192,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if not state.get("confirmed"):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
+        state["pending_evidence_review"] = []
         state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
         state["conversation_phase"] = "2_verification" if state.get("awaiting_confirmation") else "1_baseline"
         state["conversation_status"] = "reviewing" if state.get("awaiting_confirmation") else "collecting"
@@ -201,6 +202,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if isinstance(policy_verification, dict) and not policy_verification.get("valid"):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
+        state["pending_evidence_review"] = []
         state["rag_status"] = "POLICY_VERIFICATION_FAILED"
         state["conversation_phase"] = "2_verification"
         state["conversation_status"] = "verification_failed"
@@ -208,6 +210,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if not isinstance(policy_verification, dict) or not policy_verification.get("valid"):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
+        state["pending_evidence_review"] = []
         state["rag_status"] = "WAITING_FOR_POLICY_VERIFICATION"
         state["conversation_phase"] = "2_verification"
         state["conversation_status"] = "pending_verification"
@@ -219,6 +222,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["dynamic_requirements"] = []
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
+        state["pending_evidence_review"] = []
         state["rag_status"] = "NO_INSURANCE_TYPE"
         return state
 
@@ -261,10 +265,12 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if not context.get("available", False):
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
+        state["pending_evidence_review"] = []
         state["conversation_status"] = "waiting_for_knowledge"
         return state
 
     extract_answers(state)
+    state["pending_evidence_review"] = pending_evidence_review(state)
     if state.get("confirmed") and (
         state.get("dynamic_missing") or state.get("missing_evidence")
     ):
