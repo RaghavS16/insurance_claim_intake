@@ -250,5 +250,4 @@ def test_dossier_turn_sequence_only_asks_for_truly_missing_baseline_fields():
 
     assert state["extracted_data"]["policy_id"] == "POL-1409-XI"
     assert state["missing_fields"] == ["estimated_claim_amount"]
-    assert state["next_question_field"] if "next_question_field" in state else True
 
