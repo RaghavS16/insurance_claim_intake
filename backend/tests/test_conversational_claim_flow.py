@@ -169,3 +169,61 @@ def test_legacy_corrupted_baseline_values_are_recovered_on_next_turn():
     assert result["extracted_data"]["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
     assert "clipped" in result["extracted_data"]["event_description"].lower()
     assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
+
+def test_dossier_style_first_turn_preserves_real_location_and_description():
+    text = (
+        "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S—"
+        "registration TN-59-AB-1234—northbound near the Anna Nagar Ring Road Junction "
+        "here in Madurai. The signal was green and an oncoming car turned across my lane "
+        "without indicating. I braked and swerved, but my bike clipped the car's passenger "
+        "door, fell on its right side, and damaged the handlebar, fork and brake lever."
+    )
+    state = {
+        "claim_text": text,
+        "extracted_data": {},
+        "field_status": {},
+        "field_metadata": {},
+        "conversation_history": [],
+    }
+
+    result = nodes.conversation_turn_processor(state)
+
+    assert result["extracted_data"]["event_date"] == "2026-09-18"
+    assert result["extracted_data"]["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
+    description = result["extracted_data"]["event_description"].lower()
+    assert "clipped" in description
+    assert "damaged" in description
+    assert "the evening" not in result["extracted_data"]["event_location"].lower()
+
+
+def test_meta_correction_keeps_previous_rich_description_and_adds_policy():
+    state = {
+        "claim_text": "i already told you what happened and my policy number was POL-1409-XI",
+        "extracted_data": {
+            "event_date": "2026-09-18",
+            "event_location": "Anna Nagar Ring Road Junction, Madurai",
+            "event_description": (
+                "My motorcycle clipped an oncoming car and fell on its right side, "
+                "damaging the handlebar and brake lever."
+            ),
+        },
+        "conversation_history": [
+            {
+                "turn": 1,
+                "speaker": "user",
+                "text": (
+                    "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+                    "near the Anna Nagar Ring Road Junction here in Madurai. My motorcycle "
+                    "clipped an oncoming car and fell on its right side, damaging the handlebar "
+                    "and brake lever."
+                ),
+            }
+        ],
+    }
+
+    result = nodes.conversation_turn_processor(state)
+
+    assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
+    assert "clipped" in result["extracted_data"]["event_description"].lower()
+    assert "i already told you" not in result["extracted_data"]["event_description"].lower()
+
