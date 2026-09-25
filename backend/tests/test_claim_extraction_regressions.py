@@ -1,7 +1,7 @@
 """Regression tests for natural baseline and claim-specific extraction."""
 
 from src.agents.nodes import _deterministic_amount, _deterministic_location
-from src.agents.dynamic_requirements import _deterministic_dynamic_extract, unresolved
+from src.agents.dynamic_requirements import _deterministic_dynamic_extract, unresolved, DynamicExtraction
 from src.evidence.verifier import EvidenceAnalysis
 
 
@@ -72,6 +72,46 @@ def test_repair_cost_requirement_is_satisfied_by_baseline_estimated_claim_amount
 
 def test_evidence_analysis_uses_strict_object_schema_for_provider_structured_output():
     schema = EvidenceAnalysis.model_json_schema()
+
+    def assert_strict_objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False
+            for value in node.values():
+                assert_strict_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_strict_objects(value)
+
+    assert_strict_objects(schema)
+
+
+
+def test_explicit_near_here_in_city_location_is_extracted_not_time_phrase():
+    text = (
+        "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+        "northbound near the Anna Nagar Ring Road Junction here in Madurai."
+    )
+    assert _deterministic_location(text) == "Anna Nagar Ring Road Junction Madurai"
+
+
+def test_sober_answer_satisfies_active_alcohol_requirement():
+    requirements = [
+        {
+            "key": "driver_under_influence",
+            "label": "Alcohol or drug use",
+            "question_hint": "Were you under the influence of alcohol or drugs at the time of the accident?",
+        }
+    ]
+    values = _deterministic_dynamic_extract(
+        "No, absolutely not. I was completely sober and not under the influence of alcohol, drugs, or any intoxicating substances.",
+        requirements,
+    )
+    assert values["driver_under_influence"] is False
+
+
+def test_dynamic_extraction_schema_is_strict_provider_compatible():
+    schema = DynamicExtraction.model_json_schema()
 
     def assert_strict_objects(node):
         if isinstance(node, dict):
