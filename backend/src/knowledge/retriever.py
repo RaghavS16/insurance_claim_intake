@@ -9,7 +9,7 @@ class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
-    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "") -> dict:
+    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None) -> dict:
         q = (query or insurance_type).strip()
         if not insurance_type:
             return {"available": False, "status": "INVALID_CONTEXT", "requirements": [], "policy": [], "regulations": []}
@@ -49,6 +49,8 @@ class KnowledgeRetriever:
                 policy_context=policy,
                 regulatory_context=guidance,
                 incident_description=q,
+                intake_channel=intake_channel,
+                intake_started_at=intake_started_at,
             )
         except Exception as exc:
             # Preserve the transient-provider state so the conversational layer can
