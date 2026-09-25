@@ -320,3 +320,43 @@ def test_generic_document_number_is_information_not_upload():
         "required": True,
         "evidence_type": None,
     }) is False
+
+def test_review_required_evidence_does_not_block_next_upload():
+    from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
+
+    state = {
+        "dynamic_requirements": [
+            {"key": "vehicle_damage_photos", "label": "Vehicle damage photos", "required": True, "evidence_type": "photo"},
+            {"key": "police_report", "label": "Police report", "required": True, "evidence_type": "document"},
+        ],
+        "evidence": [
+            {"evidence_key": "vehicle_damage_photos", "verification_status": "REVIEW_REQUIRED"},
+        ],
+    }
+
+    assert [r["key"] for r in missing_evidence(state)] == ["police_report"]
+    assert [r["key"] for r in pending_evidence_review(state)] == ["vehicle_damage_photos"]
+
+
+def test_response_planner_does_not_offer_submission_with_pending_evidence_review():
+    from src.agents.graph import _response_planner
+
+    result = _response_planner({
+        "confirmed": True,
+        "missing_fields": [],
+        "extracted_data": {"insurance_type": "motor"},
+        "dynamic_requirements": [
+            {"key": "vehicle_damage_photos", "label": "Vehicle damage photos", "required": True, "evidence_type": "photo"},
+        ],
+        "dynamic_missing": [],
+        "missing_evidence": [],
+        "pending_evidence_review": [
+            {"key": "vehicle_damage_photos", "label": "Vehicle damage photos", "required": True, "evidence_type": "photo"},
+        ],
+        "rag_status": "OK",
+        "knowledge_context": {"authoritative": True},
+    })
+
+    assert "submit" not in result["next_question"].lower()
+    assert result["conversation_phase"] == "3_rag_intake"
+
