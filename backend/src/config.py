@@ -52,7 +52,10 @@ class Settings(BaseSettings):
     REASONING_LLM_TIMEOUT_SECONDS: float = Field(20.0, ge=3.0, le=120.0)
     FAST_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
     REASONING_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
-    VOICE_TURN_SILENCE_SECONDS: float = Field(0.55, ge=0.2, le=2.0)
+    # Voice turns are finalized only after VAD confirms silence, then an
+    # additional short debounce protects against trailing STT packets.
+    VOICE_TURN_SILENCE_SECONDS: float = Field(0.3, ge=0.15, le=2.0)
+    VOICE_VAD_STOP_SECONDS: float = Field(0.65, ge=0.3, le=2.0)
     VOICE_MAX_QUEUED_TURNS: int = Field(1, ge=1, le=3)
     CLOUD_LLM_BASE_URL: Optional[str] = None
     CLOUD_LLM_FALLBACK_MODELS: str = ""
