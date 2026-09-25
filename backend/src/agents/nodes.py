@@ -328,6 +328,8 @@ def _looks_like_temporal_location(value: str) -> bool:
 def _deterministic_location(text: str) -> Optional[str]:
     # Prefer explicit place cues and iterate all generic location matches. Natural
     # speech often contains "in the evening ... near <place>" in one sentence.
+    # The explicit "near <place> here in <city>" form is intentionally first so
+    # temporal phrases such as "in the evening" can never become a location.
     patterns = [
         # Explicit "near <place> here in <city>" is common in speech. Capture the
         # complete place/city phrase rather than stopping at a temporal word.
@@ -545,7 +547,15 @@ def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldCh
         amount = _safe_amount(change.value); return change.model_copy(update={"value":amount}) if amount is not None else None
     if change.field == "event_location":
         if change.operation == "remove": return change
-        clean = " ".join(str(change.value).split()).strip(" .,"); return change.model_copy(update={"value":clean}) if 2 <= len(clean) <= 100 else None
+        clean = " ".join(str(change.value).split()).strip(" .,")
+        if not (2 <= len(clean) <= 100):
+            return None
+        if clean.casefold() in _LOCATION_STOPWORDS or _looks_like_temporal_location(clean):
+            return None
+        # Reject common LLM extraction artifacts that are clearly not places.
+        if re.fullmatch(r"(?:time|time of|the time|date|day|moment|occasion)", clean, re.I):
+            return None
+        return change.model_copy(update={"value": clean})
     if change.field == "event_description":
         if change.operation == "remove": return change
         clean = _normalize_description(change.value, state.get("last_user_utterance") or ""); return change.model_copy(update={"value":clean}) if clean else None
@@ -651,6 +661,26 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     # description is grammatical and complete rather than a raw ASR fragment.
     if _INCIDENT_TERMS.search(raw):
         _synthesize_event_description(state)
+
+    # Reconcile location once more after all model/deterministic changes. If an
+    # LLM produced a temporal/non-place value, recover the strongest explicit
+    # claimant-provided location from the current conversation instead of storing
+    # the malformed value in the durable claim record.
+    current_location = str(state.get("extracted_data", {}).get("event_location") or "").strip()
+    if not current_location or _looks_like_temporal_location(current_location) or current_location.casefold() in _LOCATION_STOPWORDS:
+        recovered_location = _deterministic_location(raw)
+        if recovered_location:
+            state.setdefault("extracted_data", {})["event_location"] = recovered_location
+            state.setdefault("field_status", {})["event_location"] = "provided"
+            state.setdefault("field_metadata", {})["event_location"] = {
+                "status": "reconciled",
+                "source_turn": state.get("turn_number", 0),
+                "confidence": 0.99,
+                "evidence": raw,
+                "updated_at": _now_iso(),
+            }
+            if "event_location" not in state.setdefault("recently_extracted_fields", []):
+                state["recently_extracted_fields"].append("event_location")
 
     if patch.intent == "escalation":
         state["escalate_to_human"] = True; state["escalation_reason"] = "user_requested"; state["conversation_status"] = "escalated"; state["_skip_all"] = True; state["next_question"] = "I understand. I'll connect you with a human claims specialist who can help you directly."; state["message"] = state["next_question"]; return state
