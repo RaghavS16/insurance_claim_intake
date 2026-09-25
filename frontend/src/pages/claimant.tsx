@@ -103,6 +103,7 @@ export default function ClaimantPage() {
   const autoScrollEnabledRef = useRef(true);
   const latestVoiceGenerationRef = useRef(0);
   const bargeInSentRef = useRef(false);
+  const textTurnInFlightRef = useRef(false);
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
@@ -580,9 +581,11 @@ export default function ClaimantPage() {
 
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
+    if (textTurnInFlightRef.current) return;
     const rawText = customText || textInput;
     if (!rawText.trim() || !token) return;
     const text = rawText.trim();
+    textTurnInFlightRef.current = true;
     setTextInput("");
     setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");
@@ -617,6 +620,7 @@ export default function ClaimantPage() {
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Unable to process message.");
     } finally {
+      textTurnInFlightRef.current = false;
       setAgentState("idle");
     }
   };
@@ -695,7 +699,7 @@ export default function ClaimantPage() {
       parsedVal = parseFloat(editValue.replace(/[^0-9.]/g, "")) || null;
     }
     try {
-      const data = await apiFetch<{ extracted_data?: ExtractedData }>(
+      const data = await apiFetch<{ extracted_data?: ExtractedData; confirmed?: boolean; agent_message?: string; conversation_phase?: string }>(
         `/api/v1/claims/${ticketId}`,
         {
           method: "PATCH",
@@ -704,6 +708,14 @@ export default function ClaimantPage() {
         },
       );
       setExtractedData(data.extracted_data || { ...extractedData, [editingField]: parsedVal });
+      setConfirmed(Boolean(data.confirmed));
+      if (data.conversation_phase) setConversationPhase(data.conversation_phase);
+      if (data.agent_message) {
+        setHistory((prev) => [
+          ...prev,
+          { turn: prev.length + 1, speaker: "agent", text: data.agent_message!, timestamp: Date.now() },
+        ]);
+      }
       setEditingField(null);
       fetchClaimsList(token);
     } catch (err: unknown) {
