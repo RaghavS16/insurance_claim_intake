@@ -373,6 +373,59 @@ def _fallback_intent(text: str, awaiting: bool) -> IntentType:
     return "claim_detail"
 
 
+def _repair_stale_baseline_fields(state: ClaimState) -> None:
+    """Repair obviously corrupted legacy draft fields from the claimant's own history."""
+    data = state.setdefault("extracted_data", {})
+    bad_location = _looks_like_temporal_location(str(data.get("event_location") or ""))
+    bad_description = False
+    existing_description = str(data.get("event_description") or "").strip()
+    if existing_description:
+        cleaned_existing = _strip_meta_reference(existing_description)
+        bad_description = (
+            cleaned_existing.casefold() != existing_description.casefold()
+            and not _normalize_description(cleaned_existing, cleaned_existing)
+        )
+
+    if not bad_location and not bad_description:
+        return
+
+    history = state.get("conversation_history") or []
+    for item in history:
+        if item.get("speaker") != "user":
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        if bad_location:
+            recovered_location = _deterministic_location(text)
+            if recovered_location:
+                data["event_location"] = recovered_location
+                state.setdefault("field_status", {})["event_location"] = "provided"
+                state.setdefault("field_metadata", {})["event_location"] = {
+                    "status": "recovered",
+                    "source_turn": item.get("turn", 0),
+                    "confidence": 0.95,
+                    "evidence": text,
+                    "updated_at": _now_iso(),
+                }
+                bad_location = False
+        if bad_description:
+            recovered_description = _incident_description_from_text(text, data)
+            if recovered_description:
+                data["event_description"] = recovered_description
+                state.setdefault("field_status", {})["event_description"] = "provided"
+                state.setdefault("field_metadata", {})["event_description"] = {
+                    "status": "recovered",
+                    "source_turn": item.get("turn", 0),
+                    "confidence": 0.95,
+                    "evidence": text,
+                    "updated_at": _now_iso(),
+                }
+                bad_description = False
+        if not bad_location and not bad_description:
+            break
+
+
 def _rule_changes(raw: str, state: ClaimState) -> List[FieldChange]:
     current = state.get("extracted_data", {}); changes: List[FieldChange] = []; low = raw.strip().lower().strip(" .!?")
     if low in _SOCIAL_EXACT and len(low.split()) <= 4: return changes
@@ -480,6 +533,7 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
         state["last_intent"] = "filler"
         state["_skip_all"] = True
         return state
+    _repair_stale_baseline_fields(state)
     awaiting = bool(state.get("awaiting_confirmation")); low = raw.lower().strip(" .!?")
     if low in _SOCIAL_EXACT or (re.search(r"\b(human|person|representative|agent|adjuster)\b", low) and re.search(r"\b(speak|talk|connect|transfer)\b", low)):
         intent = _fallback_intent(raw, awaiting); state["last_intent"] = intent; state["spoken_response"] = ""
