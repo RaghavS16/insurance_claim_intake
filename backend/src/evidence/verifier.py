@@ -13,7 +13,7 @@ import logging
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.store import _extract_text
@@ -21,12 +21,20 @@ from src.knowledge.store import _extract_text
 logger = logging.getLogger(__name__)
 
 
+class EvidenceExtractedField(BaseModel):
+    """A strict key/value pair so provider structured-output schemas stay JSON-object strict."""
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    value: str
+
+
 class EvidenceAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     detected_document_type: str = Field(description="The actual document type visible in the uploaded evidence.")
     verification_status: str = Field(description="One of VERIFIED, REJECTED, REVIEW_REQUIRED, UNREADABLE.")
     confidence: float = Field(ge=0, le=1)
     reason: str = Field(min_length=1, max_length=2000)
-    extracted_fields: dict[str, Any] = Field(default_factory=dict)
+    extracted_fields: list[EvidenceExtractedField] = Field(default_factory=list)
     claim_consistency: str = Field(description="One of CONSISTENT, INCONSISTENT, UNKNOWN.")
     consistency_notes: list[str] = Field(default_factory=list)
 
@@ -98,7 +106,7 @@ def verify_evidence(
             "detected_document_type": "invalid_file",
             "confidence": 1.0,
             "reason": file_reason,
-            "extracted_fields": {},
+            "extracted_fields": [],
             "claim_consistency": "UNKNOWN",
             "consistency_notes": [],
             "sha256": sha256,
@@ -113,7 +121,7 @@ def verify_evidence(
                 "detected_document_type": "photograph",
                 "confidence": 0.0,
                 "reason": "This image does not contain readable text and has been queued for manual review.",
-                "extracted_fields": {},
+                "extracted_fields": [],
                 "claim_consistency": "UNKNOWN",
                 "consistency_notes": ["No text detected; manual review required."],
                 "sha256": sha256,
@@ -125,7 +133,7 @@ def verify_evidence(
                 "detected_document_type": "unknown",
                 "confidence": 0.0,
                 "reason": "The uploaded evidence could not be read reliably. Please upload a clearer document or image.",
-                "extracted_fields": {},
+                "extracted_fields": [],
                 "claim_consistency": "UNKNOWN",
                 "consistency_notes": [],
                 "sha256": sha256,
@@ -176,7 +184,13 @@ Rules:
                     start = msg_content.find('{')
                     end = msg_content.rfind('}')
                     if start != -1 and end != -1:
-                        data = EvidenceAnalysis.model_validate_json(msg_content[start:end+1]).model_dump()
+                        payload = json.loads(msg_content[start:end+1])
+                        if isinstance(payload.get("extracted_fields"), dict):
+                            payload["extracted_fields"] = [
+                                {"key": str(k), "value": str(v)}
+                                for k, v in payload["extracted_fields"].items()
+                            ]
+                        data = EvidenceAnalysis.model_validate(payload).model_dump()
                     else:
                         raise ValueError("No JSON found in response")
                 except Exception:
@@ -190,10 +204,22 @@ Rules:
             "detected_document_type": "unknown",
             "confidence": 0.0,
             "reason": "Automatic evidence verification is temporarily unavailable; adjuster review is required.",
-            "extracted_fields": {},
+            "extracted_fields": [],
             "claim_consistency": "UNKNOWN",
             "consistency_notes": [type(exc).__name__],
         }
+    # Keep the persisted/API representation backward-compatible as a dictionary,
+    # while the LLM-facing schema remains a strict list of key/value objects.
+    raw_extracted_fields = data.get("extracted_fields") or []
+    if isinstance(raw_extracted_fields, list):
+        data["extracted_fields"] = {
+            str(item.get("key")): str(item.get("value"))
+            for item in raw_extracted_fields
+            if isinstance(item, dict) and item.get("key") is not None
+        }
+    elif not isinstance(raw_extracted_fields, dict):
+        data["extracted_fields"] = {}
+
     status = str(data.get("verification_status", "REVIEW_REQUIRED")).upper()
     c = data.get("confidence")
     confidence = float(c) if c is not None else 0.0
