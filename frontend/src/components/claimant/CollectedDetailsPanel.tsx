@@ -12,6 +12,7 @@ interface CollectedDetailsPanelProps {
   confirmed: boolean;
   submitted?: boolean;
   missingEvidence?: Array<Record<string, unknown>>;
+  pendingEvidenceReview?: Array<Record<string, unknown>>;
   evidenceItems?: Array<Record<string, unknown>>;
   ticketId: string;
   conversationPhase?: string;
@@ -24,6 +25,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   confirmed,
   submitted = false,
   missingEvidence = [],
+  pendingEvidenceReview = [],
   evidenceItems = [],
 }) => {
   const pendingCount = [
@@ -86,10 +88,10 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
           <div className="flex items-center gap-1">
             <span
               className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                confirmed && missingEvidence.length === 0 ? "bg-emerald-500 text-white" : confirmed ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
+                confirmed && missingEvidence.length === 0 && pendingEvidenceReview.length === 0 ? "bg-emerald-500 text-white" : confirmed ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
               }`}
             >
-              {confirmed && missingEvidence.length === 0 ? "✓" : "3"}
+              {confirmed && missingEvidence.length === 0 && pendingEvidenceReview.length === 0 ? "✓" : "3"}
             </span>
             <span className={confirmed ? "text-[#00647c] font-semibold" : "text-slate-500"}>Evidence</span>
           </div>
@@ -243,7 +245,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
           <div className="flex items-center justify-between">
             <span className="font-label text-[11px] text-[#64748b] font-bold uppercase tracking-wider">Claim-specific evidence</span>
             <span className="text-[10px] font-semibold text-[#64748b]">
-              {missingEvidence.length ? `${missingEvidence.length} remaining` : evidenceItems.length ? "Verified / reviewed" : "Not required yet"}
+              {missingEvidence.length ? `${missingEvidence.length} remaining` : pendingEvidenceReview.length ? `${pendingEvidenceReview.length} awaiting review` : evidenceItems.length ? "Verified / reviewed" : "Not required yet"}
             </span>
           </div>
           {missingEvidence.length > 0 && (
