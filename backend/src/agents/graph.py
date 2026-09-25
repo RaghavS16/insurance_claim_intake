@@ -249,8 +249,9 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         and state.get("dynamic_requirements")
     ):
         extract_answers(state)
+        state["pending_evidence_review"] = pending_evidence_review(state)
         if state.get("confirmed") and (
-            state.get("dynamic_missing") or state.get("missing_evidence")
+            state.get("dynamic_missing") or state.get("missing_evidence") or state.get("pending_evidence_review")
         ):
             state["conversation_phase"] = "3_rag_intake"
             state["conversation_status"] = "collecting_dynamic"
