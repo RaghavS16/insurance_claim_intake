@@ -7,7 +7,7 @@ guidelines retrieved via RAG.
 from __future__ import annotations
 from typing import Any
 from pydantic import BaseModel, Field
-from src.agents.llm_factory import LLMTransientError, invoke_with_retry, structured_output
+from src.agents.llm_factory import LLMTransientError, get_configured_llm, invoke_with_retry, structured_output
 
 class Requirement(BaseModel):
     key: str = Field(min_length=2)
@@ -31,6 +31,7 @@ def get_requirements_from_context(
     incident_description: str = "",
     intake_channel: str = "insurer_web_portal",
     intake_started_at: str | None = None,
+    claim_facts: dict[str, Any] | None = None,
 ) -> list[dict]:
     """Dynamically determine follow-up information and evidence requirements from RAG documents."""
     if not policy_context and not regulatory_context:
@@ -67,6 +68,8 @@ Do NOT repeat the 6 baseline fields already collected: policy number, incident d
 
 Insurance Type: {insurance_type}
 Claimant Incident Summary: {incident_description}
+Known Claim Facts (use only to evaluate source-supported conditions; never invent missing facts):
+{claim_facts or {}}
 
 Authoritative Policy Documents (RAG):
 {policy_prompt_context}
@@ -173,7 +176,7 @@ Return a structured RequirementPlan with requirements where:
 
 
 def get_provisional_requirements(
-    llm,
+    llm=None,
     *,
     insurance_type: str,
     claim_facts: dict[str, Any],
@@ -185,6 +188,12 @@ def get_provisional_requirements(
     are collected when authoritative RAG knowledge is temporarily unavailable and
     must be revalidated against policy/regulatory sources before submission.
     """
+    if llm is None:
+        try:
+            llm = get_configured_llm()
+        except Exception:
+            return []
+
     prompt = f"""You are an insurance claim intake conversation planner.
 The claimant has already completed baseline verification. Continue the conversation
 naturally by identifying claim-specific details and supporting evidence that are
