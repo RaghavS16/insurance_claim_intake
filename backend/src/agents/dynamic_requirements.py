@@ -40,9 +40,11 @@ def is_evidence_req(r: dict[str, Any]) -> bool:
     label = str(r.get("label", "")).lower()
     hint = str(r.get("question_hint", "")).lower()
     
-    if "upload" in hint:
+    if any(phrase in hint for phrase in ("upload", "attach", "photo", "image", "scan", "copy of")):
         return True
-    if any(word in key or word in label for word in ["photo", "image", "document", "bill", "invoice", "report", "copy", "certificate"]):
+    # Do not classify generic "document details/number" questions as uploads.
+    evidence_terms = ["photo", "image", "bill", "invoice", "receipt", "police_report", "medical_report", "certificate"]
+    if any(word in key or word in label for word in evidence_terms):
         return True
     return False
 
