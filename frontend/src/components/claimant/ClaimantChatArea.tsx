@@ -225,9 +225,20 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
                 {/* User Bubble */}
                 <div className="relative bg-gradient-to-r from-[#00647c] to-[#004e61] text-white p-4 rounded-2xl rounded-tr-xs shadow-xs">
-                  <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
-                    {turn.text}
-                  </p>
+                  {turn.attachment && (
+                    <div className="mb-2 flex items-center gap-3 rounded-xl bg-white/10 border border-white/20 px-3 py-2">
+                      <span className="material-symbols-outlined text-base">attach_file</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold">{turn.attachment.name}</div>
+                        <div className="text-[10px] text-white/70">Evidence attached</div>
+                      </div>
+                    </div>
+                  )}
+                  {turn.text && (
+                    <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
+                      {turn.text}
+                    </p>
+                  )}
 
                   {/* Copy Button */}
                   <div className="absolute left-2 -bottom-3 hidden group-hover:flex items-center gap-1 bg-white text-slate-600 border border-slate-200 shadow-sm rounded-lg px-1 py-0.5 z-10">
