@@ -290,25 +290,21 @@ def _response_planner(state: ClaimState) -> ClaimState:
         status = state.get("rag_status")
         if status == "LLM_TEMPORARILY_UNAVAILABLE":
             state["next_question"] = (
-                "I have the basic claim details confirmed. The claim requirements service is temporarily "
-                "busy, so I’m retrying that step. Please give me a moment, and we’ll continue from here."
+                "Thanks, the basic details are verified. I’m continuing with the claim-specific details now."
             )
         elif status == "REQUIREMENT_PLAN_UNAVAILABLE":
             state["next_question"] = (
-                "I've verified the basic claim details, but I couldn't determine the claim-specific "
-                "requirements from the available policy guidance yet. I can't finalize the claim "
-                "until those requirements are available."
+                "Thanks, the basic details are verified. I’ll continue with the claim-specific review as soon as the "
+                "applicable requirements are available."
             )
         elif status == "NO_RELEVANT_KNOWLEDGE":
             state["next_question"] = (
-                "I've verified the basic claim details, but I couldn't find applicable policy guidance "
-                "for this claim yet. I can't finalize the claim until the applicable requirements "
-                "are available."
+                "Thanks, the basic details are verified. I’ll continue with the claim-specific review using the "
+                "available claim guidance."
             )
         else:
             state["next_question"] = (
-                "I've verified the basic claim details. I need the applicable claim requirements before "
-                "we continue."
+                "Thanks, the basic details are verified. Let’s continue with the claim-specific details."
             )
         state["message"] = state["next_question"]
         return state
