@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -22,6 +22,7 @@ async def process_claimant_turn(
     user_text: str,
     input_mode: str,
     turn_number: int | None = None,
+    is_turn_current: Callable[[], bool] | None = None,
 ) -> Dict[str, Any]:
     """Process one claimant turn without blocking the event loop during LLM work."""
     from src.agents.policy_check import verify_policy_for_claim
@@ -250,6 +251,11 @@ async def process_claimant_turn(
     flag_modified(claim, "pipeline_state")
 
     agent_text = result.get("next_question") or result.get("message", "")
+    # Voice barge-in can invalidate a turn while the LLM is still running. Do not
+    # persist an assistant response the claimant has already interrupted.
+    if is_turn_current is not None and not is_turn_current():
+        db.rollback()
+        return result
     try:
         if not workflow_event:
             db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
