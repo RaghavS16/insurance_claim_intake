@@ -100,6 +100,9 @@ export default function ClaimantPage() {
   const isPlayingRef = useRef(false);
   const isRecordingRef = useRef(false);
   const hasInitializedRef = useRef(false);
+  const autoScrollEnabledRef = useRef(true);
+  const latestVoiceGenerationRef = useRef(0);
+  const bargeInSentRef = useRef(false);
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
@@ -108,21 +111,34 @@ export default function ClaimantPage() {
   const scrollToBottom = useCallback((force = false) => {
     const container = chatContainerRef.current;
     if (!container) return;
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 350;
-    if (force || nearBottom) {
-      setTimeout(() => {
-        container.scrollTo({ top: container.scrollHeight + 500, behavior: "smooth" });
-      }, 50);
+    if (force) {
+      autoScrollEnabledRef.current = true;
+      setShowScrollBottom(false);
     }
+    if (!force && !autoScrollEnabledRef.current) return;
+
+    // Do not use smooth scrolling for the live transcript. Smooth scrolling can
+    // fight with VAD/interim transcript updates and visibly pull the user away
+    // from the latest message. Pin the viewport after React paints the new DOM.
+    requestAnimationFrame(() => {
+      const current = chatContainerRef.current;
+      if (!current || (!force && !autoScrollEnabledRef.current)) return;
+      current.scrollTop = current.scrollHeight;
+      requestAnimationFrame(() => {
+        const latest = chatContainerRef.current;
+        if (latest && (force || autoScrollEnabledRef.current)) {
+          latest.scrollTop = latest.scrollHeight;
+        }
+      });
+    });
   }, []);
 
   const handleScrollToBottom = useCallback(() => {
-    setShowScrollBottom(false);
     scrollToBottom(true);
   }, [scrollToBottom]);
 
   useEffect(() => {
-    scrollToBottom(true);
+    scrollToBottom(false);
   }, [history.length, partialSegments.size, scrollToBottom]);
 
   const getPlaybackContext = useCallback(() => {
@@ -209,6 +225,7 @@ export default function ClaimantPage() {
       sequence?: number;
       global_seq?: number;
       timestamp?: number;
+      generation?: number;
       extracted_data?: ExtractedData;
       confirmed?: boolean;
       status?: string;
@@ -221,17 +238,22 @@ export default function ClaimantPage() {
       return;
     }
     if (msg.type === "barge_in") {
-      try {
-        activeSourceRef.current?.stop();
-      } catch {}
-      activeSourceRef.current = null;
-      audioBlobQueueRef.current = [];
-      isPlayingRef.current = false;
-      setAgentState(isRecordingRef.current ? "listening" : "idle");
-      setPartialSegments(new Map());
+      const generation = Number(msg.generation || 0);
+      if (generation >= latestVoiceGenerationRef.current) {
+        latestVoiceGenerationRef.current = generation;
+        try {
+          activeSourceRef.current?.stop();
+        } catch {}
+        activeSourceRef.current = null;
+        audioBlobQueueRef.current = [];
+        isPlayingRef.current = false;
+        setAgentState(isRecordingRef.current ? "listening" : "idle");
+        setPartialSegments(new Map());
+      }
       return;
     }
     if (msg.type === "agent_state") {
+      if (typeof msg.generation === "number" && msg.generation < latestVoiceGenerationRef.current) return;
       setAgentState(msg.state || "idle");
       return;
     }
@@ -239,13 +261,25 @@ export default function ClaimantPage() {
       const speaker = msg.speaker || "agent",
         segmentId = msg.segment_id || "",
         text = msg.text || "",
-        isFinal = Boolean(msg.is_final);
+        isFinal = Boolean(msg.is_final),
+        generation = Number(msg.generation || 0);
       if (!text) return;
-      if (speaker !== "agent" && !isFinal && (isPlayingRef.current || audioBlobQueueRef.current.length)) {
-        try { activeSourceRef.current?.stop(); } catch {}
-        activeSourceRef.current = null;
-        audioBlobQueueRef.current = [];
-        isPlayingRef.current = false;
+      if (generation < latestVoiceGenerationRef.current) return;
+
+      if (speaker !== "agent" && !isFinal) {
+        if (!bargeInSentRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+          bargeInSentRef.current = true;
+          try {
+            wsRef.current.send(JSON.stringify({ type: "barge_in", source: "claimant_speech" }));
+          } catch {}
+        }
+        if (isPlayingRef.current || audioBlobQueueRef.current.length) {
+          try { activeSourceRef.current?.stop(); } catch {}
+          activeSourceRef.current = null;
+          audioBlobQueueRef.current = [];
+          isPlayingRef.current = false;
+        }
+        setAgentState("listening");
       }
       if (!isFinal) {
         setPartialSegments((prev) => {
@@ -278,6 +312,9 @@ export default function ClaimantPage() {
             timestamp: msg.timestamp || Date.now(),
           },
         ]);
+        if (speaker !== "agent") {
+          bargeInSentRef.current = false;
+        }
       }
       return;
     }
@@ -498,7 +535,10 @@ export default function ClaimantPage() {
     try {
       let activeTid = ticketId;
       if (!activeTid) activeTid = await ensureClaimSession(token);
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Starting the microphone is itself an explicit barge-in action.
+    stopAssistantAudio();
+    bargeInSentRef.current = false;
+    const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           sampleRate: 16000,
@@ -749,7 +789,10 @@ export default function ClaimantPage() {
               linkedPolicies={linkedPolicies}
               onSelectPromptSuggestion={(txt) => handleSendText(undefined, txt)}
               onExportTranscript={handleExportTranscript}
-              onScrollChange={(isUp) => setShowScrollBottom(isUp)}
+              onScrollChange={(isUp) => {
+                autoScrollEnabledRef.current = !isUp;
+                setShowScrollBottom(isUp);
+              }}
               pendingEvidenceName={pendingEvidenceName}
             />
 
