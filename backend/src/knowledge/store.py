@@ -221,7 +221,14 @@ def ingest_document(
             insurance_type=insurance_type,
             content_sha256=content_sha256,
             uploaded_by=uploaded_by,
-            metadata_json={"title": meta.title, "scope": meta.document_scope},
+            metadata_json={
+                "title": meta.title,
+                "scope": meta.document_scope,
+                "policy_number": policy_number,
+                "effective_from": effective_from,
+                "effective_to": effective_to,
+                "uploaded_by": uploaded_by,
+            },
         )
         db.add(doc)
         db.flush()
@@ -269,6 +276,18 @@ def search(
             conditions.append((KnowledgeDocument.insurance_type == insurance_type) | (KnowledgeDocument.insurance_type.is_(None)))
         if document_types:
             conditions.append(KnowledgeDocument.document_type.in_(document_types))
+        metadata = KnowledgeDocument.metadata_json
+        if policy_number:
+            conditions.append(
+                (metadata["policy_number"].as_string() == policy_number)
+                | (metadata["policy_number"].as_string().is_(None))
+            )
+        if incident_date:
+            event_date = incident_date.isoformat()
+            effective_from = metadata["effective_from"].as_string()
+            effective_to = metadata["effective_to"].as_string()
+            conditions.append((effective_from.is_(None)) | (effective_from <= event_date))
+            conditions.append((effective_to.is_(None)) | (effective_to >= event_date))
         distance = KnowledgeChunk.embedding.cosine_distance(vector)
         stmt = (
             select(KnowledgeChunk, KnowledgeDocument, distance.label("distance"))
