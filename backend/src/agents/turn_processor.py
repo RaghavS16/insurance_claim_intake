@@ -262,7 +262,7 @@ async def process_claimant_turn(
                 claim_id=claim.id,
                 turn_number=logical_turn,
                 speaker="user",
-                text=f"Uploaded evidence: {attachment.get("name") or "evidence file"}",
+                text=f"Uploaded evidence: {attachment.get('name') or 'evidence file'}",
             )
             user_turn.attachment = dict(attachment)
             db.add(user_turn)
