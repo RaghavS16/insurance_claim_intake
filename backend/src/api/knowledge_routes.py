@@ -26,6 +26,9 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             filename=payload.source_name,
             document_type=payload.document_type,
             insurance_type=payload.insurance_type,
+            policy_number=payload.policy_number,
+            effective_from=payload.effective_from,
+            effective_to=payload.effective_to,
             uploaded_by=str(user.id),
         )
     except ValueError as exc:
@@ -39,6 +42,9 @@ async def upload_document(
     file: UploadFile = File(...),
     document_type: str | None = Form(None),
     insurance_type: str | None = Form(None),
+    policy_number: str | None = Form(None),
+    effective_from: str | None = Form(None),
+    effective_to: str | None = Form(None),
     user: User = Depends(require_role(["ADJUSTER"])),
 ):
     if not file.filename:
@@ -51,6 +57,9 @@ async def upload_document(
             filename=file.filename,
             document_type=document_type,
             insurance_type=insurance_type,
+            policy_number=policy_number,
+            effective_from=effective_from,
+            effective_to=effective_to,
             uploaded_by=str(user.id),
         )
     except ValueError as exc:
@@ -65,6 +74,8 @@ async def retrieve(
     user: User = Depends(require_role(["ADJUSTER"])),
     insurance_type: str | None = None,
     document_type: str | None = None,
+    policy_number: str | None = None,
+    incident_date: str | None = None,
 ):
     try:
         items = await asyncio.to_thread(
@@ -72,6 +83,8 @@ async def retrieve(
             query=q,
             insurance_type=insurance_type,
             document_types=[document_type] if document_type else None,
+            policy_number=policy_number,
+            incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
         )
         return {"items": items, "query": q}
     except Exception as exc:
