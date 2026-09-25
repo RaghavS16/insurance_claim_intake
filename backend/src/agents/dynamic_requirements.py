@@ -1,6 +1,7 @@
 """Dynamic claim-type requirement planning and conversational extraction."""
 from __future__ import annotations
 import re
+import json
 from typing import Any
 from pydantic import BaseModel, Field
 from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
@@ -28,6 +29,7 @@ def build_dynamic_context(state: ClaimState | dict[str, Any]) -> dict[str, Any]:
         query=str(data.get("event_description") or ""),
         intake_channel="insurer_web_portal",
         intake_started_at=str(state.get("claim_created_at") or state.get("created_at") or "") or None,
+        claim_facts=data,
     )
 
 def is_evidence_req(r: dict[str, Any]) -> bool:
