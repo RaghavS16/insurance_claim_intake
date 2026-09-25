@@ -220,7 +220,9 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         state["rag_status"] = "NO_INSURANCE_TYPE"
         return state
 
-    context_key = "|".join(
+    # Bump when requirement-planning workflow semantics change so claims do not
+    # reuse a stale RAG plan generated under an older intake context.
+    context_key = "intake-channel-v2|" + "|".join(
         str(data.get(k) or "")
         for k in ("insurance_type", "policy_id", "event_date", "event_description")
     )
