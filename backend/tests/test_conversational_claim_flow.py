@@ -44,6 +44,7 @@ def test_fragmented_incident_story_is_rewritten_into_one_meaningful_description(
         return schema(description="I developed a severe viral fever yesterday and received treatment at the hospital.")
 
     monkeypatch.setattr(nodes, "_invoke_structured", fake_structured)
+    monkeypatch.setattr(nodes, "_get_llm", lambda: object())
     state = {
         "claim_text": "I have a severe viral fever on yesterday",
         "extracted_data": {},
