@@ -258,7 +258,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
                 : pendingEvidenceReview.length
                 ? `${pendingEvidenceReview.length} awaiting review`
                 : evidenceItems.length
-                ? "Verified / reviewed"
+                ? `${evidenceItems.filter((item) => String(item.verification_status || item.status || "").toUpperCase() === "VERIFIED").length} verified`
                 : "Not required yet"}
             </span>
           </div>
