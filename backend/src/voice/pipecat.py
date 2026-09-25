@@ -342,7 +342,13 @@ class ClaimAgentProcessor(FrameProcessor):
             claim = db.query(Claim).filter(Claim.ticket_id == self._ticket_id).first()
             if not claim:
                 return
-            result = await process_claimant_turn(db, claim, text, self._input_mode)
+            result = await process_claimant_turn(
+                db,
+                claim,
+                text,
+                self._input_mode,
+                is_turn_current=lambda: generation == self._generation,
+            )
         finally:
             db.close()
         if generation != self._generation:
