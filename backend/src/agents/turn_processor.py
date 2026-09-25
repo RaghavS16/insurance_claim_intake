@@ -128,10 +128,12 @@ async def process_claimant_turn(
     # Stage 5: Final Submission to Adjuster upon Final Confirmation & Package Compilation
     dynamic_rem = result.get("dynamic_missing") or []
     missing_ev = result.get("missing_evidence") or []
+    pending_review = result.get("pending_evidence_review") or []
     is_final_turn = (
         claim.status == "verified"
         and not dynamic_rem
         and not missing_ev
+        and not pending_review
         and result.get("confirmed")
         and result.get("final_submission_confirmed")
     )
@@ -169,7 +171,7 @@ async def process_claimant_turn(
             result["conversation_phase"] = "2_verification" if result.get("awaiting_confirmation") else "1_baseline"
         elif claim.status != "verified":
             result["conversation_phase"] = "2_verification"
-        elif dynamic_rem or missing_ev:
+        elif dynamic_rem or missing_ev or pending_review:
             result["conversation_phase"] = "3_rag_intake"
         elif not result.get("final_submission_confirmed"):
             result["conversation_phase"] = "4_gap_analysis"
