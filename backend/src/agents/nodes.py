@@ -250,9 +250,20 @@ def _safe_amount(raw: Any) -> Optional[float]:
 
 def _deterministic_amount(text: str) -> Optional[float]:
     low = text.lower()
-    for pattern in (r"(?:₹|rs\.?|inr|rupees?|repair\s+cost|repair|damage|loss|estimated\s+(?:cost|loss)|claim|cost|bill|expenses?)[^\d]{0,25}(\d[\d,]*(?:\.\d+)?)\s*(crores?|cr|lakhs?|lacs?|lac|k|thousand)?\b", r"(\d[\d,]*(?:\.\d+)?)\s*(crores?|cr|lakhs?|lacs?|lac|k|thousand)\b"):
-        match = re.search(pattern, low)
-        if match: return _safe_amount(" ".join(part for part in match.groups() if part))
+    protected_amount_context = (
+        "idv", "insured declared value", "deductible", "excess", "premium",
+        "sum insured", "insured value", "policy value", "coverage limit",
+    )
+    patterns = (
+        r"(?:₹|rs\.?|inr|rupees?|repair\s+cost|repair|damage|loss|estimated\s+(?:cost|loss)|claim|cost|bill|expenses?)[^\d]{0,25}(\d[\d,]*(?:\.\d+)?)\s*(crores?|cr|lakhs?|lacs?|lac|k|thousand)?\b",
+        r"(\d[\d,]*(?:\.\d+)?)\s*(crores?|cr|lakhs?|lacs?|lac|k|thousand)\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, low):
+            prefix = low[max(0, match.start() - 45):match.start()]
+            if any(term in prefix for term in protected_amount_context):
+                continue
+            return _safe_amount(" ".join(part for part in match.groups() if part))
     return None
 
 def _deterministic_type(text: str) -> Optional[str]:
