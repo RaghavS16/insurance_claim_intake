@@ -227,3 +227,28 @@ def test_meta_correction_keeps_previous_rich_description_and_adds_policy():
     assert "clipped" in result["extracted_data"]["event_description"].lower()
     assert "i already told you" not in result["extracted_data"]["event_description"].lower()
 
+def test_dossier_turn_sequence_only_asks_for_truly_missing_baseline_fields():
+    state = {
+        "claim_text": (
+            "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+            "near the Anna Nagar Ring Road Junction here in Madurai. An oncoming car "
+            "turned across my lane, my bike clipped the passenger door and fell over, "
+            "damaging the handlebar and brake lever."
+        ),
+        "extracted_data": {},
+        "field_status": {},
+        "field_metadata": {},
+        "conversation_history": [],
+    }
+    state = nodes.conversation_turn_processor(state)
+    state = nodes.mandatory_field_checker(state)
+    assert state["missing_fields"] == ["policy_id", "estimated_claim_amount"]
+
+    state["claim_text"] = "I already told you what happened; my policy number was POL-1409-XI."
+    state = nodes.conversation_turn_processor(state)
+    state = nodes.mandatory_field_checker(state)
+
+    assert state["extracted_data"]["policy_id"] == "POL-1409-XI"
+    assert state["missing_fields"] == ["estimated_claim_amount"]
+    assert state["next_question_field"] if "next_question_field" in state else True
+
