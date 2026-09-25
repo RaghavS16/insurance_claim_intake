@@ -153,6 +153,7 @@ class ConversationTurn(Base):
     speaker: Mapped[str] = mapped_column(String, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    attachment: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     claim: Mapped["Claim"] = relationship("Claim", back_populates="turns")
