@@ -120,3 +120,24 @@ def test_meta_statement_does_not_overwrite_incident_description():
         "My motorcycle clipped an oncoming car and fell on its right side."
     )
     assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
+
+
+def test_rich_first_turn_does_not_reask_already_supplied_baseline_fields():
+    state = {
+        "claim_text": (
+            "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+            "near the Anna Nagar Ring Road Junction here in Madurai. An oncoming car "
+            "turned across my lane, my bike clipped the passenger door and fell over, "
+            "damaging the handlebar and brake lever."
+        ),
+        "extracted_data": {},
+        "conversation_history": [],
+    }
+    result = nodes.conversation_turn_processor(state)
+    result = nodes.mandatory_field_checker(result)
+
+    assert "event_date" not in result["missing_fields"]
+    assert "event_description" not in result["missing_fields"]
+    assert "event_location" not in result["missing_fields"]
+    assert "insurance_type" not in result["missing_fields"]
+    assert result["extracted_data"]["event_location"].lower().startswith("anna nagar")
