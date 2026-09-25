@@ -29,6 +29,8 @@ def get_requirements_from_context(
     policy_context: list[dict],
     regulatory_context: list[dict],
     incident_description: str = "",
+    intake_channel: str = "insurer_web_portal",
+    intake_started_at: str | None = None,
 ) -> list[dict]:
     """Dynamically determine follow-up information and evidence requirements from RAG documents."""
     if not policy_context and not regulatory_context:
@@ -51,6 +53,11 @@ def get_requirements_from_context(
 
     prompt = f"""You are an expert insurance claims specialist.
 Analyze the retrieved authoritative policy wording, regulatory circulars, and claim guidelines provided below for this {insurance_type} insurance claim.
+
+WORKFLOW CONTEXT:
+This claim is being reported directly to the insurer through its own claim-intake application.
+The current conversation is the active first-notice/intake interaction, so the application itself records the current insurer notification.
+Do not ask for a notification date/time for this same intake channel. Only require a separate prior notification if the source explicitly says it had to happen before this claim through a separate channel.
 
 Based SOLELY on these retrieved documents:
 1. Identify specific follow-up information details required from the claimant to process and assess coverage for this claim.
@@ -127,6 +134,35 @@ Return a structured RequirementPlan with requirements where:
         output = []
         for req in plan.requirements:
             item = req.model_dump()
+            searchable = " ".join(
+                str(item.get(k) or "").lower()
+                for k in ("key", "label", "question_hint", "condition")
+            )
+            same_intake_notification = any(
+                phrase in searchable
+                for phrase in (
+                    "reported to the insurer",
+                    "report to the insurer",
+                    "insurer call",
+                    "call centre",
+                    "call center",
+                    "notify the insurer",
+                    "notification to the insurer",
+                )
+            )
+            prior_notification = any(
+                phrase in searchable
+                for phrase in (
+                    "previously reported",
+                    "previously notified",
+                    "prior notification",
+                    "prior notice",
+                    "before this claim",
+                    "before filing",
+                )
+            )
+            if same_intake_notification and not prior_notification:
+                continue
             item["provenance"] = {"sources": source_refs}
             output.append(item)
         return output
