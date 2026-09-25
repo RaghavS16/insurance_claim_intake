@@ -102,10 +102,15 @@ class KnowledgeRetriever:
 
         if not requirements:
             provisional = get_provisional_requirements(
-                get_configured_llm(),
+                None,
                 insurance_type=insurance_type,
-                claim_facts={"policy_number": policy_number, "incident_date": str(incident_date) if incident_date else None, "incident": q},
-                conversation=q,
+                claim_facts={
+                    **facts,
+                    "policy_number": policy_number,
+                    "incident_date": str(incident_date) if incident_date else None,
+                    "incident": incident_description,
+                },
+                conversation=incident_description,
             )
             if provisional:
                 return {
