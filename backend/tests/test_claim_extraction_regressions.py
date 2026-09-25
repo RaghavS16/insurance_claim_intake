@@ -92,7 +92,7 @@ def test_explicit_near_here_in_city_location_is_extracted_not_time_phrase():
         "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
         "northbound near the Anna Nagar Ring Road Junction here in Madurai."
     )
-    assert _deterministic_location(text) == "Anna Nagar Ring Road Junction Madurai"
+    assert _deterministic_location(text) == "Anna Nagar Ring Road Junction, Madurai"
 
 
 def test_sober_answer_satisfies_active_alcohol_requirement():
