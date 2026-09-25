@@ -163,6 +163,15 @@ def ingest_document(
         existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
+            if any(value not in (None, "") for value in (policy_number, effective_from, effective_to)):
+                existing.metadata_json = {
+                    **(existing.metadata_json or {}),
+                    "policy_number": policy_number or (existing.metadata_json or {}).get("policy_number"),
+                    "effective_from": effective_from or (existing.metadata_json or {}).get("effective_from"),
+                    "effective_to": effective_to or (existing.metadata_json or {}).get("effective_to"),
+                    "uploaded_by": uploaded_by or (existing.metadata_json or {}).get("uploaded_by"),
+                }
+                db.commit()
             if existing.source_uri and existing.source_uri.startswith("file://") and settings.S3_BUCKET:
                 try:
                     s3 = put_bytes(
