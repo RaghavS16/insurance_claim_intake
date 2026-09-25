@@ -46,16 +46,12 @@ async def process_claimant_turn(
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     workflow_event = None
 
-    # A verified claim is already past policy verification even if an older
-    # pipeline_state snapshot did not persist the verification payload. Rehydrate
-    # the workflow gate from the durable claim status so the next claimant turn
-    # can enter RAG instead of getting stuck on "I need the claim requirements".
-    if claim.status == "verified" and not user_text:
-        # A verified claim can receive a user turn after policy verification.
-        # Only the internal re-entry (which has no claimant text) should be treated
-        # as a workflow event. Previously every post-verification claimant message
-        # was discarded here, causing repeated RAG questions with no user turns
-        # persisted in the dossier.
+    # A verified claim is already past policy verification. Rehydrate the
+    # verification gate on every resumed turn, not only internal re-entry turns.
+    # This protects against older pipeline_state snapshots and guarantees that a
+    # normal claimant message after verification continues through RAG intake
+    # instead of falling back to baseline/verification messaging.
+    if claim.status == "verified":
         prior_state["policy_valid"] = True
         policy_state = prior_state.get("policy_verification") or {}
         if not isinstance(policy_state, dict) or not policy_state.get("valid"):
@@ -65,7 +61,8 @@ async def process_claimant_turn(
             }
         prior_state["confirmed"] = True
         prior_state["awaiting_confirmation"] = False
-        workflow_event = "policy_verified"
+        if not user_text:
+            workflow_event = "policy_verified"
 
     if user_text.startswith("[System Event] Uploaded evidence"):
         workflow_event = "evidence_verified"
