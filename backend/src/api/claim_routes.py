@@ -19,7 +19,7 @@ from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
-from src.agents.dynamic_requirements import missing_evidence
+from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.models import Adjuster
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement
 from src.evidence.verifier import verify_evidence
@@ -77,6 +77,7 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "dynamic_requirements": state.get("dynamic_requirements") or [],
         "dynamic_missing": state.get("dynamic_missing") or [],
         "missing_evidence": state.get("missing_evidence") or [],
+        "pending_evidence_review": state.get("pending_evidence_review") or [],
         "evidence": state.get("evidence") or [],
         "field_status": state.get("field_status") or {},
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
@@ -399,7 +400,9 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
     missing_evidence_items = missing_evidence(state)
+    pending_review_items = pending_evidence_review(state)
     if missing_evidence_items: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
+    if pending_review_items: raise HTTPException(status_code=409, detail="Claim evidence is still awaiting review. You can continue intake, but submission will remain blocked until review is complete.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
@@ -621,6 +624,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         "evidence": item,
         "evidence_items": evidence,
         "missing_evidence": state.get("missing_evidence", []),
+        "pending_evidence_review": state.get("pending_evidence_review", []),
     }
 
 @router.patch("/{ticket_id}")
