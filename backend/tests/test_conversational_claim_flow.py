@@ -82,3 +82,41 @@ def test_incident_description_can_be_built_from_multiple_claimant_turns(monkeypa
     assert "I have a severe viral fever on yesterday" in prompts[-1]
     assert "It happened at Chennai Government Hospital" in prompts[-1]
     assert "Chennai Government Hospital" in state["extracted_data"]["event_description"]
+
+
+def test_rich_motor_turn_extracts_description_and_real_location_not_time_phrase():
+    text = (
+        "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+        "northbound near the Anna Nagar Ring Road Junction here in Madurai. The signal "
+        "was green when an oncoming car turned across my lane. I braked and swerved, "
+        "but my bike clipped the car's passenger door, fell on its right side, and "
+        "damaged the handlebar, fork, brake lever and exhaust shield."
+    )
+    changes = nodes._rule_changes(text, {"extracted_data": {}})
+    values = {c.field: c.value for c in changes}
+
+    assert values["event_date"] == "2026-09-18"
+    assert values["event_location"] == "Anna Nagar Ring Road Junction here in Madurai"
+    assert "the evening" not in values["event_location"].lower()
+    assert "clipped" in values["event_description"].lower()
+    assert "damaged" in values["event_description"].lower()
+
+
+def test_meta_statement_does_not_overwrite_incident_description():
+    state = {
+        "claim_text": "i already told you what happened and my policy number was POL-1409-XI",
+        "extracted_data": {
+            "event_description": "My motorcycle clipped an oncoming car and fell on its right side.",
+            "policy_id": None,
+        },
+        "conversation_history": [
+            {"speaker": "user", "text": "My motorcycle clipped an oncoming car and fell on its right side."},
+        ],
+    }
+
+    result = nodes.conversation_turn_processor(state)
+
+    assert result["extracted_data"]["event_description"] == (
+        "My motorcycle clipped an oncoming car and fell on its right side."
+    )
+    assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
