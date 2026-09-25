@@ -35,3 +35,19 @@ def test_dynamic_third_party_facts_are_mapped_to_active_requirements():
     assert values["third_party_driver_name"] == "S. Karthik"
     assert values["third_party_driver_contact"] == "+919443210987"
     assert values["other_vehicle_make_model"] == "silver Hyundai i20"
+
+
+def test_short_yes_satisfies_active_police_requirement():
+    requirements = [
+        {"key": "police_report_or_fir", "label": "Police report or FIR", "question_hint": "Do you have a copy of the police report or FIR filed for this accident?"},
+    ]
+    values = _deterministic_dynamic_extract("yes", requirements)
+    assert values["police_report_or_fir"] is True
+
+
+def test_short_no_satisfies_active_police_requirement():
+    requirements = [
+        {"key": "police_report_or_fir", "label": "Police report or FIR", "question_hint": "Do you have a copy of the police report or FIR filed for this accident?"},
+    ]
+    values = _deterministic_dynamic_extract("no", requirements)
+    assert values["police_report_or_fir"] is False
