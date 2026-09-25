@@ -193,6 +193,7 @@ async def process_claimant_turn(
         }
         outstanding_dynamic = {str(x.get("key")) for x in (result.get("dynamic_missing") or []) if x.get("key")}
         outstanding_evidence = {str(x.get("key")) for x in (result.get("missing_evidence") or []) if x.get("key")}
+        pending_review_evidence = {str(x.get("key")) for x in (result.get("pending_evidence_review") or []) if x.get("key")}
         seen_keys = set()
         for req in requirements:
             seen_keys.add(str(req.get("key") or "").strip())
@@ -217,6 +218,8 @@ async def process_claimant_turn(
                 row.provenance_json = req.get("provenance") or row.provenance_json
             if key in outstanding_evidence:
                 row.status = "evidence_required"
+            elif key in pending_review_evidence:
+                row.status = "review_required"
             elif key in outstanding_dynamic:
                 row.status = "information_required"
             else:
