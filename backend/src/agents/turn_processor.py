@@ -180,12 +180,7 @@ async def process_claimant_turn(
     except Exception as exc:
         logger.debug("Gap analysis / phase mapping error: %s", exc)
 
-    # A system workflow event (evidence upload/verification) must immediately
-    # re-enter the conversational planner so the claimant gets the next natural
-    # step without having to type "continue".
-    if result.get("_workflow_event") == "evidence_verified":
-        result = await asyncio.to_thread(build_conversation_graph().invoke, result)
-        result.pop("_workflow_event", None)
+    result.pop("_workflow_event", None)
 
     # Persist the RAG-generated requirement plan as durable claim state. The JSON
     # pipeline_state remains a cache for conversation speed, but requirements are
