@@ -1,6 +1,6 @@
 """Production RAG orchestration extracting requirements directly from authoritative policy and regulatory documents."""
 from datetime import date
-from src.agents.llm_factory import LLMTransientError, get_configured_llm, is_transient_llm_error
+from src.agents.llm_factory import LLMTransientError, get_configured_llm, get_fast_llm, is_transient_llm_error
 from .requirements import get_requirements_from_context, get_provisional_requirements
 from .store import search
 from .reranker import rerank
@@ -41,8 +41,12 @@ class KnowledgeRetriever:
                 pass
 
         if not policy and not guidance:
+            try:
+                provisional_llm = get_fast_llm()
+            except Exception:
+                provisional_llm = None
             provisional = get_provisional_requirements(
-                None,
+                provisional_llm,
                 insurance_type=insurance_type,
                 claim_facts={
                     **facts,
@@ -74,6 +78,34 @@ class KnowledgeRetriever:
                 claim_facts=facts,
             )
         except Exception as exc:
+            # A transient reasoning-model failure must not stop the claimant flow.
+            # Retry requirement planning once with the low-latency model before
+            # surfacing a temporary/unavailable state.
+            try:
+                fast_llm = get_fast_llm()
+                requirements = get_requirements_from_context(
+                    fast_llm,
+                    insurance_type=insurance_type,
+                    policy_context=policy,
+                    regulatory_context=guidance,
+                    incident_description=incident_description,
+                    intake_channel=intake_channel,
+                    intake_started_at=intake_started_at,
+                    claim_facts=facts,
+                )
+            except Exception:
+                requirements = []
+            if requirements:
+                source_kind = "reasoning_fallback"
+                return {
+                    "available": True,
+                    "status": "OK",
+                    "requirements": requirements,
+                    "policy": policy,
+                    "regulations": guidance,
+                    "authoritative": True,
+                    "planning_model": source_kind,
+                }
             # Preserve the transient-provider state so the conversational layer can
             # retry RAG instead of incorrectly reporting a permanent missing plan.
             transient_text = str(exc).lower()
