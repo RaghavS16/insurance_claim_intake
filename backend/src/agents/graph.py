@@ -284,6 +284,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
     missing_evidence = list(state.get("missing_evidence") or [])
+    pending_review = list(state.get("pending_evidence_review") or [])
     plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") in {"OK", "PROVISIONAL"}
 
     # Continuous Gap & Validation Analysis
@@ -387,6 +388,12 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["message"] = state["next_question"]
         return state
 
+    if pending_review and not missing_evidence and not dynamic_missing:
+        state["conversation_phase"] = "3_rag_intake"
+        state["conversation_status"] = "collecting_dynamic"
+        state["next_question_field"] = "evidence_review"
+        state["next_question"] = _dynamic_fallback({**state, "missing_evidence": []}) if state.get("dynamic_requirements") else "Your uploaded evidence is queued for review. We can continue with the remaining claim details while that review is completed."
+        state["message"] = state["next_question"]
     state["message"] = state.get("next_question", "")
     return state
 
