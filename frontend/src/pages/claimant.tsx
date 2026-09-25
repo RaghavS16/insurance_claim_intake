@@ -588,6 +588,13 @@ export default function ClaimantPage() {
     if (!rawText.trim() || !token) return;
     const text = rawText.trim();
     textTurnInFlightRef.current = true;
+    if (isRecordingRef.current) stopVoiceRecording();
+    stopAssistantAudio();
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({ type: "barge_in", source: "text_input" }));
+      } catch {}
+    }
     setTextInput("");
     setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");
