@@ -253,7 +253,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     context_digest = hashlib.sha256(
         json.dumps(context_payload, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:24]
-    context_key = f"intake-channel-v3|{context_digest}"
+    context_key = f"intake-channel-v4|{context_digest}"
     if (
         state.get("rag_context_key") == context_key
         and state.get("rag_status") in {"OK", "PROVISIONAL"}
