@@ -1,6 +1,6 @@
 """Production RAG orchestration extracting requirements directly from authoritative policy and regulatory documents."""
 from datetime import date
-from src.agents.llm_factory import LLMTransientError, get_configured_llm
+from src.agents.llm_factory import LLMTransientError, get_configured_llm, is_transient_llm_error
 from .requirements import get_requirements_from_context
 from .store import search
 from .reranker import rerank
@@ -50,15 +50,17 @@ class KnowledgeRetriever:
                 regulatory_context=guidance,
                 incident_description=q,
             )
-        except LLMTransientError:
-            return {
-                "available": False,
-                "status": "LLM_TEMPORARILY_UNAVAILABLE",
-                "requirements": [],
-                "policy": policy,
-                "regulations": guidance,
-            }
-        except Exception:
+        except Exception as exc:
+            # Preserve the transient-provider state so the conversational layer can
+            # retry RAG instead of incorrectly reporting a permanent missing plan.
+            if isinstance(exc, LLMTransientError) or is_transient_llm_error(exc):
+                return {
+                    "available": False,
+                    "status": "LLM_TEMPORARILY_UNAVAILABLE",
+                    "requirements": [],
+                    "policy": policy,
+                    "regulations": guidance,
+                }
             requirements = []
 
         if not requirements:
