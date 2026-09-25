@@ -96,7 +96,7 @@ def test_rich_motor_turn_extracts_description_and_real_location_not_time_phrase(
     values = {c.field: c.value for c in changes}
 
     assert values["event_date"] == "2026-09-18"
-    assert values["event_location"] == "Anna Nagar Ring Road Junction here in Madurai"
+    assert values["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
     assert "the evening" not in values["event_location"].lower()
     assert "clipped" in values["event_description"].lower()
     assert "damaged" in values["event_description"].lower()
@@ -140,7 +140,7 @@ def test_rich_first_turn_does_not_reask_already_supplied_baseline_fields():
     assert "event_description" not in result["missing_fields"]
     assert "event_location" not in result["missing_fields"]
     assert "insurance_type" not in result["missing_fields"]
-    assert result["extracted_data"]["event_location"].lower().startswith("anna nagar")
+    assert result["extracted_data"]["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
 
 
 def test_legacy_corrupted_baseline_values_are_recovered_on_next_turn():
@@ -166,6 +166,6 @@ def test_legacy_corrupted_baseline_values_are_recovered_on_next_turn():
 
     result = nodes.conversation_turn_processor(state)
 
-    assert result["extracted_data"]["event_location"].lower().startswith("anna nagar")
+    assert result["extracted_data"]["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
     assert "clipped" in result["extracted_data"]["event_description"].lower()
     assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
