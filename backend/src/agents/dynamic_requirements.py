@@ -2,13 +2,20 @@
 from __future__ import annotations
 import re
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
 from src.knowledge.retriever import KnowledgeRetriever
 from src.agents.state import ClaimState
 
+class DynamicExtractedValue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    value: Any
+
+
 class DynamicExtraction(BaseModel):
-    values: dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+    values: list[DynamicExtractedValue] = Field(default_factory=list)
 
 def build_dynamic_context(state: ClaimState | dict[str, Any]) -> dict[str, Any]:
     data = state.get("extracted_data") or {}
@@ -183,8 +190,17 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
 
     police_negative = bool(re.search(r"\b(?:no|didn['’]?t\s+file|wasn['’]?t\s+filed)\b.{0,30}\b(?:police\s+report|fir)\b", text, re.I))
     police_positive = bool(re.search(r"\b(?:yes|filed|have|has)\b.{0,35}\b(?:police\s+report|fir)\b", text, re.I))
-    short_yes = text.strip().lower().strip(" .!?") in {"yes", "yeah", "yep", "correct", "right", "i do", "i have"}
-    short_no = text.strip().lower().strip(" .!?") in {"no", "nope", "i don't", "i do not", "not filed"}
+    normalized_answer = text.strip().lower().strip(" .!?")
+    short_yes = normalized_answer in {"yes", "yeah", "yep", "correct", "right", "i do", "i have"}
+    short_no = normalized_answer in {"no", "nope", "i don't", "i do not", "not filed"}
+    negative_answer = bool(re.search(
+        r"\b(?:no|nope|not|never|didn['’]?t|wasn['’]?t|weren['’]?t|haven['’]?t|don['’]?t|doesn['’]?t|without)\b",
+        text, re.I,
+    ))
+    positive_answer = bool(re.search(
+        r"\b(?:yes|yeah|yep|correct|right|i do|i have|filed|have)\b",
+        text, re.I,
+    ))
 
     for req in requirements or []:
         key = str(req.get("key") or "").lower()
@@ -199,10 +215,28 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
             extracted[key] = driver_name
         if vehicle_make_model and any(term in semantic for term in ("make and model", "make/model", "vehicle make", "car make", "vehicle model")):
             extracted[key] = vehicle_make_model
-        if "police" in semantic or "fir" in semantic:
-            if police_negative or short_no:
+        # Generic boolean reconciliation for active yes/no requirements.
+        # This is deliberately driven by the current requirement's question/hint,
+        # not a fixed question catalogue. It prevents answers such as
+        # "No, I was completely sober" from being asked again.
+        yes_no_hint = bool(re.search(
+            r"^(?:do|does|did|is|are|was|were|have|has|can|could|will|would)\b",
+            str(req.get("question_hint") or "").strip().lower(),
+        ))
+        if yes_no_hint:
+            if "under the influence" in semantic or "intoxicat" in semantic or "alcohol" in semantic or "drug" in semantic:
+                if negative_answer or short_no or re.search(r"\b(?:sober|not under the influence)\b", text, re.I):
+                    extracted[key] = False
+                elif positive_answer or short_yes:
+                    extracted[key] = True
+            elif "police" in semantic or "fir" in semantic:
+                if police_negative or short_no:
+                    extracted[key] = False
+                elif police_positive or short_yes:
+                    extracted[key] = True
+            elif short_no:
                 extracted[key] = False
-            elif police_positive or short_yes:
+            elif short_yes:
                 extracted[key] = True
 
     # Preserve backwards-compatible canonical keys for the existing requirement aliases.
@@ -243,14 +277,19 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
             attempts=3,
         )
         if isinstance(result, BaseModel):
-            values = result.model_dump().get("values", {})
+            raw_values = result.model_dump().get("values", [])
         elif isinstance(result, dict):
-            values = result.get("values", {})
+            raw_values = result.get("values", [])
         else:
-            values = {}
-        for key, value in values.items():
-            if str(key) in allowed and value not in (None, "", "UNKNOWN"):
-                state.setdefault("extracted_data", {})[str(key)] = value
+            raw_values = []
+        if isinstance(raw_values, dict):
+            raw_values = [{"key": key, "value": value} for key, value in raw_values.items()]
+        for item in raw_values or []:
+            if isinstance(item, dict):
+                key = str(item.get("key") or "")
+                value = item.get("value")
+                if key in allowed and value not in (None, "", "UNKNOWN"):
+                    state.setdefault("extracted_data", {})[key] = value
     except Exception as exc:
         state["dynamic_extraction_error"] = type(exc).__name__
         state["dynamic_extraction_error_message"] = str(exc)[:500]
