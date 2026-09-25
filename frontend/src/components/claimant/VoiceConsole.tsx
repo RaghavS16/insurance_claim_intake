@@ -78,9 +78,11 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
       {[3, 6, 4, 8, 5, 7, 3].map((h, i) => (
         <div
           key={i}
-          className={`w-1.5 bg-[#0891B2] rounded-full ${
-            isRecording ? `h-${h} waveform-bar delay-${i + 1}` : i === 3 ? "h-3" : "h-2"
-          }`}
+          className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "waveform-bar" : ""}`}
+          style={{
+            height: isRecording ? `${h * 4}px` : i === 3 ? "12px" : "8px",
+            animationDelay: isRecording ? `${i * 90}ms` : undefined,
+          }}
         />
       ))}
     </div>
