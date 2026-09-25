@@ -645,7 +645,13 @@ export default function ClaimantPage() {
     try {
       const form = new FormData();
       form.append("file", file);
-      const result = await apiFetch<{ missing_evidence?: Array<Record<string, unknown>>; evidence_items?: Array<Record<string, unknown>>; message?: string }>(
+      const result = await apiFetch<{
+        missing_evidence?: Array<Record<string, unknown>>;
+        pending_evidence_review?: Array<Record<string, unknown>>;
+        evidence_items?: Array<Record<string, unknown>>;
+        message?: string;
+        agent_message?: string;
+      }>(
         `/api/v1/claims/${ticketId}/evidence`,
         {
           method: "POST",
@@ -655,13 +661,29 @@ export default function ClaimantPage() {
       );
       setMissingEvidence(result.missing_evidence || []);
       setEvidenceItems(result.evidence_items || []);
-      setHistory((prev) => [...prev, {
-        turn: prev.length + 1,
-        speaker: "agent",
-        text: result.message || `I checked “${file.name}” against the claim evidence requirements.`,
-        timestamp: Date.now(),
-        attachment: { name: file.name, size: file.size, type: file.type },
-      } as ConversationTurn]);
+
+      // Evidence belongs to the claimant turn. Render it on the user's side,
+      // then render the AI verification/follow-up as a separate assistant turn.
+      // This mirrors normal ChatGPT attachment semantics and prevents the upload
+      // from looking like something the assistant sent.
+      setHistory((prev) => [
+        ...prev,
+        {
+          turn: prev.length + 1,
+          speaker: "user",
+          text: "",
+          timestamp: Date.now(),
+          attachment: { name: file.name, size: file.size, type: file.type },
+        } as ConversationTurn,
+        ...(result.message
+          ? [{
+              turn: prev.length + 2,
+              speaker: "agent",
+              text: result.message,
+              timestamp: Date.now(),
+            } as ConversationTurn]
+          : []),
+      ]);
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "Could not upload evidence.");
     } finally {
