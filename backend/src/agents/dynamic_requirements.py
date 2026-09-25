@@ -162,9 +162,10 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
     driver_license = match_dl.group(1).upper().strip() if match_dl else None
 
     phone = None
-    phone_match = re.search(r"(?<!\d)(?:\+91[ -]?)?[6-9]\d{9}(?!\d)", text)
+    phone_match = re.search(r"(?<!\d)(?:\+91[ -]?)?[6-9]\d{4}[ -]?\d{5}(?!\d)", text)
     if phone_match:
-        phone = phone_match.group(0).replace(" ", "").replace("-", "")
+        raw_phone = re.sub(r"[ -]", "", phone_match.group(0))
+        phone = raw_phone
 
     # Explicit driver-name constructions avoid swallowing the surrounding sentence.
     driver_name = None
