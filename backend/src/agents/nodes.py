@@ -147,7 +147,10 @@ Return only the final narrative in the description field."""
             candidate = re.sub(r"\b(on|in|at)\s+(yesterday|today|tomorrow)\b", r"\2", candidate, flags=re.I)
             candidate = re.sub(r"\b(I|i)\s+have\s+([^.!?]+?)\s+(yesterday|today)\b", r"I developed \2 \3", candidate, flags=re.I)
             candidate = re.sub(r"\b(on|in|at)\s*([,.!?])", r"\2", candidate, flags=re.I)
-            candidate = re.sub(r"\s{2,}", " ", candidate).strip(" -")
+            candidate = re.sub(r"\s{2,}", " ", candidate).strip(" -•")
+            candidate = re.sub(r"\s+([,.!?])", r"\1", candidate)
+            if candidate and candidate[-1] not in ".!?":
+                candidate += "."
         normalized = _normalize_description(candidate, candidate)
         if normalized:
             state.setdefault("extracted_data", {})["event_description"] = normalized
