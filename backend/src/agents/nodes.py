@@ -43,6 +43,11 @@ class ExtractionPatch(BaseModel):
     clarification: str = ""
     spoken_reply: str = ""
 
+class DescriptionSynthesis(BaseModel):
+    """Canonical incident narrative built from the claimant's fragmented facts."""
+    model_config = ConfigDict(extra="ignore")
+    description: str = ""
+
 SYSTEM_PROMPT = """You are the semantic layer for an insurance claim intake assistant.
 Interpret ONLY the latest claimant utterance, using prior conversation only to resolve references.
 A claimant may provide several claim facts in one sentence, greet you, thank you, ask a question, or correct one field.
@@ -95,6 +100,63 @@ def _invoke_structured(model: Any, prompt: str, schema: type[T]) -> Optional[T]:
 def _history_text(state: ClaimState, limit: int = 8) -> str:
     history = state.get("conversation_history", [])[-limit:]
     return "\n".join(f"{h.get('speaker', 'unknown')}: {h.get('text', '')}" for h in history) or "No previous turns."
+
+
+def _claimant_incident_history(state: ClaimState, limit: int = 12) -> str:
+    """Return only claimant utterances that contain incident/narrative facts."""
+    rows = []
+    for item in state.get("conversation_history", [])[-limit:]:
+        if item.get("speaker") != "user":
+            continue
+        text = " ".join(str(item.get("text") or "").split()).strip()
+        if text and _INCIDENT_TERMS.search(text):
+            rows.append(text)
+    latest = " ".join(str(state.get("last_user_utterance") or "").split()).strip()
+    if latest and _INCIDENT_TERMS.search(latest) and latest not in rows:
+        rows.append(latest)
+    return "\n".join(f"- {row}" for row in rows)
+
+
+def _synthesize_event_description(state: ClaimState) -> None:
+    """Continuously turn fragmented claimant speech into one factual narrative."""
+    history = _claimant_incident_history(state)
+    if not history:
+        return
+    data = state.get("extracted_data") or {}
+    prompt = f"""You are editing an insurance claim incident narrative.
+
+Create one concise, grammatically correct incident description from the claimant's fragmented statements below.
+The claimant is NOT expected to describe the whole event in one message. Combine compatible facts across messages.
+Preserve only facts explicitly stated by the claimant. Never invent symptoms, causes, treatment, dates, locations,
+amounts, diagnoses, or outcomes. Remove speech disfluencies and obvious grammar/ASR errors. Do not include policy
+numbers or claim-processing instructions. A short 1-3 sentence narrative is enough.
+
+Claimant incident statements:
+{history}
+
+Known structured claim facts (use only to disambiguate wording; do not add them unless the claimant mentioned them
+in the incident statements):
+{json.dumps(data, ensure_ascii=False, default=str)}
+
+Return only the final narrative in the description field."""
+    try:
+        result = _invoke_structured(_get_llm(), prompt, DescriptionSynthesis)
+        candidate = result.description.strip() if result else ""
+        normalized = _normalize_description(candidate, candidate)
+        if normalized:
+            state.setdefault("extracted_data", {})["event_description"] = normalized
+            state.setdefault("field_status", {})["event_description"] = "provided"
+            state.setdefault("field_metadata", {})["event_description"] = {
+                "status": "provided",
+                "source_turn": state.get("turn_number", 0),
+                "confidence": 0.98,
+                "evidence": history,
+                "updated_at": _now_iso(),
+            }
+            if "event_description" not in state.setdefault("recently_extracted_fields", []):
+                state["recently_extracted_fields"].append("event_description")
+    except Exception as exc:
+        logger.debug("Incident description synthesis skipped: %s", exc)
 
 def _safe_date(raw: Any, reference: date) -> Optional[str]:
     if raw is None: return None
@@ -444,6 +506,12 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     elif state["recently_extracted_fields"]:
         retries = state.setdefault("consecutive_field_retries", {}); target = state.get("next_question_field") or (state.get("missing_fields") or [None])[0]
         if isinstance(target, str): retries[target] = 0
+    # The claimant may build the incident story over several turns. Re-synthesize the
+    # canonical narrative after any incident-bearing utterance so the collected
+    # description is grammatical and complete rather than a raw ASR fragment.
+    if _INCIDENT_TERMS.search(raw):
+        _synthesize_event_description(state)
+
     if patch.intent == "escalation":
         state["escalate_to_human"] = True; state["escalation_reason"] = "user_requested"; state["conversation_status"] = "escalated"; state["_skip_all"] = True; state["next_question"] = "I understand. I'll connect you with a human claims specialist who can help you directly."; state["message"] = state["next_question"]; return state
     if patch.intent == "closing": state["_skip_all"] = True; state["next_question"] = "Okay. We can continue whenever you're ready."; state["message"] = state["next_question"]; return state
