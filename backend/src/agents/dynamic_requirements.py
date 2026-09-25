@@ -152,6 +152,8 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
 
     police_negative = bool(re.search(r"\b(?:no|didn['’]?t\s+file|wasn['’]?t\s+filed)\b.{0,30}\b(?:police\s+report|fir)\b", text, re.I))
     police_positive = bool(re.search(r"\b(?:yes|filed|have|has)\b.{0,35}\b(?:police\s+report|fir)\b", text, re.I))
+    short_yes = text.strip().lower().strip(" .!?") in {"yes", "yeah", "yep", "correct", "right", "i do", "i have"}
+    short_no = text.strip().lower().strip(" .!?") in {"no", "nope", "i don't", "i do not", "not filed"}
 
     for req in requirements or []:
         key = str(req.get("key") or "").lower()
@@ -167,9 +169,9 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
         if vehicle_make_model and any(term in semantic for term in ("make and model", "make/model", "vehicle make", "car make", "vehicle model")):
             extracted[key] = vehicle_make_model
         if "police" in semantic or "fir" in semantic:
-            if police_negative:
+            if police_negative or short_no:
                 extracted[key] = False
-            elif police_positive:
+            elif police_positive or short_yes:
                 extracted[key] = True
 
     # Preserve backwards-compatible canonical keys for the existing requirement aliases.
