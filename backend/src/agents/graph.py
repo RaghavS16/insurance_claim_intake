@@ -241,16 +241,14 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         "event_location",
         "estimated_claim_amount",
     )
+    # Only baseline context determines the requirement plan. Answers to
+    # requirements and evidence verification state must not invalidate the plan.
     context_payload = {
-        "baseline_facts": {key: data.get(key) for key in planning_fact_keys},
-        "evidence": [
-            {
-                "evidence_key": item.get("evidence_key"),
-                "verification_status": item.get("verification_status"),
-                "detected_document_type": item.get("detected_document_type"),
-            }
-            for item in (state.get("evidence") or [])
-        ],
+        "baseline_facts": {
+            key: data.get(key)
+            for key in planning_fact_keys
+            if data.get(key) not in (None, "", "UNKNOWN")
+        },
     }
     context_digest = hashlib.sha256(
         json.dumps(context_payload, sort_keys=True, default=str).encode("utf-8")
@@ -270,6 +268,9 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
             state["conversation_status"] = "collecting_dynamic"
         return state
 
+    previous_requirements = list(state.get("dynamic_requirements") or [])
+    previous_knowledge = state.get("knowledge_context") or {}
+    previous_rag_status = str(state.get("rag_status") or "")
     context = build_dynamic_context(state)
     state["rag_status"] = context.get("status", "UNKNOWN")
     state["dynamic_requirements"] = context.get("requirements", [])
@@ -281,7 +282,10 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         # RAG refresh is temporarily unavailable. This is especially important after
         # an evidence upload, where the plan itself has not changed but its
         # satisfaction state has.
-        if state.get("dynamic_requirements"):
+        if previous_requirements and previous_rag_status in {"OK", "PROVISIONAL"}:
+            state["dynamic_requirements"] = previous_requirements
+            state["knowledge_context"] = previous_knowledge
+            state["rag_status"] = previous_rag_status
             extract_answers(state)
             state["pending_evidence_review"] = pending_evidence_review(state)
             state["conversation_status"] = "collecting_dynamic"
