@@ -308,3 +308,15 @@ def test_response_planner_asks_dynamic_question_before_submission():
     })
     assert result["conversation_status"] == "collecting_dynamic"
     assert result["next_question"] == "What is your bike's registration number?"
+
+
+def test_generic_document_number_is_information_not_upload():
+    from src.agents.dynamic_requirements import is_evidence_req
+
+    assert is_evidence_req({
+        "key": "document_number",
+        "label": "Document number",
+        "question_hint": "What is the document number?",
+        "required": True,
+        "evidence_type": None,
+    }) is False
