@@ -114,3 +114,10 @@ def test_requirement_planner_does_not_ask_for_same_portal_notification():
     keys = {item["key"] for item in result}
     assert "insurer_call_notification_time" not in keys
     assert "third_party_details" in keys
+
+
+def test_ordinal_claim_date_is_extracted_without_reasking():
+    from src.agents.nodes import _deterministic_date
+    from datetime import date
+
+    assert _deterministic_date("the evening of September 18th, around 7:45 PM", date(2026, 9, 25)) == "2026-09-18"
