@@ -70,3 +70,47 @@ def test_retriever_surfaces_transient_requirement_planning_failure():
 
     assert result["available"] is False
     assert result["status"] == "LLM_TEMPORARILY_UNAVAILABLE"
+
+
+def test_requirement_planner_does_not_ask_for_same_portal_notification():
+    from src.knowledge.requirements import Requirement, RequirementPlan, get_requirements_from_context
+
+    plan = RequirementPlan(
+        requirements=[
+            Requirement(
+                key="insurer_call_notification_time",
+                label="Insurer notification time",
+                question_hint="When did you report the incident to the insurer's call centre?",
+                required=True,
+            ),
+            Requirement(
+                key="third_party_details",
+                label="Third-party details",
+                question_hint="Could you tell me a little about the other vehicle involved?",
+                required=True,
+            ),
+        ]
+    )
+
+    fake_structured = MagicMock()
+    fake_structured.invoke.return_value = plan
+
+    with patch(
+        "src.knowledge.requirements.structured_output",
+        return_value=fake_structured,
+    ), patch(
+        "src.knowledge.requirements.invoke_with_retry",
+        side_effect=lambda operation, operation_name, attempts: operation(),
+    ):
+        result = get_requirements_from_context(
+            MagicMock(),
+            insurance_type="motor",
+            policy_context=[{"id": "p1", "text": "policy wording"}],
+            regulatory_context=[],
+            incident_description="vehicle collision",
+            intake_channel="insurer_web_portal",
+        )
+
+    keys = {item["key"] for item in result}
+    assert "insurer_call_notification_time" not in keys
+    assert "third_party_details" in keys
