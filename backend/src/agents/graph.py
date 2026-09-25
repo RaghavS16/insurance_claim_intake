@@ -271,7 +271,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
     missing_evidence = list(state.get("missing_evidence") or [])
-    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") == "OK"
+    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") in {"OK", "PROVISIONAL"}
 
     # Continuous Gap & Validation Analysis
     gaps_result = analyze_claim_gaps(state)
@@ -333,6 +333,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state.get("confirmed")
         and not missing
         and plan_ready
+        and state.get("rag_status") == "OK"
         and not dynamic_missing
         and not missing_evidence
     ):
