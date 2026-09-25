@@ -121,3 +121,33 @@ def test_ordinal_claim_date_is_extracted_without_reasking():
     from datetime import date
 
     assert _deterministic_date("the evening of September 18th, around 7:45 PM", date(2026, 9, 25)) == "2026-09-18"
+
+
+def test_provisional_planning_keeps_intake_moving_without_policy_documents():
+    from src.knowledge.retriever import KnowledgeRetriever
+
+    provisional = [{
+        "key": "vehicle_damage",
+        "label": "Vehicle damage",
+        "question_hint": "Could you tell me which parts of the bike were damaged?",
+        "required": True,
+        "evidence_type": "photo",
+    }]
+
+    with patch(
+        "src.knowledge.retriever.search",
+        side_effect=[[], []],
+    ), patch(
+        "src.knowledge.retriever.get_provisional_requirements",
+        return_value=provisional,
+    ):
+        result = KnowledgeRetriever().retrieve(
+            insurance_type="motor",
+            policy_number="POL-1409-XI",
+            query="motorcycle collided with a car and the bike fell over",
+        )
+
+    assert result["available"] is True
+    assert result["status"] == "PROVISIONAL"
+    assert result["authoritative"] is False
+    assert result["requirements"] == provisional
