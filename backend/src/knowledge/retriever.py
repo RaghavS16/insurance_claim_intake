@@ -106,6 +106,36 @@ class KnowledgeRetriever:
                     "authoritative": True,
                     "planning_model": source_kind,
                 }
+
+            # If authoritative requirement planning is temporarily unavailable,
+            # keep the claimant conversation moving with a clearly marked
+            # provisional plan derived from the claimant's facts. Submission remains
+            # blocked until an authoritative RAG plan is available.
+            try:
+                provisional = get_provisional_requirements(
+                    fast_llm if "fast_llm" in locals() else None,
+                    insurance_type=insurance_type,
+                    claim_facts={
+                        **facts,
+                        "policy_number": policy_number,
+                        "incident_date": str(incident_date) if incident_date else None,
+                        "incident": incident_description,
+                    },
+                    conversation=incident_description,
+                )
+            except Exception:
+                provisional = []
+            if provisional:
+                return {
+                    "available": True,
+                    "status": "PROVISIONAL",
+                    "requirements": provisional,
+                    "policy": policy,
+                    "regulations": guidance,
+                    "authoritative": False,
+                    "planning_model": "provisional_fallback",
+                }
+
             # Preserve the transient-provider state so the conversational layer can
             # retry RAG instead of incorrectly reporting a permanent missing plan.
             transient_text = str(exc).lower()
