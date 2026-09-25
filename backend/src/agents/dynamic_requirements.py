@@ -1,7 +1,6 @@
 """Dynamic claim-type requirement planning and conversational extraction."""
 from __future__ import annotations
 import re
-import json
 from typing import Any
 from pydantic import BaseModel, Field
 from src.agents.llm_factory import get_configured_llm, invoke_with_retry, structured_output
