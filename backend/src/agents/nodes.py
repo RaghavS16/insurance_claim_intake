@@ -67,12 +67,26 @@ _GENERIC_POLICY_WORDS = {
 }
 _SOCIAL_EXACT = {"hi", "hello", "hey", "thanks", "thank you", "thx", "bye", "goodbye", "ok", "okay", "great", "fine", "perfect", "sure", "got it", "alright", "all right", "yes", "yeah", "yep", "no", "nope"}
 _INCIDENT_TERMS = re.compile(
-    r"\b(accident|crash|collision|damage|damaged|stolen|theft|lost|loss|fire|flood|injur|"
-    r"hospital|hospitalized|admitted|admission|happened|occurred|fever|illness|viral|infection|diagnos|"
-    r"treatment|surgery|doctor|medical|burglary|break[- ]?in|leak|broken|fell|hit|"
-    r"destroyed|ransomware|phishing|breach)\b",
+    r"\b(accident|crash|collision|damage|damaged|damaging|stolen|theft|lost|loss|fire|flood|"
+    r"injur(?:y|ies|ed)?|hurt|scrape(?:d|s)?|hospital|hospitalized|admitted|admission|happened|"
+    r"occurred|fever|illness|viral|infection|diagnos(?:ed|is)?|treatment|surgery|doctor|medical|"
+    r"burglary|break[- ]?in|leak|broken|fell|fall|fallen|hit|struck|impact|clipped|skidded?|"
+    r"swerve|brake(?:d|s)?|rider|vehicle|motorcycle|scooter|ransomware|phishing|breach)\b",
     re.I,
 )
+
+_META_REFERENCE_PATTERNS = (
+    re.compile(r"\b(?:i|we)\s+(?:already\s+)?(?:told|said|mentioned|explained)\s+(?:you\s+)?(?:what happened|the details?|that information|this)\s*(?:and\s+)?", re.I),
+    re.compile(r"\b(?:as|like)\s+i\s+(?:already\s+)?(?:told|said|mentioned|explained)\s+(?:you\s+)?(?:earlier|before)?\s*[,;:]?\s*", re.I),
+    re.compile(r"\b(?:you\s+)?(?:already\s+)?(?:have|got)\s+(?:that|the details?|this information)\s*[,;:]?\s*", re.I),
+)
+
+def _strip_meta_reference(text: str) -> str:
+    """Remove conversational references to information already supplied by the claimant."""
+    cleaned = " ".join(str(text or "").split()).strip()
+    for pattern in _META_REFERENCE_PATTERNS:
+        cleaned = pattern.sub("", cleaned).strip(" ,;:-")
+    return cleaned
 
 
 def _now_iso() -> str: return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -103,15 +117,15 @@ def _history_text(state: ClaimState, limit: int = 8) -> str:
 
 
 def _claimant_incident_history(state: ClaimState, limit: int = 12) -> str:
-    """Return only claimant utterances that contain incident/narrative facts."""
+    """Return claimant incident facts while excluding dialogue about already-supplied facts."""
     rows = []
     for item in state.get("conversation_history", [])[-limit:]:
         if item.get("speaker") != "user":
             continue
-        text = " ".join(str(item.get("text") or "").split()).strip()
+        text = _strip_meta_reference(item.get("text") or "")
         if text and _INCIDENT_TERMS.search(text):
             rows.append(text)
-    latest = " ".join(str(state.get("last_user_utterance") or "").split()).strip()
+    latest = _strip_meta_reference(state.get("last_user_utterance") or "")
     if latest and _INCIDENT_TERMS.search(latest) and latest not in rows:
         rows.append(latest)
     return "\n".join(f"- {row}" for row in rows)
@@ -289,14 +303,35 @@ def _deterministic_policy(text: str) -> Optional[str]:
 def _policy_is_suspicious(value: Any) -> bool: return _clean_policy_candidate(value) is None
 _LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight"}
 
+_LOCATION_TEMPORAL_WORDS = {
+    "morning", "afternoon", "evening", "night", "noon", "midnight",
+    "today", "yesterday", "tomorrow", "tonight", "day", "week",
+}
+
+def _looks_like_temporal_location(value: str) -> bool:
+    low = " ".join(value.lower().split()).strip(" .,")
+    if low in _LOCATION_TEMPORAL_WORDS or low.startswith(("the morning", "the afternoon", "the evening", "the night")):
+        return True
+    return bool(re.fullmatch(r"(?:around|at|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?", low))
+
 def _deterministic_location(text: str) -> Optional[str]:
-    patterns = [r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)", r"\b(?:admitted|hospitalized|treated)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)", r"\b(?:location|place)\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)", r"\b(?:in|at|near)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)"]
+    # Prefer explicit place cues and iterate all generic location matches. Natural
+    # speech often contains "in the evening ... near <place>" in one sentence.
+    patterns = [
+        r"\b(?:incident|accident|event|crash|collision)\s+(?:happened|occurred|took place)\s+(?:in|at|near|on)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)",
+        r"\b(?:incident|accident|event)\s+(?:was|is)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|on|for)\b|[,.!?]|$)",
+        r"\b(?:admitted|hospitalized|treated)\s+(?:in|at|near)\s+(.+?)(?=\s+(?:and|but|with|my|the|this|yesterday|on|for)\b|[,.!?]|$)",
+        r"\b(?:location|place)\s*(?:is|was|:)\s*([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday)\b|[,.!?]|$)",
+        r"\b(?:near|at|by)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday|around|when|while)\b|[,.!?]|$)",
+        r"\b(?:in|on)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?=\s+(?:and|but|with|my|the|this|yesterday|around|when|while)\b|[,.!?]|$)",
+    ]
     for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if not match: continue
-        value = " ".join(match.group(1).split()).strip(" .,")
-        if value.lower() in _LOCATION_STOPWORDS: continue
-        if 2 <= len(value) <= 100: return value
+        for match in re.finditer(pattern, text, re.I):
+            value = " ".join(match.group(1).split()).strip(" .,")
+            if value.lower() in _LOCATION_STOPWORDS or _looks_like_temporal_location(value):
+                continue
+            if 2 <= len(value) <= 100:
+                return value
     return None
 
 def _strip_incident_noise(value: Any) -> str:
@@ -308,17 +343,19 @@ def _strip_incident_noise(value: Any) -> str:
     return re.sub(r"\s{2,}", " ", text).strip(" ,.-")
 
 def _incident_description_from_text(text: str, current: dict[str, Any] | None = None) -> Optional[str]:
-    """Return an incident narrative from claimant text without copying metadata into it."""
-    raw = " ".join(str(text or "").split()).strip()
+    """Return an incident narrative while ignoring references to prior answers."""
+    raw = _strip_meta_reference(text)
     if not raw:
         return None
     return _normalize_description(raw, raw)
 
 
 def _normalize_description(value: Any, raw: str) -> Optional[str]:
-    candidate = _strip_incident_noise(value); raw_clean = " ".join(raw.split()).strip()
+    raw_clean = _strip_meta_reference(raw)
+    candidate = _strip_incident_noise(_strip_meta_reference(value))
     if not candidate or len(candidate) < 4: return None
-    if candidate.casefold() == raw_clean.casefold(): candidate = _strip_incident_noise(raw)
+    if candidate.casefold() == raw_clean.casefold():
+        candidate = _strip_incident_noise(raw_clean)
     if not _INCIDENT_TERMS.search(candidate): return None
     return candidate
 
