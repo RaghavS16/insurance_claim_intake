@@ -165,17 +165,30 @@ Rules:
 5. Never infer a field that is not present in the document.
 6. Return the actual detected document type, not the requested type when they differ.
 """
+    def _normalize_analysis_payload(payload: Any) -> dict[str, Any]:
+        if isinstance(payload, BaseModel):
+            payload = payload.model_dump()
+        if not isinstance(payload, dict):
+            raise ValueError("Evidence model returned an unsupported payload")
+        payload = dict(payload)
+        if isinstance(payload.get("extracted_fields"), dict):
+            payload["extracted_fields"] = [
+                {"key": str(k), "value": str(v)}
+                for k, v in payload["extracted_fields"].items()
+            ]
+        return EvidenceAnalysis.model_validate(payload).model_dump()
+
     data: dict[str, Any] = {}
     try:
         result = get_configured_llm().with_structured_output(EvidenceAnalysis).invoke(prompt)
         if isinstance(result, EvidenceAnalysis):
             data = result.model_dump()
         elif isinstance(result, dict):
-            data = EvidenceAnalysis.model_validate(result).model_dump()
+            data = _normalize_analysis_payload(result)
         elif isinstance(result, BaseModel):
-            data = EvidenceAnalysis.model_validate(result.model_dump()).model_dump()
+            data = _normalize_analysis_payload(result)
         elif hasattr(result, "model_dump") and callable(getattr(result, "model_dump")):
-            data = EvidenceAnalysis.model_validate(getattr(result, "model_dump")()).model_dump()
+            data = _normalize_analysis_payload(getattr(result, "model_dump")())
         else:
             if hasattr(result, "content") and result.content:
                 import json
@@ -185,12 +198,7 @@ Rules:
                     end = msg_content.rfind('}')
                     if start != -1 and end != -1:
                         payload = json.loads(msg_content[start:end+1])
-                        if isinstance(payload.get("extracted_fields"), dict):
-                            payload["extracted_fields"] = [
-                                {"key": str(k), "value": str(v)}
-                                for k, v in payload["extracted_fields"].items()
-                            ]
-                        data = EvidenceAnalysis.model_validate(payload).model_dump()
+                        data = _normalize_analysis_payload(payload)
                     else:
                         raise ValueError("No JSON found in response")
                 except Exception:
