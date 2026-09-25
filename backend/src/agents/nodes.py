@@ -68,7 +68,7 @@ _GENERIC_POLICY_WORDS = {
 _SOCIAL_EXACT = {"hi", "hello", "hey", "thanks", "thank you", "thx", "bye", "goodbye", "ok", "okay", "great", "fine", "perfect", "sure", "got it", "alright", "all right", "yes", "yeah", "yep", "no", "nope"}
 _INCIDENT_TERMS = re.compile(
     r"\b(accident|crash|collision|damage|damaged|stolen|theft|lost|loss|fire|flood|injur|"
-    r"hospital|hospitalized|admitted|admission|fever|illness|viral|infection|diagnos|"
+    r"hospital|hospitalized|admitted|admission|happened|occurred|fever|illness|viral|infection|diagnos|"
     r"treatment|surgery|doctor|medical|burglary|break[- ]?in|leak|broken|fell|hit|"
     r"destroyed|ransomware|phishing|breach)\b",
     re.I,
@@ -142,6 +142,12 @@ Return only the final narrative in the description field."""
     try:
         result = _invoke_structured(_get_llm(), prompt, DescriptionSynthesis)
         candidate = result.description.strip() if result else ""
+        if not candidate:
+            candidate = re.sub(r"\bwas\s+happened\b", "happened", history, flags=re.I)
+            candidate = re.sub(r"\b(on|in|at)\s+(yesterday|today|tomorrow)\b", r"\2", candidate, flags=re.I)
+            candidate = re.sub(r"\b(I|i)\s+have\s+([^.!?]+?)\s+(yesterday|today)\b", r"I developed \2 \3", candidate, flags=re.I)
+            candidate = re.sub(r"\b(on|in|at)\s*([,.!?])", r"\2", candidate, flags=re.I)
+            candidate = re.sub(r"\s{2,}", " ", candidate).strip(" -")
         normalized = _normalize_description(candidate, candidate)
         if normalized:
             state.setdefault("extracted_data", {})["event_description"] = normalized
