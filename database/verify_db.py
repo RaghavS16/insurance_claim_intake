@@ -1,5 +1,5 @@
 """
-Database verification utility to validate tables, schema health, and seed counts.
+Database verification utility to validate tables, schema health, and row counts.
 """
 import logging
 import sys

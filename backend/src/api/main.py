@@ -5,7 +5,7 @@ Production-hardened entry point. This module acts as a slim orchestrator:
 - Configures middleware, exception handlers, and lifecycle events
 - Includes separated route modules for auth, claims, adjuster, and knowledge
 - Provides centralized authentication dependencies
-- Seeds canonical data on first startup
+- Initializes database schema and tables on startup
 
 All business logic has been extracted into dedicated route modules:
 - auth_routes.py: Authentication (signup, login, logout)
@@ -57,13 +57,13 @@ logger = app_logger
 
 
 # ---------------------------------------------------------------------------
-# Database Initialization & Seeding
+# Database Initialization (Schema and Tables Only)
 # ---------------------------------------------------------------------------
-def _init_db_and_seeds():
-    """Initialize development/test fixtures only; production schema is migration-managed."""
+def _init_db_schema():
+    """Initialize database schema and tables only; no demo seed records inserted."""
     try:
         if settings.ENVIRONMENT in ("production", "staging"):
-            logger.info("Production/staging startup: schema creation and demo seeding are disabled; run Alembic migrations separately.")
+            logger.info("Production/staging startup: schema creation is migration-managed; run Alembic migrations separately.")
             return
         Base.metadata.create_all(bind=engine)
 
@@ -149,99 +149,12 @@ def _init_db_and_seeds():
                 except Exception:
                     pass
 
-        # Seed canonical policies and users in development and test environments
-        if settings.ENVIRONMENT in ("development", "test"):
-            db = SessionLocal()
-            try:
-                # 1. Seed policies if empty
-                if db.query(Policy).first() is None:
-                    canonical_policies = [
-                        ("MOT-5521", "motor", 500000, 5000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
-                        ("XYZ123", "motor", 500000, 10000, date(2024, 1, 1), date(2030, 12, 31), True, "John Doe", date(1990, 5, 15), "1234"),
-                        ("HOME456", "home", 1000000, 10000, date(2025, 3, 1), date(2026, 2, 28), True, "Alice Smith", date(1985, 8, 20), "5678"),
-                        ("HLT-7789", "health", 800000, 2000, date(2024, 6, 1), date(2026, 5, 31), True, "Robert Johnson", date(1978, 12, 10), "9012"),
-                        ("SNR-9912", "senior_health", 600000, 3000, date(2024, 1, 1), date(2027, 12, 31), True, "Mary Davis", date(1955, 3, 25), "3456"),
-                        ("TRV-3301", "travel", 200000, 1000, date(2025, 1, 1), date(2025, 12, 31), True, "David Wilson", date(1992, 11, 5), "7890"),
-                        ("CYB-8820", "cyber", 1500000, 15000, date(2024, 1, 1), date(2026, 12, 31), True, "TechCorp LLC", date(2000, 1, 1), "0000"),
-                    ]
-                    for pnum, ptype, cov, ded, eff, exp, active, hname, hdob, hphone in canonical_policies:
-                        db.add(Policy(
-                            id=str(uuid.uuid4()),
-                            policy_number=pnum,
-                            customer_id=None,
-                            policy_type=ptype,
-                            coverage_amount=cov,
-                            deductible=ded,
-                            effective_date=eff,
-                            expiry_date=exp,
-                            is_active=active,
-                            policyholder_name=hname,
-                            policyholder_dob=hdob,
-                            policyholder_phone_last4=hphone,
-                            link_attempts=0,
-                        ))
-                    db.commit()
-
-                # 2. Seed adjusters roster if empty
-                canonical_adjusters = [
-                    ("motor", "Priya Sharma", "priya.motor@insure.co", "+91 98450 10101"),
-                    ("home", "Rohan Mehta", "rohan.home@insure.co", "+91 98450 10102"),
-                    ("health", "Dr. Anita Roy", "anita.health@insure.co", "+91 98450 10103"),
-                    ("senior_health", "Dr. V. Rao", "rao.senior@insure.co", "+91 98450 10104"),
-                    ("travel", "Vikram Sen", "vikram.travel@insure.co", "+91 98450 10105"),
-                    ("cyber", "Neha Kapoor", "neha.cyber@insure.co", "+91 98450 10106"),
-                ]
-                for spec, name, email, phone in canonical_adjusters:
-                    existing_adj = db.query(Adjuster).filter(Adjuster.email == email).first()
-                    if not existing_adj:
-                        db.add(Adjuster(
-                            id=str(uuid.uuid4()),
-                            name=name,
-                            email=email,
-                            phone=phone,
-                            specialization=spec,
-                            claims_assigned=0,
-                            is_active=True,
-                        ))
-                db.commit()
-
-                # 3. Seed canonical users (Admin, Adjusters, Claimant)
-                canonical_users = [
-                    ("System Admin", "admin@insure.co", "+91 98000 00001", "AdminPassword123!", "ADMIN"),
-                    ("Test Admin", "admin@test.com", "+91 98000 00002", "AdminPassword123!", "ADMIN"),
-                    ("John Doe", "john@test.com", "9876541234", "ClaimantPassword123!", "CLAIMANT"),
-                ]
-                # Add adjusters to canonical users
-                for spec, name, email, phone in canonical_adjusters:
-                    canonical_users.append((name, email, phone, "AdjusterPassword123!", "ADJUSTER"))
-
-                for uname, uemail, uphone, upass, urole in canonical_users:
-                    existing_u = db.query(User).filter(User.email == uemail).first()
-                    if not existing_u:
-                        db.add(User(
-                            id=str(uuid.uuid4()),
-                            full_name=uname,
-                            email=uemail,
-                            phone=uphone,
-                            password_hash=get_password_hash(upass),
-                            role=urole,
-                            status="active",
-                        ))
-                    else:
-                        # Ensure active status and valid role
-                        if existing_u.status != "active":
-                            existing_u.status = "active"
-                        if existing_u.role != urole:
-                            existing_u.role = urole
-
-                db.commit()
-                logger.info("Database initialized with canonical policies, adjusters, and users (including Admin).")
-            finally:
-                db.close()
-        else:
-            logger.info("Production environment detected: Skipping automatic demo record seeding.")
+        logger.info("Database schema and tables initialized.")
     except Exception as exc:
         logger.warning("Database schema check notice: %s", exc)
+
+
+_init_db_and_seeds = _init_db_schema  # Backward-compatible alias
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +164,7 @@ def _init_db_and_seeds():
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle manager."""
     settings.validate_startup()
-    _init_db_and_seeds()
+    _init_db_schema()
     yield
     # Graceful shutdown: dispose connection pool
     dispose_engine()
