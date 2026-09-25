@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import json
 
 from langgraph.graph import END, StateGraph
 
@@ -222,13 +224,24 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
 
     # Bump when requirement-planning workflow semantics change so claims do not
     # reuse a stale RAG plan generated under an older intake context.
-    context_key = "intake-channel-v2|" + "|".join(
-        str(data.get(k) or "")
-        for k in ("insurance_type", "policy_id", "event_date", "event_description")
-    )
+    context_payload = {
+        "facts": data,
+        "evidence": [
+            {
+                "evidence_key": item.get("evidence_key"),
+                "verification_status": item.get("verification_status"),
+                "detected_document_type": item.get("detected_document_type"),
+            }
+            for item in (state.get("evidence") or [])
+        ],
+    }
+    context_digest = hashlib.sha256(
+        json.dumps(context_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:24]
+    context_key = f"intake-channel-v3|{context_digest}"
     if (
         state.get("rag_context_key") == context_key
-        and state.get("rag_status") == "OK"
+        and state.get("rag_status") in {"OK", "PROVISIONAL"}
         and state.get("dynamic_requirements")
     ):
         extract_answers(state)
@@ -290,7 +303,12 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["conversation_status"] = "waiting_for_knowledge"
         state["next_question_field"] = "knowledge"
         status = state.get("rag_status")
-        if status == "LLM_TEMPORARILY_UNAVAILABLE":
+        if status == "LLM_CONFIGURATION_UNAVAILABLE":
+            state["next_question"] = (
+                "Thanks, the basic details are verified. The claim-specific guidance service is not configured yet. "
+                "I’ll keep your verified details safely saved so we can continue once that service is available."
+            )
+        elif status == "LLM_TEMPORARILY_UNAVAILABLE":
             state["next_question"] = (
                 "Thanks, the basic details are verified. I’m continuing with the claim-specific details now."
             )
