@@ -312,7 +312,7 @@ def _deterministic_policy(text: str) -> Optional[str]:
     return None
 
 def _policy_is_suspicious(value: Any) -> bool: return _clean_policy_candidate(value) is None
-_LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight"}
+_LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight", "scene", "the scene", "spot", "the spot", "site", "the site", "here", "there", "the place"}
 
 _LOCATION_TEMPORAL_WORDS = {
     "morning", "afternoon", "evening", "night", "noon", "midnight",
