@@ -7,6 +7,7 @@ export interface ConversationTurn {
   segment_id?: string;
   global_seq?: number;
   timestamp?: number;
+  attachment?: { name: string; size?: number; type?: string };
 }
 
 interface ChatTranscriptProps {

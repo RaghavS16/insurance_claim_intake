@@ -10,6 +10,7 @@ on:
       - main
       - "refactor/pipecat-voice-migration"
       - "fix/**"
+      - "production-grade-hardening-**"
     paths:
       - "frontend/**"
       - ".github/workflows/frontend-tests.yml"

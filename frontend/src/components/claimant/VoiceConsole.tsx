@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 
 interface VoiceConsoleProps {
   isRecording: boolean;
@@ -29,7 +29,17 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
   onScrollToBottom,
   onUploadEvidence,
   evidenceUploading,
-}) => (
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 42), 160)}px`;
+  }, [textInput]);
+
+  return (
   <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white/95 to-transparent pt-3 pb-4 px-4 md:px-8 flex flex-col items-center justify-end z-20 pointer-events-none">
     {/* Floating Scroll to latest button placed directly above the waveform audio visualizer */}
     {showScrollBottom && onScrollToBottom && (
@@ -48,7 +58,7 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
     {onUploadEvidence && (
       <label className="pointer-events-auto mb-3 flex items-center gap-2 px-4 py-2 rounded-full border border-[#bdc8ce] bg-white hover:bg-[#f7f9fb] text-xs font-semibold text-[#505f76] cursor-pointer shadow-sm">
         <span className="material-symbols-outlined text-[17px]">upload_file</span>
-        <span>{evidenceUploading ? "Uploading evidence…" : "Upload supporting evidence"}</span>
+        <span>{evidenceUploading ? "Uploading Evidence…" : "Upload Evidence"}</span>
         <input
           type="file"
           className="hidden"
@@ -68,9 +78,11 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
       {[3, 6, 4, 8, 5, 7, 3].map((h, i) => (
         <div
           key={i}
-          className={`w-1.5 bg-[#0891B2] rounded-full ${
-            isRecording ? `h-${h} waveform-bar delay-${i + 1}` : i === 3 ? "h-3" : "h-2"
-          }`}
+          className={`w-1.5 bg-[#0891B2] rounded-full ${isRecording ? "waveform-bar" : ""}`}
+          style={{
+            height: isRecording ? `${h * 4}px` : i === 3 ? "12px" : "8px",
+            animationDelay: isRecording ? `${i * 90}ms` : undefined,
+          }}
         />
       ))}
     </div>
@@ -89,12 +101,20 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
     {/* Text input mode form */}
     {textMode && (
       <form onSubmit={onSendText} className="w-full max-w-lg flex items-center gap-2 mb-3 pointer-events-auto">
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
+          rows={1}
           placeholder="Type incident details, dates, or estimates..."
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
-          className="input-minimal flex-1 bg-[#f7f9fb] border border-[#bdc8ce] rounded-full px-4 py-2 text-sm text-[#191c1e] placeholder:text-[#6e797e]"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (textInput.trim()) onSendText(e as unknown as React.FormEvent);
+            }
+          }}
+          className="input-minimal flex-1 resize-none overflow-y-auto bg-[#f7f9fb] border border-[#bdc8ce] rounded-2xl px-4 py-2.5 text-sm leading-5 text-[#191c1e] placeholder:text-[#6e797e] max-h-40"
+          style={{ minHeight: "42px" }}
         />
         <button
           type="submit"
@@ -145,5 +165,6 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({
       </button>
     </div>
   </div>
-);
+  );
+};
 

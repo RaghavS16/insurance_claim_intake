@@ -1,16 +1,17 @@
 services:
   postgres:
     image: pgvector/pgvector:pg15
+    restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: DBpassword
-      POSTGRES_DB: insurance_claims
+      POSTGRES_DB: ${POSTGRES_DB:-insurance_claims}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
-      - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d insurance_claims"]
       interval: 10s
@@ -22,7 +23,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -31,49 +32,67 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
-      DATABASE_URL: postgresql://postgres:DBpassword@postgres:5432/insurance_claims
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-insurance_claims}
       REDIS_URL: redis://redis:6379/0
-      LLM_PROVIDER: ${LLM_PROVIDER:-cloud}
-      CLOUD_LLM_MODEL: ${CLOUD_LLM_MODEL:-google/gemma-4-26b-a4b-it:free}
-      CLOUD_LLM_BASE_URL: ${CLOUD_LLM_BASE_URL:-https://openrouter.ai/api/v1}
-      CLOUD_LLM_API_KEY: ${CLOUD_LLM_API_KEY:-}
-      CLOUD_LLM_FALLBACK_MODELS: ${CLOUD_LLM_FALLBACK_MODELS:-openrouter/free}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen/qwen3-embedding-0.6b}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-huggingface}
+      FAST_LLM_PROVIDER: ${FAST_LLM_PROVIDER:-huggingface}
+      FAST_LLM_MODEL: ${FAST_LLM_MODEL:-openai/gpt-oss-20b:groq}
+      REASONING_LLM_PROVIDER: ${REASONING_LLM_PROVIDER:-huggingface}
+      REASONING_LLM_MODEL: ${REASONING_LLM_MODEL:-openai/gpt-oss-120b:groq}
+      HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN}
+      HF_BASE_URL: ${HF_BASE_URL:-https://router.huggingface.co/v1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      FAST_LLM_TIMEOUT_SECONDS: ${FAST_LLM_TIMEOUT_SECONDS:-8}
+      REASONING_LLM_TIMEOUT_SECONDS: ${REASONING_LLM_TIMEOUT_SECONDS:-20}
+      FAST_LLM_RETRY_ATTEMPTS: ${FAST_LLM_RETRY_ATTEMPTS:-1}
+      REASONING_LLM_RETRY_ATTEMPTS: ${REASONING_LLM_RETRY_ATTEMPTS:-1}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-8}
+      LLM_RETRY_ATTEMPTS: ${LLM_RETRY_ATTEMPTS:-1}
+      LLM_RETRY_BASE_DELAY_SECONDS: ${LLM_RETRY_BASE_DELAY_SECONDS:-0.25}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fastembed}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
       AWS_REGION: ${AWS_REGION:-ap-south-1}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_KNOWLEDGE_PREFIX: ${S3_KNOWLEDGE_PREFIX:-knowledge}
       S3_EVIDENCE_PREFIX: ${S3_EVIDENCE_PREFIX:-claims}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      ENVIRONMENT: production
+      VAD_AGGRESSIVENESS: ${VAD_AGGRESSIVENESS:-1}
+      VOICE_TURN_SILENCE_SECONDS: ${VOICE_TURN_SILENCE_SECONDS:-0.55}
+      VOICE_MAX_QUEUED_TURNS: ${VOICE_MAX_QUEUED_TURNS:-1}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)\""]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
-    restart: unless-stopped
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       backend:
         condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   postgres_data:

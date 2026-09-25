@@ -34,25 +34,59 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
     REDIS_URL: Optional[str] = None
 
-    LLM_PROVIDER: str = "ollama"
+    LLM_PROVIDER: str = "huggingface"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
-    CLOUD_LLM_MODEL: str = "Qwen/Qwen3.5-27B"
-    CLOUD_LLM_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    CLOUD_LLM_FALLBACK_MODELS: str = "openrouter/free"
+    CLOUD_LLM_MODEL: str = ""
+
+    # Production conversational AI routing.
+    FAST_LLM_PROVIDER: str = "huggingface"
+    FAST_LLM_MODEL: str = "openai/gpt-oss-20b:groq"
+    REASONING_LLM_PROVIDER: str = "huggingface"
+    REASONING_LLM_MODEL: str = "openai/gpt-oss-120b:groq"
+    HF_TOKEN: Optional[str] = None
+    HF_BASE_URL: str = "https://router.huggingface.co/v1"
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    FAST_LLM_TIMEOUT_SECONDS: float = Field(8.0, ge=2.0, le=60.0)
+    REASONING_LLM_TIMEOUT_SECONDS: float = Field(20.0, ge=3.0, le=120.0)
+    FAST_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
+    REASONING_LLM_RETRY_ATTEMPTS: int = Field(1, ge=1, le=2)
+    # Voice turns are finalized only after VAD confirms silence, then an
+    # additional short debounce protects against trailing STT packets.
+    VOICE_TURN_SILENCE_SECONDS: float = Field(0.3, ge=0.15, le=2.0)
+    VOICE_VAD_STOP_SECONDS: float = Field(0.65, ge=0.3, le=2.0)
+    VOICE_MAX_QUEUED_TURNS: int = Field(1, ge=1, le=3)
+    CLOUD_LLM_BASE_URL: Optional[str] = None
+    CLOUD_LLM_FALLBACK_MODELS: str = ""
     CLOUD_LLM_API_KEY: Optional[str] = None
-    EMBEDDING_BASE_URL: Optional[str] = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "qwen/qwen3-embedding-0.6b"
+    GEMINI_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+    GEMINI_FAST_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_MAX_OUTPUT_TOKENS: int = Field(2048, ge=256, le=65536)
+    EMBEDDING_PROVIDER: str = "ollama"
+    EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
+    EMBEDDING_MODEL: str = "nomic-embed-text"
+    EMBEDDING_API_KEY: Optional[str] = None
     EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
-    RERANK_MODEL: Optional[str] = "qwen/qwen3-reranker-0.6b"
+    RERANK_MODEL: Optional[str] = None
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
     AWS_REGION: str = "ap-south-1"
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_SESSION_TOKEN: Optional[str] = None
     S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT_URL: Optional[str] = None
+    S3_SERVER_SIDE_ENCRYPTION: str = "AES256"
+    S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
     S3_EVIDENCE_PREFIX: str = "claims"
-    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    KNOWLEDGE_MAX_UPLOAD_BYTES: int = 150 * 1024 * 1024
     LLM_TIMEOUT_SECONDS: int = Field(20, ge=5, le=120)
+    LLM_RETRY_ATTEMPTS: int = Field(3, ge=1, le=5)
+    LLM_RETRY_BASE_DELAY_SECONDS: float = Field(1.0, ge=0.1, le=10.0)
 
     STT_MODEL_SIZE: str = "small"
     STT_LANGUAGE: str = "en"
@@ -66,6 +100,8 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
+    MAX_EVIDENCE_UPLOAD_BYTES: int = 25 * 1024 * 1024
+    REQUIRE_S3_IN_PRODUCTION: bool = True
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     @property
@@ -79,6 +115,24 @@ class Settings(BaseSettings):
         norm = v.lower().strip()
         if norm not in valid_envs:
             raise ValueError(f"ENVIRONMENT must be one of {valid_envs}, got '{v}'")
+        return norm
+
+    @field_validator("LLM_PROVIDER")
+    @classmethod
+    def validate_llm_provider(cls, v: str) -> str:
+        norm = v.lower().strip()
+        allowed = {"huggingface", "hf", "inference-providers", "gemini", "google", "openai", "cloud", "ollama", "groq"}
+        if norm not in allowed:
+            raise ValueError(f"LLM_PROVIDER must be one of {sorted(allowed)}.")
+        return "gemini" if norm == "google" else ("openai" if norm == "cloud" else norm)
+
+    @field_validator("EMBEDDING_PROVIDER")
+    @classmethod
+    def validate_embedding_provider(cls, v: str) -> str:
+        norm = v.lower().strip()
+        allowed = {"ollama", "gemini", "fastembed", "local", "inmemory", "openai"}
+        if norm not in allowed:
+            raise ValueError(f"EMBEDDING_PROVIDER must be one of {sorted(allowed)}.")
         return norm
 
     @field_validator("DATABASE_URL")
@@ -103,7 +157,28 @@ class Settings(BaseSettings):
                 raise RuntimeError("SECRET_KEY must be at least 32 characters.")
             if "sqlite" in self.DATABASE_URL.lower():
                 raise RuntimeError("SQLite is not supported for production/staging.")
-        Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+            if "DBpassword" in self.DATABASE_URL or "REPLACE_WITH" in self.DATABASE_URL:
+                raise RuntimeError("DATABASE_URL still contains a development/example credential.")
+        if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
+            Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
+            raise RuntimeError("S3_BUCKET must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.LLM_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):
+            raise RuntimeError("A Gemini/Google API key is required when LLM_PROVIDER=gemini.")
+        hf_needed = (
+            self.FAST_LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+            or self.REASONING_LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+            or self.LLM_PROVIDER in ("huggingface", "hf", "inference-providers")
+        )
+        if self.ENVIRONMENT in ("production", "staging") and hf_needed and not self.HF_TOKEN:
+            raise RuntimeError("HF_TOKEN is required when a production LLM profile uses Hugging Face Inference Providers.")
+        groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
+        if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")
+        if self.ENVIRONMENT in ("production", "staging") and self.EMBEDDING_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY or self.EMBEDDING_API_KEY):
+            raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
+        if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
+            raise RuntimeError("OpenRouter cannot be used as the embedding endpoint; configure a real embedding provider.")
 
 
 settings = Settings()

@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { apiFetch } from "../lib/api";
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
@@ -22,16 +21,14 @@ export default function ForgotPasswordPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/forgot-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || "Failed to send reset code. Please try again.");
-      }
+      const data = await apiFetch<{ message?: string }>(
+        "/api/v1/auth/forgot-password",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim() }),
+        },
+      );
 
       setSuccessMsg(data.message || "A 6-digit verification code has been sent to your email.");
       setTimeout(() => {

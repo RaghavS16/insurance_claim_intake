@@ -31,9 +31,6 @@ class KnowledgeDocument(Base):
     source_uri: Mapped[str] = mapped_column(String, nullable=False)
     document_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     insurance_type: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
-    policy_number: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
-    effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
-    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     uploaded_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True)
     metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
@@ -46,7 +43,7 @@ class KnowledgeChunk(Base):
     document_id: Mapped[str] = _UUID(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(768), nullable=False)
     metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
     document: Mapped["KnowledgeDocument"] = relationship("KnowledgeDocument", back_populates="chunks")
 
@@ -156,6 +153,7 @@ class ConversationTurn(Base):
     speaker: Mapped[str] = mapped_column(String, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    attachment: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     claim: Mapped["Claim"] = relationship("Claim", back_populates="turns")

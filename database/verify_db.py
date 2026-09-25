@@ -1,15 +1,10 @@
 """
-Database verification utility to validate tables, schema health, and seed counts.
+Database verification utility to validate tables, schema health, and row counts.
 """
 import logging
 import sys
-from pathlib import Path
 
-# Add backend to sys.path
-backend_path = Path(__file__).resolve().parent.parent / "backend"
-if str(backend_path) not in sys.path:
-    sys.path.insert(0, str(backend_path))
-
+from database._db_helpers import SessionLocal  # bootstraps sys.path
 from src.config import settings
 import psycopg2
 

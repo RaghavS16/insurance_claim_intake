@@ -74,14 +74,17 @@ def _requested_correction_field(text: str, state) -> str | None:
 
 
 def _correction_prompt(field: str | None) -> str:
-    return {
+    prompts: dict[str, str] = {
         "estimated_claim_amount": "No problem. What is the corrected loss or repair amount?",
         "policy_id": "No problem. What is the correct policy number?",
         "event_location": "No problem. What is the correct incident location?",
         "event_date": "No problem. What is the correct incident date?",
         "insurance_type": "No problem. What is the correct insurance type?",
         "event_description": "No problem. Please tell me the correct description of what happened.",
-    }.get(field, "No problem. Tell me which detail you'd like to correct.")
+    }
+    if field and field in prompts:
+        return prompts[field]
+    return "No problem. Tell me which detail you'd like to correct."
 
 
 def conversation_turn_processor(state):
@@ -111,12 +114,41 @@ def conversation_turn_processor(state):
     state = nodes.conversation_turn_processor(state)
 
     if _is_conversational_filler(raw) and not state.get("recently_extracted_fields"):
+        # After baseline confirmation, short acknowledgements such as "okay",
+        # "sure", and "go ahead" mean "continue". They must not terminate the
+        # graph when RAG/policy processing is waiting or retryable.
+        policy_verified = bool(
+            state.get("policy_valid")
+            or (state.get("policy_verification") or {}).get("valid")
+            or state.get("_workflow_event") == "policy_verified"
+        )
+        knowledge_retry = bool(
+            state.get("confirmed")
+            and (
+                policy_verified
+                or state.get("rag_status") in {
+                    "LLM_TEMPORARILY_UNAVAILABLE",
+                    "REQUIREMENT_PLAN_UNAVAILABLE",
+                    "NO_RELEVANT_KNOWLEDGE",
+                    "WAITING_FOR_POLICY_VERIFICATION",
+                }
+            )
+        )
+        # A confirmation that just set confirmed=True is itself a workflow-driving
+        # turn. Do not swallow it as filler merely because policy verification has
+        # not run yet. The outer turn processor will verify the policy and then
+        # immediately enter the RAG requirement-planning stage.
+        if not state.get("confirmed") and not knowledge_retry:
+            state["last_intent"] = "filler"
+            state["_skip_all"] = True
+            state["spoken_response"] = ""
+            state["next_question"] = "I'm listening. Take your time; continue when you're ready."
+            state["message"] = state["next_question"]
+            return state
         state["last_intent"] = "filler"
-        state["_skip_all"] = True
         state["spoken_response"] = ""
-        state["next_question"] = "I'm listening. Take your time; continue when you're ready."
-        state["message"] = state["next_question"]
-        return state
+        state["_skip_all"] = False
+        state["conversation_status"] = "retrying_knowledge"
 
     if not state.get("extracted_data", {}).get("event_description"):
         description = _incident_description_from_text(raw, state)
@@ -138,23 +170,14 @@ def conversation_turn_processor(state):
             state["confirmed"] = True
             state["awaiting_confirmation"] = False
             state["conversation_status"] = "pending_verification"
-            state["_skip_all"] = True
-            state["next_question"] = "Thanks. I’ve confirmed those claim details. I’ll verify the policy next."
-            state["message"] = state["next_question"]
         elif state.get("last_intent") == "rejection" or _is_negative(raw):
             state["confirmed"] = False
             state["awaiting_confirmation"] = False
             state["conversation_status"] = "collecting"
-            state["_skip_all"] = True
-            state["next_question"] = "No problem. Tell me which detail you'd like to correct."
-            state["message"] = state["next_question"]
         elif re.search(r"\b(?:sorry|wrong|incorrect|mistake|correction|corrected|instead|change|update|revised?)\b", raw, re.I):
             state["confirmed"] = False
             state["awaiting_confirmation"] = False
             state["conversation_status"] = "collecting"
-            state["_skip_all"] = True
-            state["next_question"] = _correction_prompt(_requested_correction_field(raw, state))
-            state["message"] = state["next_question"]
 
     return state
 

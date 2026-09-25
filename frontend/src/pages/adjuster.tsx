@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/router";
 import { getAuthToken, clearAuthToken } from "@/lib/auth";
+import { useAuthApi } from "@/lib/useAuthApi";
+import { apiFetch } from "@/lib/api";
 import {
   AdjusterTopBar,
   AdjusterSidebar,
@@ -20,7 +22,6 @@ import {
   money,
 } from "@/components/adjuster";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function AdjusterPage() {
   const router = useRouter();
@@ -44,30 +45,7 @@ export default function AdjusterPage() {
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
-  const headers = useCallback((): Record<string, string> => {
-    const t = getAuthToken();
-    return t ? { Authorization: "Bearer " + t } : {};
-  }, []);
-
-  const api = useCallback(
-    async (path: string, opts: RequestInit = {}) => {
-      const merged = new Headers(opts.headers);
-      const t = getAuthToken();
-      if (t) merged.set("Authorization", "Bearer " + t);
-      const r = await fetch(API + path, { ...opts, headers: merged });
-      if (r.status === 401) {
-        clearAuthToken();
-        router.push("/login");
-        throw new Error("Authentication expired.");
-      }
-      if (!r.ok) {
-        const b = (await r.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(b.detail || "Request failed.");
-      }
-      return r.json();
-    },
-    [router]
-  );
+  const api = useAuthApi();
 
   const loadQueue = useCallback(async () => {
     try {
@@ -168,17 +146,19 @@ export default function AdjusterPage() {
       form.append("document_type", knowledgeType);
       if (knowledgeInsurance) form.append("insurance_type", knowledgeInsurance);
       if (knowledgePolicy) form.append("policy_number", knowledgePolicy);
-      const d = await fetch(API + "/api/v1/knowledge/upload", {
-        method: "POST",
-        headers: headers(),
-        body: form,
-      });
-      const b = (await d.json()) as { detail?: string; source_name?: string };
-      if (!d.ok) throw new Error(b.detail || "Upload failed");
+      const token = getAuthToken();
+      const d = await apiFetch<{ detail?: string; source_name?: string }>(
+        "/api/v1/knowledge/upload",
+        {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+        },
+      );
       setKnowledgeFile(null);
       setSuccessMessage("Knowledge document uploaded and indexed successfully!");
       setTimeout(() => setSuccessMessage(""), 3000);
-      setKnowledgeQuery(b.source_name || knowledgeQuery);
+      setKnowledgeQuery(d.source_name || knowledgeQuery);
       await searchKnowledge();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to upload knowledge document.");
@@ -248,8 +228,8 @@ export default function AdjusterPage() {
   useEffect(() => {
     let ignore = false;
     if (view === "copilot" && selected && !file?.copilot?.summary) {
-      api("/api/v1/adjuster/claims/" + selected + "/copilot")
-        .then((d: { analysis?: CopilotAnalysis; sources?: KnowledgeItem[] }) => {
+      api<{ analysis?: CopilotAnalysis; sources?: KnowledgeItem[] }>("/api/v1/adjuster/claims/" + selected + "/copilot")
+        .then((d) => {
           if (!ignore) {
             setFile((prev) =>
               prev
@@ -279,8 +259,8 @@ export default function AdjusterPage() {
       router.replace("/login");
       return;
     }
-    api("/api/v1/auth/me")
-      .then((u: AdjusterUser) => {
+    api<AdjusterUser>("/api/v1/auth/me")
+      .then((u) => {
         if (u.role !== "ADJUSTER" && u.role !== "ADMIN") {
           router.replace("/claimant");
           return;

@@ -1,9 +1,8 @@
 import React, { useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-import { setAuthToken } from "../lib/auth";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { setAuthToken, redirectByRole } from "../lib/auth";
+import { apiFetch } from "../lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,39 +23,23 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      // Step 1: authenticate
+      const loginData = await apiFetch<{ access_token: string }>(
+        "/api/v1/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        },
+      );
+      setAuthToken(loginData.access_token, rememberMe);
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "Invalid email or password.");
-      }
-
-      const data = await res.json();
-      setAuthToken(data.access_token, rememberMe);
-
-      // Fetch user role to determine redirection
-      const meRes = await fetch(`${API_BASE}/api/v1/auth/me`, {
-        headers: { Authorization: `Bearer ${data.access_token}` },
-      });
-
-      if (!meRes.ok) {
-        throw new Error("Failed to retrieve user profile.");
-      }
-
-      const meData = await meRes.json();
-      if (meData.role === "CLAIMANT") {
-        router.push("/claimant");
-      } else if (meData.role === "ADJUSTER") {
-        router.push("/adjuster");
-      } else if (meData.role === "ADMIN") {
-        router.push("/admin");
-      } else {
-        setError("Invalid user role.");
-      }
+      // Step 2: fetch profile and redirect to the right dashboard
+      const meData = await apiFetch<{ role: string }>(
+        "/api/v1/auth/me",
+        { token: loginData.access_token },
+      );
+      redirectByRole(meData.role, router);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "An error occurred during login.");
     } finally {

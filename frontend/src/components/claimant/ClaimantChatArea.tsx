@@ -25,6 +25,7 @@ interface ClaimantChatAreaProps {
   onSelectPromptSuggestion?: (text: string) => void;
   onExportTranscript?: () => void;
   onScrollChange?: (isScrolledUp: boolean) => void;
+  pendingEvidenceName?: string | null;
 }
 
 const formatMessageTime = (ts?: number | string | null) => {
@@ -45,6 +46,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   linkedPolicies = [],
   onSelectPromptSuggestion,
   onScrollChange,
+  pendingEvidenceName,
 }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
@@ -63,16 +65,6 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
     el.addEventListener("scroll", handleScroll, { passive: true });
     return () => el.removeEventListener("scroll", handleScroll);
   }, [chatContainerRef, onScrollChange]);
-
-  // Auto-scroll when new messages arrive if user is near bottom
-  useEffect(() => {
-    const el = chatContainerRef.current;
-    if (!el) return;
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 280;
-    if (isNearBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [history.length, partialSegments.size, agentState, chatContainerRef]);
 
   const handleCopyText = (text: string, idx: number) => {
     navigator.clipboard.writeText(text);
@@ -101,7 +93,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   return (
     <div
       ref={chatContainerRef}
-      className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
+      className={`flex-1 p-4 md:p-8 space-y-5 pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
         ? "flex flex-col items-center justify-center min-h-full overflow-y-auto"
         : "overflow-y-auto"
         }`}
@@ -156,6 +148,15 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
                   <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
                     {turn.text}
                   </p>
+                  {turn.attachment && (
+                    <div className="mt-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3 py-2">
+                      <span className="material-symbols-outlined text-[#00647c]">description</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-slate-700">{turn.attachment.name}</div>
+                        <div className="text-[10px] text-slate-400">Evidence uploaded</div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Bubble Action Bar on Hover */}
                   <div className="absolute right-2 -bottom-3 hidden group-hover:flex items-center gap-1 bg-white border border-slate-200 shadow-sm rounded-lg px-1 py-0.5 z-10">
@@ -224,9 +225,20 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
 
                 {/* User Bubble */}
                 <div className="relative bg-gradient-to-r from-[#00647c] to-[#004e61] text-white p-4 rounded-2xl rounded-tr-xs shadow-xs">
-                  <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
-                    {turn.text}
-                  </p>
+                  {turn.attachment && (
+                    <div className="mb-2 flex items-center gap-3 rounded-xl bg-white/10 border border-white/20 px-3 py-2">
+                      <span className="material-symbols-outlined text-base">attach_file</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold">{turn.attachment.name}</div>
+                        <div className="text-[10px] text-white/70">Evidence attached</div>
+                      </div>
+                    </div>
+                  )}
+                  {turn.text && (
+                    <p className="font-body text-xs md:text-sm leading-relaxed whitespace-pre-line">
+                      {turn.text}
+                    </p>
+                  )}
 
                   {/* Copy Button */}
                   <div className="absolute left-2 -bottom-3 hidden group-hover:flex items-center gap-1 bg-white text-slate-600 border border-slate-200 shadow-sm rounded-lg px-1 py-0.5 z-10">
@@ -291,6 +303,17 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
         </div>
       )}
 
+
+      {pendingEvidenceName && (
+        <div className="flex gap-3 max-w-[88%] md:max-w-[80%] ml-auto justify-end animate-pulse">
+          <div className="flex flex-col gap-1 items-end">
+            <span className="text-[11px] text-[#00647c] font-semibold">Uploading Evidence…</span>
+            <div className="rounded-2xl bg-[#00647c]/10 border border-[#0891B2]/30 px-4 py-3 text-xs text-slate-600">
+              {pendingEvidenceName}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Explicit Anchor for smooth and accurate scroll to latest */}
       <div ref={messagesEndRef} className="h-1 w-full shrink-0" aria-hidden="true" />

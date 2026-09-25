@@ -8,12 +8,10 @@ class DocumentMetadata(BaseModel):
     title: str = ""
     document_type: str = "unknown"
     insurance_type: str | None = None
-    policy_number: str | None = None
-    effective_from: date | None = None
-    effective_to: date | None = None
     document_scope: str = Field(default="general", description="Short description of what this document governs.")
 
 def infer_metadata(text: str, filename: str, document_type_hint: str | None = None) -> DocumentMetadata:
+    meta = None
     prompt = f"""Analyze this insurance document and extract metadata for retrieval.
 Do not invent values. If a value is not explicit, return null/empty.
 Filename: {filename}
@@ -24,7 +22,21 @@ Return structured metadata only."""
     try:
         result = get_configured_llm().with_structured_output(DocumentMetadata).invoke(prompt)
         if isinstance(result, DocumentMetadata):
-            return result
+            meta = result
     except Exception:
         pass
-    return DocumentMetadata(title=filename)
+    if meta is None:
+        meta = DocumentMetadata(title=filename)
+    if not meta.insurance_type:
+        low = filename.lower()
+        if "motor" in low or "vehicle" in low or "car" in low or "bike" in low:
+            meta.insurance_type = "motor"
+        elif "health" in low or "medical" in low:
+            meta.insurance_type = "health"
+        elif "travel" in low:
+            meta.insurance_type = "travel"
+        elif "cyber" in low:
+            meta.insurance_type = "cyber"
+        elif "home" in low or "property" in low:
+            meta.insurance_type = "home"
+    return meta

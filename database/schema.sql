@@ -152,9 +152,6 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     source_uri VARCHAR NOT NULL,
     document_type VARCHAR NOT NULL,
     insurance_type VARCHAR,
-    policy_number VARCHAR,
-    effective_from DATE,
-    effective_to DATE,
     content_sha256 VARCHAR(64) NOT NULL,
     uploaded_by UUID REFERENCES users(id),
     metadata_json JSONB NOT NULL DEFAULT '{}',
@@ -162,7 +159,6 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_type ON knowledge_documents(document_type);
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_insurance ON knowledge_documents(insurance_type);
-CREATE INDEX IF NOT EXISTS idx_knowledge_documents_policy ON knowledge_documents(policy_number);
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,

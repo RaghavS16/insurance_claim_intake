@@ -276,7 +276,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                 const badge = getStatusBadge(claim.status);
                 const icon = getInsuranceIcon(claim.insurance_type);
                 const timeAgo = formatTimeAgo(claim.updated_at || claim.created_at);
-                const isDraft = claim.status === "draft" || claim.status === "pending_confirmation";
+                const canDelete = claim.status?.toLowerCase() !== "submitted";
 
                 return (
                   <div
@@ -330,11 +330,11 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                         ) : null}
                       </div>
 
-                      {/* Delete Draft Button */}
-                      {isDraft && onDeleteClaim && (
+                      {/* Delete Claim Button */}
+                      {canDelete && onDeleteClaim && (
                         <button
                           onClick={(e) => onDeleteClaim(claim.ticket_id, e)}
-                          title="Discard draft"
+                          title="Delete conversation"
                           className="opacity-0 group-hover:opacity-100 hover:text-red-600 p-0.5 rounded transition-opacity"
                         >
                           <span className="material-symbols-outlined text-[14px]">delete</span>

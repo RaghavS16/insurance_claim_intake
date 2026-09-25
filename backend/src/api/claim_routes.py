@@ -5,6 +5,7 @@ Phase 1 owns the persistent claimant conversation: draft sessions can be
 resumed after navigation, browser refresh, or a disconnected voice socket.
 """
 import uuid
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
@@ -17,10 +18,14 @@ from src.database.models import Claim, ConversationTurn, User
 from src.api.voice_ws import process_claimant_turn
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
-from src.utils.auth import verify_token
 from src.agents.policy_check import verify_policy_for_claim
-from src.agents.dynamic_requirements import missing_evidence
+from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.models import Adjuster
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement
+from src.evidence.verifier import verify_evidence
+from src.storage.s3 import put_bytes
+from src.database.claim_workflow import assign_claim, transition_claim
+from src.api.deps import get_current_user, resolve_bearer_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -50,21 +55,9 @@ class UpdateClaimRequest(BaseModel):
 
 
 def _resolve_user(request: Request, db: Session) -> User:
-    """Resolve the authenticated claimant for both HTTP and test requests."""
-    auth = request.headers.get("authorization", "")
-    token = auth[7:] if auth.lower().startswith("bearer ") else None
-    uid = None
-    if token:
-        payload = verify_token(token)
-        uid = payload.get("sub") if payload else None
-    elif settings.ENVIRONMENT == "test":
-        uid = request.headers.get("X-User-ID")
-    if not uid:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    user = db.query(User).filter(User.id == uid).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Authenticated user not found.")
-    return user
+    """Resolve the authenticated claimant. Delegates to the shared revocation-aware
+    implementation in deps.resolve_bearer_user (supports JWT Bearer + test X-User-ID)."""
+    return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
 
 
 def _claim_payload(claim: Claim) -> Dict[str, Any]:
@@ -84,10 +77,14 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "dynamic_requirements": state.get("dynamic_requirements") or [],
         "dynamic_missing": state.get("dynamic_missing") or [],
         "missing_evidence": state.get("missing_evidence") or [],
+        "pending_evidence_review": state.get("pending_evidence_review") or [],
         "evidence": state.get("evidence") or [],
         "field_status": state.get("field_status") or {},
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
         "confirmed": bool(state.get("confirmed")),
+        "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "gap_analysis": state.get("gap_analysis") or {},
+        "submission_package": state.get("submission_package") or {},
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
         "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }
@@ -105,6 +102,7 @@ def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
             "turn": t.turn_number,
             "speaker": "user" if t.speaker in {"user", "claimant"} else "agent",
             "text": t.text,
+            "attachment": getattr(t, "attachment", None),
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t in turns
@@ -281,8 +279,8 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    if claim.status not in ("draft", "pending_confirmation"):
-        raise HTTPException(status_code=400, detail="Only draft claims can be deleted.")
+    if claim.status == "submitted":
+        raise HTTPException(status_code=400, detail="Submitted claims cannot be deleted.")
     
     # Delete associated conversation turns first
     db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()
@@ -391,32 +389,36 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         raise HTTPException(status_code=400, detail="Please confirm the claim details in the conversation before submitting.")
     missing = state.get("missing_fields") or []
     dynamic_missing = state.get("dynamic_missing") or []
+    # Submission must never bypass authoritative claim-specific requirement planning.
+    # Provisional planning keeps intake moving, but it is not sufficient to submit a
+    # claim because policy/regulatory requirements have not yet been validated.
+    if state.get("rag_status") != "OK" or not state.get("knowledge_context", {}).get("authoritative", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Authoritative claim-specific requirements are not yet available. Please retry before submitting.",
+        )
     if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
     if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
     missing_evidence_items = missing_evidence(state)
+    pending_review_items = pending_evidence_review(state)
     if missing_evidence_items: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
+    if pending_review_items: raise HTTPException(status_code=409, detail="Claim evidence is still awaiting review. You can continue intake, but submission will remain blocked until review is complete.")
     verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
     if not verification.get("valid"):
         state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
         raise HTTPException(status_code=400, detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}")
-    # Auto-assignment happens only after claimant confirmation, complete dynamic intake,
-    # and authoritative policy verification.
-    candidates = (
-        db.query(Adjuster)
-        .filter(Adjuster.is_active == True, Adjuster.specialization == (claim.insurance_type or ""))
-        .order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc())
-        .all()
-    )
-    if not candidates:
-        candidates = db.query(Adjuster).filter(Adjuster.is_active == True).order_by(Adjuster.claims_assigned.asc(), Adjuster.name.asc()).all()
-    if not candidates:
-        raise HTTPException(status_code=409, detail="Claim verified, but no active adjuster is available for assignment.")
-    assigned = candidates[0]
-    assigned.claims_assigned = (assigned.claims_assigned or 0) + 1
+    # Assignment is transactional and recorded as a durable work item.
     state["policy_verification"] = verification
+    try:
+        if claim.status != "verified":
+            transition_claim(db, claim, "verified", str(current_user.id), "claimant confirmation and policy verification")
+        assigned = assign_claim(db, claim, str(current_user.id))
+        transition_claim(db, claim, "assigned", str(current_user.id), "automatic assignment")
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
     state["assigned_adjuster_id"] = str(assigned.id)
     state["assigned_adjuster_name"] = assigned.name
-    claim.status = "pending_adjuster"
     claim.conversation_status = "confirmed"
     claim.pipeline_state = state
     db.commit()
@@ -428,52 +430,267 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
 
 @router.post("/{ticket_id}/evidence")
-async def upload_claim_evidence(ticket_id:str,request:Request,file:UploadFile=File(...),evidence_key:Optional[str]=None,db:Session=Depends(get_db)):
-    """Upload claimant evidence to S3 and persist claim-safe metadata."""
-    current_user=_resolve_user(request,db)
-    claim=db.query(Claim).filter(Claim.ticket_id==ticket_id).first()
-    if not claim: raise HTTPException(status_code=404,detail="Claim not found.")
-    enforce_claim_ownership(claim,current_user)
-    if claim.status not in ("draft","pending_confirmation"): raise HTTPException(status_code=400,detail="Evidence can only be uploaded while intake is in progress.")
-    if not file.filename: raise HTTPException(status_code=400,detail="A file is required.")
-    allowed={".pdf",".jpg",".jpeg",".png",".webp",".doc",".docx",".txt"}
+async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFile = File(...), evidence_key: Optional[str] = None, db: Session = Depends(get_db)):
+    """Store claimant evidence in S3 and verify it against the dynamic requirement.
+
+    Upload presence never satisfies a requirement. The file must be semantically
+    verified as the requested evidence before missing_evidence() considers it complete.
+    """
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    if claim.status not in ("draft", "pending_confirmation", "verified"):
+        raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+
+    allowed = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}
     from pathlib import Path
-    ext=Path(file.filename).suffix.lower()
-    if ext not in allowed: raise HTTPException(status_code=400,detail="Unsupported evidence format.")
-    content=await file.read()
-    if len(content)>settings.MAX_UPLOAD_SIZE_BYTES: raise HTTPException(status_code=413,detail="Evidence file is too large.")
-    state=dict(claim.pipeline_state or {})
-    evidence=list(state.get("evidence") or [])
-    outstanding=missing_evidence(state)
-    if not evidence_key and outstanding: evidence_key=outstanding[0].get("key")
-    from src.storage.s3 import put_bytes
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported evidence format.")
+    content = await file.read()
+    if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+
+    state = dict(claim.pipeline_state or {})
+    evidence = list(state.get("evidence") or [])
+    outstanding = missing_evidence(state)
+    if not outstanding:
+        raise HTTPException(status_code=400, detail="There are no outstanding evidence requirements for this claim.")
+    if evidence_key:
+        candidates = [r for r in outstanding if str(r.get("key")) == str(evidence_key)]
+        if not candidates:
+            raise HTTPException(status_code=400, detail="That evidence requirement is not currently outstanding.")
+    else:
+        # When the claimant uploads without selecting a requirement, compare the
+        # document against every outstanding evidence requirement. This prevents a
+        # valid travel bill from being incorrectly tested only against an unrelated
+        # hospital-bill requirement.
+        candidates = outstanding
+
+    claim_context = {
+        "ticket_id": claim.ticket_id,
+        "insurance_type": state.get("extracted_data", {}).get("insurance_type"),
+        "event_date": state.get("extracted_data", {}).get("event_date"),
+        "event_location": state.get("extracted_data", {}).get("event_location"),
+        "claimant_name": state.get("extracted_data", {}).get("claimant_name"),
+        "event_description": state.get("extracted_data", {}).get("event_description"),
+    }
     try:
-        s3=put_bytes(content,prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/evidence",filename=file.filename,content_type=file.content_type)
+        s3 = put_bytes(
+            content,
+            prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/evidence",
+            filename=file.filename,
+            content_type=file.content_type or "application/octet-stream",
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502,detail=f"Evidence storage is unavailable: {exc}")
-    item={"id":str(uuid.uuid4()),"name":file.filename,"s3_uri":s3["uri"],"s3_key":s3["key"],"evidence_key":evidence_key,"content_type":file.content_type or "application/octet-stream","size":len(content),"status":"uploaded","review":"pending"}
-    evidence.append(item); state["evidence"]=evidence; state["missing_evidence"]=missing_evidence(state)
-    claim.pipeline_state=state; db.commit()
-    return {"success":True,"evidence":item,"evidence_items":evidence,"missing_evidence":state["missing_evidence"]}
+        raise HTTPException(status_code=502, detail=f"Evidence storage is unavailable: {exc}")
+
+    analyses = []
+    for candidate in candidates:
+        candidate_analysis = await asyncio.to_thread(
+            verify_evidence,
+            content=content,
+            filename=file.filename,
+            requested_evidence=candidate,
+            claim_context=claim_context,
+        )
+        candidate_analysis["_candidate_key"] = candidate.get("key")
+        candidate_analysis["_candidate"] = candidate
+        analyses.append(candidate_analysis)
+
+    # Prefer a high-confidence verified match; otherwise preserve the strongest
+    # diagnostic result for claimant feedback without ever treating upload presence
+    # as satisfaction.
+    verified = [a for a in analyses if str(a.get("verification_status")).upper() == "VERIFIED"]
+    if verified:
+        analysis = max(verified, key=lambda a: float(a.get("confidence") or 0.0))
+    else:
+        analysis = max(
+            analyses,
+            key=lambda a: (float(a.get("confidence") or 0.0),
+                           1 if str(a.get("verification_status")).upper() == "REVIEW_REQUIRED" else 0),
+        )
+    requested = analysis["_candidate"]
+    evidence_key = str(requested.get("key"))
+    verification_status = str(analysis.get("verification_status", "REVIEW_REQUIRED")).upper()
+
+    # Resolve the durable requirement after the candidate is selected. When the
+    # claimant uploads without choosing a requirement, evidence_key is only known
+    # after semantic verification.
+    requirement_row = None
+    try:
+        requirement_row = db.query(ClaimRequirement).filter(
+            ClaimRequirement.claim_id == claim.id,
+            ClaimRequirement.requirement_key == str(evidence_key),
+        ).first()
+    except Exception:
+        logger.debug("Durable claim requirement lookup unavailable for %s", ticket_id)
+    item_id = str(uuid.uuid4())
+    item = {
+        "id": item_id,
+        "name": file.filename,
+        "s3_uri": s3["uri"],
+        "s3_key": s3["key"],
+        "evidence_key": evidence_key,
+        "requirement_id": str(requirement_row.id) if requirement_row else None,
+        "content_type": file.content_type or "application/octet-stream",
+        "size": len(content),
+        "status": verification_status.lower(),
+        "review": "complete" if verification_status in {"VERIFIED", "REJECTED", "UNREADABLE"} else "pending",
+        "verification_status": verification_status,
+        "verification_confidence": analysis.get("confidence"),
+        "detected_document_type": analysis.get("detected_document_type"),
+        "requested_evidence_type": analysis.get("requested_evidence_type") or requested.get("evidence_type"),
+        "verification_reason": analysis.get("reason"),
+        "claim_consistency": analysis.get("claim_consistency"),
+        "consistency_notes": analysis.get("consistency_notes") or [],
+        "extracted_fields": analysis.get("extracted_fields") or {},
+        "sha256": analysis.get("sha256"),
+    }
+    evidence.append(item)
+    state["evidence"] = evidence
+    state["missing_evidence"] = missing_evidence(state)
+    # Keep the durable requirement lifecycle synchronized with the conversational cache.
+    if requirement_row is not None:
+        if verification_status == "VERIFIED":
+            requirement_row.status = "satisfied"
+        elif verification_status in {"REJECTED", "UNREADABLE"}:
+            requirement_row.status = "evidence_required"
+        else:
+            requirement_row.status = "review_required"
+        requirement_row.updated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    state["last_evidence_verification"] = {
+        "evidence_id": item_id,
+        "requirement_key": evidence_key,
+        **analysis,
+    }
+    claim.pipeline_state = state
+
+    db_evidence = ClaimEvidence(
+        id=item_id,
+        claim_id=claim.id,
+        uploaded_by=current_user.id,
+        requirement_id=str(requirement_row.id) if requirement_row else None,
+        object_key=s3["key"],
+        original_filename=file.filename,
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=len(content),
+        sha256=analysis.get("sha256"),
+        status=verification_status.lower(),
+        document_type=analysis.get("detected_document_type"),
+        verification_status=verification_status,
+        verification_confidence=analysis.get("confidence"),
+        detected_document_type=analysis.get("detected_document_type"),
+        requested_evidence_type=analysis.get("requested_evidence_type") or requested.get("evidence_type"),
+        analysis_json=analysis,
+    )
+    db.add(db_evidence)
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Evidence verification result could not be persisted. DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Evidence verification result could not be persisted.")
+
+    if verification_status == "VERIFIED":
+        message = f"Your {requested.get('label') or requested.get('key') or 'evidence'} was verified successfully."
+    elif verification_status == "REJECTED":
+        message = analysis.get("reason") or "This file does not match the requested evidence. Please upload the correct document."
+    elif verification_status == "UNREADABLE":
+        message = analysis.get("reason") or "I couldn't read this file reliably. Please upload a clearer copy."
+    else:
+        message = analysis.get("reason") or "I couldn't verify this evidence automatically. It remains pending review."
+
+    try:
+        prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+        user_msg = f"[System Event] Uploaded evidence for: {requested.get('label') or requested.get('key') or 'evidence'}. Verification Status: {verification_status}."
+        agent_result = await process_claimant_turn(
+            db, claim, user_msg, "text", prior_turns // 2 + 1,
+            attachment={"name": file.filename, "size": len(content), "type": file.content_type or "application/octet-stream"},
+        )
+        agent_message = agent_result.get("next_question") or agent_result.get("message", "")
+        if agent_message:
+            message = f"{message}\n\n{agent_message}"
+        state = dict(claim.pipeline_state or {})
+    except Exception as exc:
+        logger.exception("Claim conversation processing failed after evidence upload")
+
+    return {
+        "success": True,
+        "message": message,
+        "evidence": item,
+        "evidence_items": evidence,
+        "missing_evidence": state.get("missing_evidence", []),
+        "pending_evidence_review": state.get("pending_evidence_review", []),
+    }
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
+    """Apply a claimant correction and invalidate dependent verification/RAG state."""
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
-    if payload.extracted_data: extracted.update(payload.extracted_data)
-    for field in ("policy_id", "insurance_type", "event_date", "event_description", "event_location", "estimated_claim_amount"):
+
+    state = dict(claim.pipeline_state or {})
+    extracted = dict(state.get("extracted_data") or {})
+    allowed_baseline = {
+        "policy_id", "insurance_type", "event_date",
+        "event_description", "event_location", "estimated_claim_amount",
+    }
+
+    if payload.extracted_data:
+        for key, value in payload.extracted_data.items():
+            if key in allowed_baseline:
+                extracted[key] = value
+    for field in allowed_baseline:
         value = getattr(payload, field)
-        if value is not None: extracted[field] = value
-    claim.pipeline_state = {**state, "extracted_data": extracted}; claim.insurance_type = extracted.get("insurance_type"); claim.event_description = extracted.get("event_description"); claim.event_location = extracted.get("event_location"); claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
+        if value is not None:
+            extracted[field] = value
+
+    # Any claimant-side edit invalidates confirmation, policy verification and the
+    # claim-specific requirement plan. The next conversation turn will re-verify and
+    # rebuild RAG requirements from the corrected facts.
+    state["extracted_data"] = extracted
+    state["confirmed"] = False
+    state["awaiting_confirmation"] = True
+    state["awaiting_submission_confirmation"] = False
+    state["final_submission_confirmed"] = False
+    state["policy_valid"] = False
+    state["policy_verification"] = {}
+    state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
+    state["rag_context_key"] = None
+    state["dynamic_requirements"] = []
+    state["dynamic_missing"] = []
+    state["missing_evidence"] = []
+    state["conversation_phase"] = "2_verification"
+    state["conversation_status"] = "reviewing"
+    state["next_question_field"] = "confirmation"
+    state["next_question"] = "I updated that detail. Please review the claim summary and confirm that the corrected information is accurate."
+    state["message"] = state["next_question"]
+
+    claim.pipeline_state = state
+    claim.insurance_type = extracted.get("insurance_type")
+    claim.event_description = extracted.get("event_description")
+    claim.event_location = extracted.get("event_location")
+    claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
     if extracted.get("event_date"):
         from datetime import datetime
-        try: claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
-        except ValueError: pass
-    db.commit(); db.refresh(claim)
-    return _claim_payload(claim)
+        try:
+            claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must use YYYY-MM-DD format.")
+    else:
+        claim.event_date = None
+
+    db.commit()
+    db.refresh(claim)
+    return {**_claim_payload(claim), "agent_message": state["next_question"]}
 
 
 @router.post("/message/{ticket_id}")

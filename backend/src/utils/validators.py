@@ -94,6 +94,10 @@ VALID_CLAIM_TYPES: Set[str] = {
     "health", "senior_health", "home", "travel", "motor", "cyber",
 }
 
+# Canonical set of supported insurance/policy types used by admin and adjuster routes.
+# Kept in sync with VALID_CLAIM_TYPES — always import this alias rather than redefining.
+CANONICAL_POLICY_TYPES: Set[str] = VALID_CLAIM_TYPES
+
 
 def validate_enum(value: str, valid_values: Set[str], field_name: str) -> str:
     """Validate that a string value is within an allowed set. Raises ValueError."""

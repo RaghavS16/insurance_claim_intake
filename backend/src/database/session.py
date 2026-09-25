@@ -6,6 +6,7 @@ Production hardening:
 - Connection pool configuration (pool_size, max_overflow, pool_recycle)
 - Proper pool disposal support for graceful shutdown
 """
+import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,7 +31,12 @@ if not _is_sqlite:
         "pool_pre_ping": True,  # Verify connections before use (handles stale connections)
     }
 
-engine = create_engine(DATABASE_URL, connect_args=_connect_args, **_pool_kwargs)
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=_connect_args,
+    json_serializer=lambda obj: json.dumps(obj, default=str),
+    **_pool_kwargs,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

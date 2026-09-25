@@ -80,5 +80,12 @@ def verify_policy_for_claim(
         "policy_type": policy.policy_type,
         "effective_date": policy.effective_date.isoformat(),
         "expiry_date": policy.expiry_date.isoformat(),
+        "coverage_amount": float(policy.coverage_amount) if policy.coverage_amount is not None else None,
+        "verification_steps": [
+            {"step": "Policyholder Identity Verification", "passed": True},
+            {"step": "Policy In-Force Status", "passed": True},
+            {"step": "Incident Date Coverage Validity", "passed": True},
+            {"step": "Claim Eligibility & Schedule", "passed": True},
+        ],
     })
     return result
