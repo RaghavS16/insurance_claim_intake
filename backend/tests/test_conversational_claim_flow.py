@@ -67,6 +67,7 @@ def test_incident_description_can_be_built_from_multiple_claimant_turns(monkeypa
         return schema(description="I developed a severe viral fever yesterday and was treated at Chennai Government Hospital.")
 
     monkeypatch.setattr(nodes, "_invoke_structured", fake_structured)
+    monkeypatch.setattr(nodes, "_get_llm", lambda: object())
     state = {
         "claim_text": "I have a severe viral fever on yesterday",
         "extracted_data": {},
