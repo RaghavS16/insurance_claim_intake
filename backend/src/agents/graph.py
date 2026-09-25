@@ -277,6 +277,16 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     state["rag_context_key"] = context_key
 
     if not context.get("available", False):
+        # Never discard an already-generated requirement plan just because a later
+        # RAG refresh is temporarily unavailable. This is especially important after
+        # an evidence upload, where the plan itself has not changed but its
+        # satisfaction state has.
+        if state.get("dynamic_requirements"):
+            extract_answers(state)
+            state["pending_evidence_review"] = pending_evidence_review(state)
+            state["conversation_status"] = "collecting_dynamic"
+            state["conversation_phase"] = "3_rag_intake"
+            return state
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["pending_evidence_review"] = []
