@@ -235,9 +235,9 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
                     extracted[key] = False
                 elif police_positive or short_yes:
                     extracted[key] = True
-            elif short_no:
+            elif negative_answer:
                 extracted[key] = False
-            elif short_yes:
+            elif positive_answer:
                 extracted[key] = True
 
     # Preserve backwards-compatible canonical keys for the existing requirement aliases.
