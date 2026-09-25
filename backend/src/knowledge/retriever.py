@@ -1,7 +1,7 @@
 """Production RAG orchestration extracting requirements directly from authoritative policy and regulatory documents."""
 from datetime import date
 from src.agents.llm_factory import LLMTransientError, get_configured_llm, is_transient_llm_error
-from .requirements import get_requirements_from_context
+from .requirements import get_requirements_from_context, get_provisional_requirements
 from .store import search
 from .reranker import rerank
 
@@ -34,12 +34,19 @@ class KnowledgeRetriever:
                 pass
 
         if not policy and not guidance:
+            provisional = get_provisional_requirements(
+                get_configured_llm(),
+                insurance_type=insurance_type,
+                claim_facts={"policy_number": policy_number, "incident_date": str(incident_date) if incident_date else None, "incident": q},
+                conversation=q,
+            )
             return {
-                "available": False,
-                "status": "NO_RELEVANT_KNOWLEDGE",
-                "requirements": [],
+                "available": bool(provisional),
+                "status": "PROVISIONAL" if provisional else "NO_RELEVANT_KNOWLEDGE",
+                "requirements": provisional,
                 "policy": [],
                 "regulations": [],
+                "authoritative": False,
             }
 
         try:
@@ -85,4 +92,5 @@ class KnowledgeRetriever:
             "requirements": requirements,
             "policy": policy,
             "regulations": guidance,
+            "authoritative": True,
         }
