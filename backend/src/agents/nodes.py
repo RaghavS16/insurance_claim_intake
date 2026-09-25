@@ -328,6 +328,8 @@ def _deterministic_location(text: str) -> Optional[str]:
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
             value = " ".join(match.group(1).split()).strip(" .,")
+            value = re.sub(r"^the\\s+", "", value, flags=re.I)
+            value = re.sub(r"\\s+here\\s+in\\s+", ", ", value, flags=re.I)
             if value.lower() in _LOCATION_STOPWORDS or _looks_like_temporal_location(value):
                 continue
             if 2 <= len(value) <= 100:
