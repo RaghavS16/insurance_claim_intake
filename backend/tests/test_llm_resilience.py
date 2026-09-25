@@ -58,6 +58,9 @@ def test_retriever_surfaces_transient_requirement_planning_failure():
     ), patch(
         "src.knowledge.retriever.get_requirements_from_context",
         side_effect=LLMTransientError("503 UNAVAILABLE"),
+    ), patch(
+        "src.knowledge.retriever.get_configured_llm",
+        return_value=MagicMock(),
     ):
         result = KnowledgeRetriever().retrieve(
             insurance_type="health",
