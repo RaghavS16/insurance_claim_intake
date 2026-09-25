@@ -61,21 +61,47 @@ def unresolved(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
-    """Return required evidence that has not been VERIFIED.
+def pending_evidence_review(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
+    """Return evidence requirements already uploaded but awaiting manual review.
 
-    An upload, filename match, or pending review never satisfies a requirement.
+    REVIEW_REQUIRED is a workflow state, not a reason to ask the claimant to upload
+    the same file again. The requirement remains a submission blocker until an
+    adjuster/reviewer resolves it, but intake can continue with other requirements.
     """
     requirements = state.get("dynamic_requirements") or []
     evidence = state.get("evidence") or []
-    verified_keys = {
+    pending_keys = {
         str(e.get("evidence_key"))
         for e in evidence
-        if e.get("evidence_key") and str(e.get("verification_status") or "").upper() == "VERIFIED"
+        if e.get("evidence_key")
+        and str(e.get("verification_status") or "").upper() == "REVIEW_REQUIRED"
     }
     return [
         r for r in requirements
-        if r.get("required", True) and is_evidence_req(r) and str(r.get("key")) not in verified_keys
+        if r.get("required", True) and is_evidence_req(r) and str(r.get("key")) in pending_keys
+    ]
+
+
+def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
+    """Return required evidence that still needs claimant action.
+
+    VERIFIED satisfies a requirement. REVIEW_REQUIRED means the claimant already
+    supplied a file and must not be prompted to upload it again; the item is tracked
+    separately by pending_evidence_review(). REJECTED/UNREADABLE remain actionable.
+    """
+    requirements = state.get("dynamic_requirements") or []
+    evidence = state.get("evidence") or []
+    satisfied_or_pending = {
+        str(e.get("evidence_key"))
+        for e in evidence
+        if e.get("evidence_key")
+        and str(e.get("verification_status") or "").upper() in {"VERIFIED", "REVIEW_REQUIRED"}
+    }
+    return [
+        r for r in requirements
+        if r.get("required", True)
+        and is_evidence_req(r)
+        and str(r.get("key")) not in satisfied_or_pending
     ]
 
 
