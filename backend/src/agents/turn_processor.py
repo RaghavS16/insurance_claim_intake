@@ -23,6 +23,7 @@ async def process_claimant_turn(
     input_mode: str,
     turn_number: int | None = None,
     is_turn_current: Callable[[], bool] | None = None,
+    attachment: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Process one claimant turn without blocking the event loop during LLM work."""
     from src.agents.policy_check import verify_policy_for_claim
@@ -250,7 +251,19 @@ async def process_claimant_turn(
         return result
     try:
         if not workflow_event:
-            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
+            user_turn = ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text)
+            if attachment:
+                user_turn.attachment = dict(attachment)
+            db.add(user_turn)
+        elif attachment:
+            user_turn = ConversationTurn(
+                claim_id=claim.id,
+                turn_number=logical_turn,
+                speaker="user",
+                text=f"Uploaded evidence: {attachment.get("name") or "evidence file"}",
+            )
+            user_turn.attachment = dict(attachment)
+            db.add(user_turn)
         if agent_text:
             db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_text))
         db.commit()
