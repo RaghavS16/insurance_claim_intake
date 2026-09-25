@@ -9,8 +9,15 @@ class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
-    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None) -> dict:
-        q = (query or insurance_type).strip()
+    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None) -> dict:
+        facts = dict(claim_facts or {})
+        incident_description = str(query or facts.get("event_description") or "").strip()
+        searchable_facts = " ".join(
+            f"{key}: {value}"
+            for key, value in facts.items()
+            if value not in (None, "", "UNKNOWN") and key not in {"event_description"}
+        )
+        q = " ".join(part for part in (insurance_type, incident_description, searchable_facts) if part).strip()[:4000]
         if not insurance_type:
             return {"available": False, "status": "INVALID_CONTEXT", "requirements": [], "policy": [], "regulations": []}
         
@@ -35,10 +42,15 @@ class KnowledgeRetriever:
 
         if not policy and not guidance:
             provisional = get_provisional_requirements(
-                get_configured_llm(),
+                None,
                 insurance_type=insurance_type,
-                claim_facts={"policy_number": policy_number, "incident_date": str(incident_date) if incident_date else None, "incident": q},
-                conversation=q,
+                claim_facts={
+                    **facts,
+                    "policy_number": policy_number,
+                    "incident_date": str(incident_date) if incident_date else None,
+                    "incident": incident_description,
+                },
+                conversation=incident_description,
             )
             return {
                 "available": bool(provisional),
@@ -50,19 +62,30 @@ class KnowledgeRetriever:
             }
 
         try:
+            llm = get_configured_llm()
             requirements = get_requirements_from_context(
-                get_configured_llm(),
+                llm,
                 insurance_type=insurance_type,
                 policy_context=policy,
                 regulatory_context=guidance,
-                incident_description=q,
+                incident_description=incident_description,
                 intake_channel=intake_channel,
                 intake_started_at=intake_started_at,
+                claim_facts=facts,
             )
         except Exception as exc:
             # Preserve the transient-provider state so the conversational layer can
             # retry RAG instead of incorrectly reporting a permanent missing plan.
             transient_text = str(exc).lower()
+            if "HF_TOKEN is required" in str(exc) or "API key" in str(exc):
+                return {
+                    "available": False,
+                    "status": "LLM_CONFIGURATION_UNAVAILABLE",
+                    "requirements": [],
+                    "policy": policy,
+                    "regulations": guidance,
+                    "authoritative": False,
+                }
             if (
                 isinstance(exc, LLMTransientError)
                 or is_transient_llm_error(exc)
