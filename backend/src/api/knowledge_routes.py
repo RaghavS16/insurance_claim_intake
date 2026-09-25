@@ -16,6 +16,9 @@ class IngestRequest(BaseModel):
     source_name: str = Field(..., min_length=1, max_length=255)
     document_type: str | None = None
     insurance_type: str | None = None
+    policy_number: str | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
 
 @router.post("/documents")
 async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER"]))):
