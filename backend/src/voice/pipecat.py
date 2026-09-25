@@ -62,7 +62,15 @@ class PCM16WebSocketSerializer(FrameSerializer):
         if isinstance(frame, OutputTransportMessageFrame): return json.dumps(frame.message)
         return None
     async def deserialize(self, data: str | bytes) -> Frame | None:
-        if isinstance(data, bytes): return InputAudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
+        if isinstance(data, bytes):
+            return InputAudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
+        if isinstance(data, str):
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(message, dict):
+                return InputTransportMessageFrame(message=message)
         return None
 
 class WebRTCVADAnalyzer(VADAnalyzer):
