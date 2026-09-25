@@ -361,6 +361,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         and state.get("rag_status") == "OK"
         and not dynamic_missing
         and not missing_evidence
+        and not pending_review
     ):
         if state.get("awaiting_submission_confirmation"):
             if state.get("last_intent") == "confirmation":
