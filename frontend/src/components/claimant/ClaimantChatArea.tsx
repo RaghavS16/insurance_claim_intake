@@ -66,16 +66,6 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
     return () => el.removeEventListener("scroll", handleScroll);
   }, [chatContainerRef, onScrollChange]);
 
-  // Auto-scroll when new messages arrive if user is near bottom
-  useEffect(() => {
-    const el = chatContainerRef.current;
-    if (!el) return;
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 280;
-    if (isNearBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [history.length, partialSegments.size, agentState, chatContainerRef]);
-
   const handleCopyText = (text: string, idx: number) => {
     navigator.clipboard.writeText(text);
     setCopiedIndex(idx);
@@ -103,7 +93,7 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   return (
     <div
       ref={chatContainerRef}
-      className={`flex-1 p-4 md:p-8 space-y-5 scroll-smooth pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
+      className={`flex-1 p-4 md:p-8 space-y-5 pb-44 relative bg-gradient-to-b from-[#f8fafc]/50 to-white ${isConversationEmpty
         ? "flex flex-col items-center justify-center min-h-full overflow-y-auto"
         : "overflow-y-auto"
         }`}
