@@ -44,7 +44,7 @@ interface SessionPayload {
   confirmed?: boolean;
   conversation_phase?: string;
   gap_analysis?: Record<string, unknown>;
-  conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; created_at?: string | null }>;
+  conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; attachment?: { name: string; size?: number; type?: string } | null; created_at?: string | null }>;
   initial_message?: string;
   resumed?: boolean;
 }
@@ -413,6 +413,7 @@ export default function ClaimantPage() {
       turn: t.turn,
       speaker: t.speaker,
       text: t.text,
+      attachment: t.attachment || undefined,
       timestamp: t.created_at ? Date.parse(t.created_at) : Date.now(),
     }));
     if (saved.length) {
