@@ -356,6 +356,8 @@ export default function ClaimantPage() {
   }, []);
 
   const connectWebSocket = useCallback((currentTicketId: string, currentToken: string) => {
+    latestVoiceGenerationRef.current = 0;
+    bargeInSentRef.current = false;
     try {
       wsRef.current?.close();
     } catch {}
