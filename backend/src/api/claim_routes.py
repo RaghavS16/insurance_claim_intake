@@ -615,22 +615,67 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
+    """Apply a claimant correction and invalidate dependent verification/RAG state."""
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
-    if payload.extracted_data: extracted.update(payload.extracted_data)
-    for field in ("policy_id", "insurance_type", "event_date", "event_description", "event_location", "estimated_claim_amount"):
+
+    state = dict(claim.pipeline_state or {})
+    extracted = dict(state.get("extracted_data") or {})
+    allowed_baseline = {
+        "policy_id", "insurance_type", "event_date",
+        "event_description", "event_location", "estimated_claim_amount",
+    }
+
+    if payload.extracted_data:
+        for key, value in payload.extracted_data.items():
+            if key in allowed_baseline:
+                extracted[key] = value
+    for field in allowed_baseline:
         value = getattr(payload, field)
-        if value is not None: extracted[field] = value
-    claim.pipeline_state = {**state, "extracted_data": extracted}; claim.insurance_type = extracted.get("insurance_type"); claim.event_description = extracted.get("event_description"); claim.event_location = extracted.get("event_location"); claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
+        if value is not None:
+            extracted[field] = value
+
+    # Any claimant-side edit invalidates confirmation, policy verification and the
+    # claim-specific requirement plan. The next conversation turn will re-verify and
+    # rebuild RAG requirements from the corrected facts.
+    state["extracted_data"] = extracted
+    state["confirmed"] = False
+    state["awaiting_confirmation"] = True
+    state["awaiting_submission_confirmation"] = False
+    state["final_submission_confirmed"] = False
+    state["policy_valid"] = False
+    state["policy_verification"] = {}
+    state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
+    state["rag_context_key"] = None
+    state["dynamic_requirements"] = []
+    state["dynamic_missing"] = []
+    state["missing_evidence"] = []
+    state["conversation_phase"] = "2_verification"
+    state["conversation_status"] = "reviewing"
+    state["next_question_field"] = "confirmation"
+    state["next_question"] = "I updated that detail. Please review the claim summary and confirm that the corrected information is accurate."
+    state["message"] = state["next_question"]
+
+    claim.pipeline_state = state
+    claim.insurance_type = extracted.get("insurance_type")
+    claim.event_description = extracted.get("event_description")
+    claim.event_location = extracted.get("event_location")
+    claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
     if extracted.get("event_date"):
         from datetime import datetime
-        try: claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
-        except ValueError: pass
-    db.commit(); db.refresh(claim)
-    return _claim_payload(claim)
+        try:
+            claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must use YYYY-MM-DD format.")
+    else:
+        claim.event_date = None
+
+    db.commit()
+    db.refresh(claim)
+    return {**_claim_payload(claim), "agent_message": state["next_question"]}
 
 
 @router.post("/message/{ticket_id}")
