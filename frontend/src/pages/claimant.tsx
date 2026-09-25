@@ -79,6 +79,7 @@ export default function ClaimantPage() {
   const [submittedMessage, setSubmittedMessage] = useState("");
   const [evidenceUploading, setEvidenceUploading] = useState(false);
   const [missingEvidence, setMissingEvidence] = useState<Array<Record<string, unknown>>>([]);
+  const [pendingEvidenceReview, setPendingEvidenceReview] = useState<Array<Record<string, unknown>>>([]);
   const [evidenceItems, setEvidenceItems] = useState<Array<Record<string, unknown>>>([]);
   const [pendingEvidenceName, setPendingEvidenceName] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState("");
@@ -389,6 +390,7 @@ export default function ClaimantPage() {
     setConfirmed(false);
     setClaimSubmitted(false);
     setMissingEvidence([]);
+    setPendingEvidenceReview([]);
     setEvidenceItems([]);
     setSubmittedMessage("");
     setPartialSegments(new Map());
@@ -406,6 +408,7 @@ export default function ClaimantPage() {
     setConfirmed(Boolean(data.confirmed));
     setClaimSubmitted(Boolean(data.status === "submitted"));
     setMissingEvidence(data.missing_evidence || []);
+    setPendingEvidenceReview(data.pending_evidence_review || []);
     setEvidenceItems(data.evidence || []);
     setConversationPhase(data.conversation_phase || "1_baseline");
     setGapAnalysis(data.gap_analysis || {});
@@ -662,6 +665,7 @@ export default function ClaimantPage() {
         },
       );
       setMissingEvidence(result.missing_evidence || []);
+      setPendingEvidenceReview(result.pending_evidence_review || []);
       setEvidenceItems(result.evidence_items || []);
 
       // Evidence belongs to the claimant turn. Render it on the user's side,
@@ -874,6 +878,7 @@ export default function ClaimantPage() {
               confirmed={confirmed}
               submitted={claimSubmitted}
               missingEvidence={missingEvidence}
+              pendingEvidenceReview={pendingEvidenceReview}
               evidenceItems={evidenceItems}
               ticketId={ticketId}
               conversationPhase={conversationPhase}
