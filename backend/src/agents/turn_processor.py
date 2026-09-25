@@ -82,7 +82,13 @@ async def process_claimant_turn(
     extracted = result.get("extracted_data", {}) or {}
 
     # Stage 2: Policy Verification Trigger upon Baseline Confirmation
+    # Persist the just-confirmed graph state before policy verification. The policy
+    # checker intentionally reads the durable claim row, so verifying against the
+    # previous pre-confirmation snapshot would incorrectly return
+    # "claimant_confirmation_required".
     if result.get("confirmed") and claim.status not in {"verified", "submitted", "assigned"}:
+        claim.pipeline_state = dict(result)
+        flag_modified(claim, "pipeline_state")
         verification = verify_policy_for_claim(
             policy_id=extracted.get("policy_id"),
             event_date_str=extracted.get("event_date"),
