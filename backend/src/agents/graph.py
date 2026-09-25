@@ -399,7 +399,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["conversation_phase"] = "3_rag_intake"
         state["conversation_status"] = "collecting_dynamic"
         state["next_question_field"] = "evidence_review"
-        state["next_question"] = _dynamic_fallback({**state, "missing_evidence": []}) if state.get("dynamic_requirements") else "Your uploaded evidence is queued for review. We can continue with the remaining claim details while that review is completed."
+        state["next_question"] = "Your uploaded evidence is queued for review. There are no other claim details needed from you right now; we’ll keep the claim open until that review is resolved."
         state["message"] = state["next_question"]
     state["message"] = state.get("next_question", "")
     return state
