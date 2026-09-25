@@ -141,3 +141,31 @@ def test_rich_first_turn_does_not_reask_already_supplied_baseline_fields():
     assert "event_location" not in result["missing_fields"]
     assert "insurance_type" not in result["missing_fields"]
     assert result["extracted_data"]["event_location"].lower().startswith("anna nagar")
+
+
+def test_legacy_corrupted_baseline_values_are_recovered_on_next_turn():
+    state = {
+        "claim_text": "i already told you what happened and my policy number was POL-1409-XI",
+        "extracted_data": {
+            "event_date": "2026-09-18",
+            "event_location": "the evening",
+            "event_description": "i already told you what happened and",
+        },
+        "conversation_history": [
+            {
+                "turn": 1,
+                "speaker": "user",
+                "text": (
+                    "On September 18th around 7:45 in the evening, I was riding my Yamaha FZ-S "
+                    "near Anna Nagar Ring Road Junction here in Madurai. My bike clipped an "
+                    "oncoming car and fell on its right side, damaging the brake lever."
+                ),
+            },
+        ],
+    }
+
+    result = nodes.conversation_turn_processor(state)
+
+    assert result["extracted_data"]["event_location"].lower().startswith("anna nagar")
+    assert "clipped" in result["extracted_data"]["event_description"].lower()
+    assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
