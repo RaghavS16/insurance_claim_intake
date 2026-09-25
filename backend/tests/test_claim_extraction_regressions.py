@@ -1,7 +1,8 @@
 """Regression tests for natural baseline and claim-specific extraction."""
 
 from src.agents.nodes import _deterministic_amount, _deterministic_location
-from src.agents.dynamic_requirements import _deterministic_dynamic_extract
+from src.agents.dynamic_requirements import _deterministic_dynamic_extract, unresolved
+from src.evidence.verifier import EvidenceAnalysis
 
 
 def test_idv_and_deductible_are_not_claim_loss():
@@ -51,3 +52,35 @@ def test_short_no_satisfies_active_police_requirement():
     ]
     values = _deterministic_dynamic_extract("no", requirements)
     assert values["police_report_or_fir"] is False
+
+
+
+def test_repair_cost_requirement_is_satisfied_by_baseline_estimated_claim_amount():
+    state = {
+        "extracted_data": {"estimated_claim_amount": 30000},
+        "dynamic_requirements": [
+            {
+                "key": "estimated_repair_cost",
+                "label": "Estimated repair cost",
+                "question_hint": "What is the total estimated cost for repairing your bike?",
+                "required": True,
+            }
+        ],
+    }
+    assert unresolved(state) == []
+
+
+def test_evidence_analysis_uses_strict_object_schema_for_provider_structured_output():
+    schema = EvidenceAnalysis.model_json_schema()
+
+    def assert_strict_objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False
+            for value in node.values():
+                assert_strict_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_strict_objects(value)
+
+    assert_strict_objects(schema)
