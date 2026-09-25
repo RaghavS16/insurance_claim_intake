@@ -37,3 +37,46 @@ def test_claim_rag_waits_for_baseline_confirmation():
     assert result["rag_status"] == "WAITING_FOR_BASELINE_CONFIRMATION"
     assert result["dynamic_missing"] == []
     assert result["missing_evidence"] == []
+
+
+def test_fragmented_incident_story_is_rewritten_into_one_meaningful_description(monkeypatch):
+    def fake_structured(_model, _prompt, schema):
+        return schema(description="I developed a severe viral fever yesterday and received treatment at the hospital.")
+
+    monkeypatch.setattr(nodes, "_invoke_structured", fake_structured)
+    state = {
+        "claim_text": "I have a severe viral fever on yesterday",
+        "extracted_data": {},
+        "conversation_history": [],
+    }
+
+    result = nodes.conversation_turn_processor(state)
+
+    description = result["extracted_data"]["event_description"]
+    assert description.startswith("I developed a severe viral fever")
+    assert "treatment at the hospital" in description
+    assert description != "I have a severe viral fever on"
+
+
+def test_incident_description_can_be_built_from_multiple_claimant_turns(monkeypatch):
+    prompts = []
+
+    def fake_structured(_model, prompt, schema):
+        prompts.append(prompt)
+        return schema(description="I developed a severe viral fever yesterday and was treated at Chennai Government Hospital.")
+
+    monkeypatch.setattr(nodes, "_invoke_structured", fake_structured)
+    state = {
+        "claim_text": "I have a severe viral fever on yesterday",
+        "extracted_data": {},
+        "conversation_history": [],
+    }
+    nodes.conversation_turn_processor(state)
+
+    state["claim_text"] = "It happened at Chennai Government Hospital and I received treatment."
+    nodes.conversation_turn_processor(state)
+
+    assert len(prompts) >= 2
+    assert "I have a severe viral fever on yesterday" in prompts[-1]
+    assert "It happened at Chennai Government Hospital" in prompts[-1]
+    assert "Chennai Government Hospital" in state["extracted_data"]["event_description"]
