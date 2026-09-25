@@ -38,6 +38,7 @@ interface SessionPayload {
   dynamic_requirements?: Array<Record<string, unknown>>;
   dynamic_missing?: Array<Record<string, unknown>>;
   missing_evidence?: Array<Record<string, unknown>>;
+  pending_evidence_review?: Array<Record<string, unknown>>;
   evidence?: Array<Record<string, unknown>>;
   field_status?: Record<string, string>;
   awaiting_confirmation?: boolean;
