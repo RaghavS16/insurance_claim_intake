@@ -170,3 +170,81 @@ Return a structured RequirementPlan with requirements where:
     return []
 
 
+
+
+def get_provisional_requirements(
+    llm,
+    *,
+    insurance_type: str,
+    claim_facts: dict[str, Any],
+    conversation: str = "",
+) -> list[dict]:
+    """Create non-policy-specific follow-up candidates so intake never stalls.
+
+    These are provisional conversation candidates, not coverage requirements. They
+    are collected when authoritative RAG knowledge is temporarily unavailable and
+    must be revalidated against policy/regulatory sources before submission.
+    """
+    prompt = f"""You are an insurance claim intake conversation planner.
+The claimant has already completed baseline verification. Continue the conversation
+naturally by identifying claim-specific details and supporting evidence that are
+reasonable to collect from the claimant based ONLY on the claimant's own incident
+facts and the insurance type.
+
+This is NOT a policy decision. Do not state that anything is mandatory or covered.
+Do not repeat baseline fields: policy number, incident date, insurance type,
+incident description, incident location, estimated loss amount.
+Do not ask when the claimant reported this claim to the insurer through the
+current intake application.
+Only identify details or documents that are directly suggested by the incident
+facts. Prefer a small number of high-value next steps.
+
+Insurance type: {insurance_type}
+Claim facts: {claim_facts}
+Recent claimant conversation: {conversation}
+
+For each candidate:
+- key: concise snake_case identifier
+- label: claimant-friendly title
+- question_hint: natural conversational question
+- required: true only if needed to continue collecting this candidate
+- evidence_type: 'photo' or 'document' only when the claimant's facts directly
+  indicate that such evidence is relevant; otherwise null
+- condition: brief reason grounded in the claimant's facts
+Return RequirementPlan.
+"""
+    try:
+        result = invoke_with_retry(
+            lambda: structured_output(llm, RequirementPlan).invoke(prompt),
+            operation_name="provisional claim-specific planning",
+            attempts=1,
+        )
+        if isinstance(result, RequirementPlan):
+            plan = result
+        elif isinstance(result, dict):
+            plan = RequirementPlan.model_validate(result)
+        else:
+            return []
+    except Exception:
+        return []
+
+    output = []
+    for req in plan.requirements[:8]:
+        item = req.model_dump()
+        searchable = " ".join(str(item.get(k) or "").lower() for k in ("key", "label", "question_hint"))
+        if any(
+            phrase in searchable
+            for phrase in (
+                "reported to the insurer",
+                "report to the insurer",
+                "insurer call",
+                "call centre",
+                "call center",
+                "notify the insurer",
+                "notification to the insurer",
+            )
+        ):
+            continue
+        item["provenance"] = {"type": "provisional_claim_context"}
+        output.append(item)
+    return output
