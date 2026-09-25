@@ -471,17 +471,6 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         # hospital-bill requirement.
         candidates = outstanding
 
-    # Resolve the durable requirement when available so adjusters can trace evidence
-    # back to the exact generated requirement and its provenance.
-    requirement_row = None
-    try:
-        requirement_row = db.query(ClaimRequirement).filter(
-            ClaimRequirement.claim_id == claim.id,
-            ClaimRequirement.requirement_key == str(evidence_key),
-        ).first()
-    except Exception:
-        logger.debug("Durable claim requirement lookup unavailable for %s", ticket_id)
-
     claim_context = {
         "ticket_id": claim.ticket_id,
         "insurance_type": state.get("extracted_data", {}).get("insurance_type"),
@@ -528,6 +517,18 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     requested = analysis["_candidate"]
     evidence_key = str(requested.get("key"))
     verification_status = str(analysis.get("verification_status", "REVIEW_REQUIRED")).upper()
+
+    # Resolve the durable requirement after the candidate is selected. When the
+    # claimant uploads without choosing a requirement, evidence_key is only known
+    # after semantic verification.
+    requirement_row = None
+    try:
+        requirement_row = db.query(ClaimRequirement).filter(
+            ClaimRequirement.claim_id == claim.id,
+            ClaimRequirement.requirement_key == str(evidence_key),
+        ).first()
+    except Exception:
+        logger.debug("Durable claim requirement lookup unavailable for %s", ticket_id)
     item_id = str(uuid.uuid4())
     item = {
         "id": item_id,
