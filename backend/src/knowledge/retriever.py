@@ -53,7 +53,12 @@ class KnowledgeRetriever:
         except Exception as exc:
             # Preserve the transient-provider state so the conversational layer can
             # retry RAG instead of incorrectly reporting a permanent missing plan.
-            if isinstance(exc, LLMTransientError) or is_transient_llm_error(exc):
+            transient_text = str(exc).lower()
+            if (
+                isinstance(exc, LLMTransientError)
+                or is_transient_llm_error(exc)
+                or any(token in transient_text for token in ("503", "429", "timeout", "temporarily unavailable", "rate limit", "overloaded"))
+            ):
                 return {
                     "available": False,
                     "status": "LLM_TEMPORARILY_UNAVAILABLE",
