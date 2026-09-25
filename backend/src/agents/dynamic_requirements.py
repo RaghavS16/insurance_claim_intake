@@ -48,17 +48,48 @@ def is_evidence_req(r: dict[str, Any]) -> bool:
         return True
     return False
 
+def _baseline_equivalent_value(requirement: dict[str, Any], data: dict[str, Any]) -> Any:
+    """Resolve dynamic requirement aliases already covered by baseline facts."""
+    semantic = " ".join(
+        str(requirement.get(k) or "").lower()
+        for k in ("key", "label", "question_hint", "condition")
+    )
+    aliases = (
+        ("policy_id", ("policy number", "policy no", "policy id", "policy_number")),
+        ("event_date", ("incident date", "accident date", "date of incident", "date of accident")),
+        ("insurance_type", ("insurance type", "type of insurance", "claim type", "insurance category")),
+        ("event_location", ("incident location", "accident location", "location of incident", "location of accident")),
+        ("event_description", ("incident description", "accident description", "what happened", "description of incident")),
+        ("estimated_claim_amount", (
+            "estimated claim amount", "claim amount", "estimated loss", "loss amount",
+            "estimated repair cost", "repair cost", "repair estimate", "estimated cost of repair",
+            "total repair cost", "total estimated cost for repairing", "cost to repair",
+        )),
+    )
+    for field, phrases in aliases:
+        if data.get(field) not in (None, "", "UNKNOWN") and any(phrase in semantic for phrase in phrases):
+            return data.get(field)
+    return None
+
+
 def unresolved(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
     """Return required conversational data fields that are still missing from extracted_data."""
     requirements = state.get("dynamic_requirements") or []
     data = state.get("extracted_data") or {}
-    return [
-        r for r in requirements
-        if r.get("required", True)
-        and not is_evidence_req(r)
-        and r.get("key")
-        and data.get(str(r.get("key"))) in (None, "", "UNKNOWN")
-    ]
+    unresolved_items = []
+    for requirement in requirements:
+        if not requirement.get("required", True) or is_evidence_req(requirement) or not requirement.get("key"):
+            continue
+        key = str(requirement.get("key"))
+        if data.get(key) not in (None, "", "UNKNOWN"):
+            continue
+        # RAG may use domain wording such as "estimated repair cost" for the
+        # baseline "estimated_claim_amount". Do not turn that wording difference
+        # into a duplicate claimant question.
+        if _baseline_equivalent_value(requirement, data) not in (None, "", "UNKNOWN"):
+            continue
+        unresolved_items.append(requirement)
+    return unresolved_items
 
 
 def pending_evidence_review(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]:
