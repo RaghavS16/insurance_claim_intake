@@ -20,6 +20,7 @@ class Requirement(BaseModel):
     source_section: str | None = None
     source_chunk_ids: list[str] = Field(default_factory=list)
     source_excerpt: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 class RequirementPlan(BaseModel):
     requirements: list[Requirement] = Field(default_factory=list)
