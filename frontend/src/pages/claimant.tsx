@@ -48,8 +48,6 @@ interface SessionPayload {
   conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; attachment?: { name: string; size?: number; type?: string } | null; created_at?: string | null }>;
   initial_message?: string;
   resumed?: boolean;
-  adjuster_requests?: Array<{ id?: string; message?: string; requested_evidence?: string[]; requested_at?: string; status?: string }>;
-  status_history?: Array<{ status?: string; old_status?: string; message?: string; created_at?: string; event_type?: string }>;
 }
 
 export interface LinkedPolicyItem {
@@ -92,9 +90,6 @@ export default function ClaimantPage() {
   const [mobileTab, setMobileTab] = useState<"chat" | "details">("chat");
   const [conversationPhase, setConversationPhase] = useState("1_baseline");
   const [gapAnalysis, setGapAnalysis] = useState<Record<string, unknown>>({});
-  const [claimStatus, setClaimStatus] = useState("draft");
-  const [adjusterRequests, setAdjusterRequests] = useState<SessionPayload["adjuster_requests"]>([]);
-  const [statusHistory, setStatusHistory] = useState<SessionPayload["status_history"]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -417,9 +412,6 @@ export default function ClaimantPage() {
     setEvidenceItems(data.evidence || []);
     setConversationPhase(data.conversation_phase || "1_baseline");
     setGapAnalysis(data.gap_analysis || {});
-    setClaimStatus(data.status || data.conversation_status || "draft");
-    setAdjusterRequests(data.adjuster_requests || []);
-    setStatusHistory(data.status_history || []);
     setPartialSegments(new Map());
     const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
@@ -482,24 +474,6 @@ export default function ClaimantPage() {
     router.replace({ pathname: "/claimant", query: { ticket: data.ticket_id } }, undefined, { shallow: true });
     return data.ticket_id;
   }, [connectWebSocket, router, ticketId]);
-
-  useEffect(() => {
-    if (!ticketId || !token || !claimSubmitted) return;
-    const refresh = async () => {
-      try {
-        const data = await apiFetch<SessionPayload>(`/api/v1/claims/${ticketId}`, { token });
-        setClaimStatus(data.status || data.conversation_status || "submitted");
-        setAdjusterRequests(data.adjuster_requests || []);
-        setStatusHistory(data.status_history || []);
-        setMissingEvidence(data.missing_evidence || []);
-        setPendingEvidenceReview(data.pending_evidence_review || []);
-        setEvidenceItems(data.evidence || []);
-        fetchClaimsList(token);
-      } catch {}
-    };
-    const interval = window.setInterval(refresh, 15000);
-    return () => window.clearInterval(interval);
-  }, [claimSubmitted, fetchClaimsList, ticketId, token]);
 
   const handleDeleteClaim = useCallback(async (targetTicketId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -631,7 +605,7 @@ export default function ClaimantPage() {
     setAgentState("thinking");
     try {
       const activeTid = ticketId || await ensureClaimSession(token);
-      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string; conversation_status?: string; missing_evidence?: Array<Record<string, unknown>>; evidence?: Array<Record<string, unknown>>; adjuster_requests?: SessionPayload["adjuster_requests"]; status_history?: SessionPayload["status_history"] }>(
+      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string; missing_evidence?: Array<Record<string, unknown>>; evidence?: Array<Record<string, unknown>> }>(
         `/api/v1/claims/${activeTid}/text-turn`,
         {
           method: "POST",
@@ -648,9 +622,6 @@ export default function ClaimantPage() {
       setExtractedData(data.extracted_data || {});
       setConfirmed(Boolean(data.confirmed));
       setClaimSubmitted(Boolean(data.status === "submitted"));
-      setClaimStatus(data.status || data.conversation_status || "draft");
-      setAdjusterRequests(data.adjuster_requests || []);
-      setStatusHistory(data.status_history || []);
       setMissingEvidence(data.missing_evidence || []);
       setEvidenceItems(data.evidence || []);
       if ((data as Record<string, unknown>).conversation_phase) {
@@ -912,9 +883,6 @@ export default function ClaimantPage() {
               ticketId={ticketId}
               conversationPhase={conversationPhase}
               gapAnalysis={gapAnalysis}
-              claimStatus={claimStatus}
-              adjusterRequests={adjusterRequests || []}
-              statusHistory={statusHistory || []}
             />
           </div>
         </div>

@@ -1,7 +1,6 @@
 import React from "react";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 import { ExtractedData } from "./ExtractionPanel";
-import { ClaimStatusPanel, ClaimStatusRequest } from "./ClaimStatusPanel";
 
 interface CollectedDetailsPanelProps {
   extractedData: ExtractedData;
@@ -18,9 +17,6 @@ interface CollectedDetailsPanelProps {
   ticketId: string;
   conversationPhase?: string;
   gapAnalysis?: Record<string, unknown>;
-  claimStatus?: string;
-  adjusterRequests?: ClaimStatusRequest[];
-  statusHistory?: Array<{ status?: string; old_status?: string; message?: string; created_at?: string; event_type?: string }>;
 }
 
 export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
@@ -31,9 +27,6 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   missingEvidence = [],
   pendingEvidenceReview = [],
   evidenceItems = [],
-  claimStatus,
-  adjusterRequests = [],
-  statusHistory = [],
 }) => {
   const pendingCount = [
     !extractedData.policy_id,
@@ -133,17 +126,6 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
         </div>
       </div>
 
-
-      {claimStatus && (
-        <div className="px-4 pt-4 md:px-5">
-          <ClaimStatusPanel
-            status={claimStatus}
-            submitted={submitted}
-            adjusterRequests={adjusterRequests}
-            statusHistory={statusHistory}
-          />
-        </div>
-      )}
 
       {/* Field Cards */}
       <div className="p-4 md:p-5 space-y-3.5 flex-1 overflow-y-auto">

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { CopilotChatMessage, FileData } from "./types";
+import React from "react";
+import { FileData } from "./types";
 
 interface AdjusterCopilotPanelProps {
   file: FileData;
@@ -7,8 +7,6 @@ interface AdjusterCopilotPanelProps {
   updatingStatus: boolean;
   onLoadCopilot: (ticketId: string) => void;
   onUpdateStatus: (status: string) => void;
-  onSendChat: (message: string) => Promise<void>;
-  chatSending: boolean;
 }
 
 export const AdjusterCopilotPanel: React.FC<AdjusterCopilotPanelProps> = ({
@@ -17,174 +15,120 @@ export const AdjusterCopilotPanel: React.FC<AdjusterCopilotPanelProps> = ({
   updatingStatus,
   onLoadCopilot,
   onUpdateStatus,
-  onSendChat,
-  chatSending,
 }) => {
-  const [draft, setDraft] = useState("");
-  const messages = file.copilot_chat || [];
-
-  useEffect(() => {
-    setDraft("");
-  }, [file.claim.ticket_id]);
-
-  const submit = async () => {
-    const value = draft.trim();
-    if (!value || chatSending) return;
-    setDraft("");
-    await onSendChat(value);
-  };
-
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_380px]">
-      <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+    <div className="grid xl:grid-cols-[1fr_360px] gap-5">
+      <section className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden shadow-2xs">
+        <div className="px-5 py-4 border-b border-[#e0e3e5] flex justify-between items-center">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#e5f3f1] text-[#0b6b72]">
-                <span className="material-symbols-outlined text-[19px]">auto_awesome</span>
-              </span>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Claim intelligence</p>
-                <h2 className="mt-0.5 text-lg font-semibold tracking-tight text-slate-900">AI adjuster copilot</h2>
-              </div>
-            </div>
-            <p className="mt-3 max-w-2xl text-xs leading-relaxed text-slate-500">
-              Review the grounded assessment, then ask questions about this claim in the same workspace.
+            <h2 className="font-headline font-bold text-base">AI Adjuster Copilot</h2>
+            <p className="text-[11px] text-[#6e797e] mt-0.5">
+              Advisory analysis grounded in policy clauses and claim facts.
             </p>
           </div>
           <button
             onClick={() => onLoadCopilot(file.claim.ticket_id)}
             disabled={copilotLoading}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#0b6b72] hover:text-[#0b6b72] disabled:opacity-50"
+            className="text-xs bg-[#00647c] hover:bg-[#004e61] text-white px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            {copilotLoading ? "Analyzing..." : "Refresh analysis"}
+            <span className="material-symbols-outlined text-sm">
+              {copilotLoading ? "progress_activity" : "refresh"}
+            </span>
+            <span>{copilotLoading ? "Analyzing..." : "Re-run Analysis"}</span>
           </button>
         </div>
 
-        <div className="space-y-5 p-6">
+        <div className="p-5 space-y-4">
           {copilotLoading ? (
-            <div className="space-y-3">
-              <div className="h-20 animate-pulse rounded-2xl bg-slate-100" />
-              <div className="h-14 animate-pulse rounded-2xl bg-slate-100" />
-              <div className="h-14 animate-pulse rounded-2xl bg-slate-100" />
+            <div className="py-14 text-center text-xs text-[#6e797e]">
+              <span className="material-symbols-outlined animate-spin text-2xl text-[#00647c] mb-2">
+                progress_activity
+              </span>
+              <p>Running grounded Copilot analysis with pgvector retrieval...</p>
             </div>
           ) : file.copilot?.summary ? (
-            <div className="rounded-2xl border border-[#cfe7e4] bg-[#f4fbfa] p-5">
-              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#0b6b72]">Decision brief</p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">{file.copilot.summary}</p>
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-              <p className="text-sm font-semibold text-slate-800">No analysis yet</p>
-              <p className="mt-1 text-xs text-slate-500">Run the grounded claim analysis before discussing the file with Copilot.</p>
-              <button onClick={() => onLoadCopilot(file.claim.ticket_id)} className="mt-4 rounded-xl bg-[#0b6b72] px-4 py-2 text-xs font-semibold text-white">
-                Run analysis
-              </button>
-            </div>
-          )}
+            <>
+              <div className="border-l-[3px] border-[#00647c] bg-[#f4f9fa] p-4 text-xs leading-relaxed text-[#0f3d4a] rounded-r-lg">
+                <b className="block text-[11px] uppercase tracking-wider text-[#00647c] mb-1 font-bold">
+                  Executive Summary
+                </b>
+                {file.copilot.summary}
+              </div>
 
-          {(file.copilot?.coverage_observations || []).length > 0 && (
-            <div className="grid gap-3 md:grid-cols-2">
-              {(file.copilot.coverage_observations || []).map((item, index) => (
-                <div key={index} className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Coverage observation</p>
-                  <p className="mt-2 text-xs leading-5 text-slate-600">{item}</p>
+              {(file.copilot.coverage_observations || []).map((x, i) => (
+                <div key={i} className="bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg p-3 text-xs">
+                  <b className="text-[#00647c]">Coverage Observation</b>
+                  <p className="mt-1 leading-relaxed text-[#526066]">{x}</p>
                 </div>
               ))}
-            </div>
-          )}
 
-          {(file.copilot?.evidence_gaps || []).length > 0 && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-amber-700">Evidence gaps</p>
-              <ul className="mt-2 space-y-2">
-                {(file.copilot.evidence_gaps || []).map((item, index) => (
-                  <li key={index} className="text-xs leading-5 text-amber-950">• {item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className="border-t border-slate-100 pt-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Discuss this claim</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">Ask about coverage, evidence, inconsistencies, or next steps.</p>
-              </div>
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">Grounded chat</span>
-            </div>
-
-            <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
-              {messages.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 p-5 text-xs text-slate-400">
-                  Try: “What evidence is still missing?” or “Which policy clause supports the current assessment?”
+              {(file.copilot.evidence_gaps || []).map((x, i) => (
+                <div key={i} className="bg-[#fff8ec] border border-[#fce6c5] rounded-lg p-3 text-xs">
+                  <b className="text-[#895900]">Evidence Gap</b>
+                  <p className="mt-1 leading-relaxed text-[#895900]">{x}</p>
                 </div>
-              ) : (
-                messages.map((message: CopilotChatMessage, index) => (
-                  <div key={`${message.created_at || "m"}-${index}`} className={message.role === "user" ? "ml-10" : "mr-10"}>
-                    <div className={`rounded-2xl px-4 py-3 text-xs leading-5 ${message.role === "user" ? "bg-[#0b6b72] text-white" : "bg-slate-100 text-slate-700"}`}>
-                      {message.text}
+              ))}
+
+              {(file.knowledge_sources || []).length > 0 && (
+                <div className="border-t border-[#e0e3e5] pt-4 mt-4">
+                  <b className="text-xs text-[#191c1e]">Retrieved Grounding Sources</b>
+                  {(file.knowledge_sources || []).map((s, i) => (
+                    <div
+                      key={i}
+                      className="mt-2 text-[10px] bg-[#f7f9fb] border border-[#e0e3e5] rounded-lg p-3"
+                    >
+                      <b className="text-[#00647c]">{s.source_name || "Policy Document"}</b>
+                      <p className="mt-1 text-[#657177] leading-relaxed">
+                        {s.text?.slice(0, 500)}
+                      </p>
                     </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
-            </div>
-
-            <div className="mt-4 flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 focus-within:border-[#0b6b72]">
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void submit();
-                  }
-                }}
-                rows={2}
-                placeholder="Ask Copilot about this claim..."
-                className="min-h-[52px] flex-1 resize-none bg-transparent px-2 py-1.5 text-xs text-slate-800 outline-none placeholder:text-slate-400"
-              />
+            </>
+          ) : (
+            <div className="py-14 text-center text-xs text-[#6e797e]">
+              <span className="material-symbols-outlined text-3xl text-[#cbd5e1] mb-1">
+                auto_awesome
+              </span>
+              <p>Copilot analysis is not available yet.</p>
               <button
-                onClick={() => void submit()}
-                disabled={!draft.trim() || chatSending}
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#0b6b72] text-white transition hover:bg-[#095b61] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => onLoadCopilot(file.claim.ticket_id)}
+                className="mt-3 bg-[#00647c] text-white px-3.5 py-1.5 rounded-lg font-semibold cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[18px]">{chatSending ? "progress_activity" : "arrow_upward"}</span>
+                Run Analysis Now
               </button>
-            </div>
-          </div>
-
-          {(file.knowledge_sources || []).length > 0 && (
-            <div className="border-t border-slate-100 pt-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Grounding sources</p>
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                {file.knowledge_sources.slice(0, 6).map((source, index) => (
-                  <div key={index} className="rounded-xl border border-slate-200 p-3">
-                    <p className="text-[10px] font-semibold text-[#0b6b72]">{source.source_name || "Policy source"}</p>
-                    <p className="mt-1 line-clamp-3 text-[10px] leading-4 text-slate-500">{source.text}</p>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
         </div>
       </section>
 
-      <aside className="h-fit rounded-[24px] border border-slate-200/80 bg-[#102f35] p-6 text-white shadow-[0_18px_55px_rgba(15,23,42,0.09)]">
-        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-teal-200/70">Human decision control</p>
-        <h3 className="mt-2 text-xl font-semibold tracking-tight">You own the adjudication</h3>
-        <p className="mt-2 text-xs leading-5 text-teal-50/70">
-          Copilot surfaces evidence and reasoning. The final claim decision remains with the assigned adjuster.
+      <aside className="bg-white border border-[#e0e3e5] rounded-xl p-5 h-fit shadow-2xs">
+        <h2 className="font-headline font-bold text-[15px]">Decision Control</h2>
+        <p className="text-[11px] text-[#6e797e] leading-relaxed mt-1">
+          AI analysis is purely advisory. The adjuster owns the final adjudication decision.
         </p>
-        <div className="mt-6 grid gap-2">
-          <button disabled={updatingStatus} onClick={() => onUpdateStatus("pending_evidence")} className="rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-xs font-semibold text-white transition hover:bg-white/10">
-            Request more evidence
+        <div className="grid gap-2.5 mt-5">
+          <button
+            disabled={updatingStatus}
+            onClick={() => onUpdateStatus("pending_evidence")}
+            className="border border-[#bdc8ce] hover:border-[#00647c] rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer"
+          >
+            Need More Evidence
           </button>
-          <button disabled={updatingStatus} onClick={() => onUpdateStatus("approved")} className="rounded-xl bg-[#b8ddd7] px-4 py-3 text-xs font-bold text-[#102f35] transition hover:bg-[#c8e8e3]">
-            Approve claim
+          <button
+            disabled={updatingStatus}
+            onClick={() => onUpdateStatus("approved")}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+          >
+            Approve Claim
           </button>
-          <button disabled={updatingStatus} onClick={() => onUpdateStatus("rejected")} className="rounded-xl border border-rose-300/30 px-4 py-3 text-xs font-semibold text-rose-100 transition hover:bg-rose-400/10">
-            Reject claim
+          <button
+            disabled={updatingStatus}
+            onClick={() => onUpdateStatus("rejected")}
+            className="border border-[#d9a7a2] text-[#93000a] hover:bg-rose-50 rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer"
+          >
+            Reject Claim
           </button>
         </div>
       </aside>

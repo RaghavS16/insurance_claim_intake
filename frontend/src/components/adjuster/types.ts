@@ -30,23 +30,6 @@ export interface Claim {
   policy_verified?: boolean;
   dynamic_requirements_complete?: boolean;
   updated_at?: string;
-  open_adjuster_requests?: number;
-  last_adjuster_request?: AdjusterRequest;
-}
-
-export interface AdjusterRequest {
-  id?: string;
-  message?: string;
-  requested_evidence?: string[];
-  requested_by?: string;
-  requested_at?: string;
-  status?: string;
-}
-
-export interface CopilotChatMessage {
-  role: "user" | "assistant";
-  text: string;
-  created_at?: string;
 }
 
 export interface KnowledgeItem {
@@ -128,7 +111,5 @@ export interface FileData {
   submission_package?: SubmissionPackage;
   conversation_phase?: string;
   gap_analysis?: Record<string, unknown>;
-  adjuster_requests?: AdjusterRequest[];
-  copilot_chat?: CopilotChatMessage[];
 }
 
