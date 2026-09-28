@@ -398,9 +398,6 @@ export default function ClaimantPage() {
     setPendingEvidenceReview([]);
     setEvidenceItems([]);
     setSubmittedMessage("");
-    setClaimStatus("draft");
-    setAdjusterRequests([]);
-    setStatusHistory([]);
     setPartialSegments(new Map());
     setErrorBanner("");
     if (router.query.ticket || router.query.ticket_id) {

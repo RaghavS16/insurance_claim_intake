@@ -21,7 +21,7 @@ from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.models import Adjuster
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimAuditEvent
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement
 from src.evidence.verifier import verify_evidence
 from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim
@@ -85,7 +85,6 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "conversation_phase": state.get("conversation_phase", "1_baseline"),
         "gap_analysis": state.get("gap_analysis") or {},
         "submission_package": state.get("submission_package") or {},
-        "adjuster_requests": state.get("adjuster_requests") or [],
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
         "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }
@@ -211,25 +210,6 @@ def start_voice_session(request: Request, payload: Optional[VoiceSessionRequest]
         raise HTTPException(status_code=500, detail="Failed to create claim session.")
     return {**_claim_payload(claim), "resumed": False, "initial_message": "Tell me what happened, in your own words. I'll collect the details as we go.", "conversation": []}
 
-
-def _public_status_history(db: Session, claim: Claim) -> list[dict[str, Any]]:
-    rows = (
-        db.query(ClaimAuditEvent)
-        .filter(ClaimAuditEvent.claim_id == claim.id)
-        .filter(ClaimAuditEvent.event_type.in_(["status_changed", "evidence_requested"]))
-        .order_by(ClaimAuditEvent.created_at.asc())
-        .all()
-    )
-    return [
-        {
-            "event_type": row.event_type,
-            "old_status": (row.old_value_json or {}).get("status"),
-            "status": (row.new_value_json or {}).get("status"),
-            "message": row.reason,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
-        for row in rows
-    ]
 
 @router.get("/active")
 def get_active_claim(request: Request, db: Session = Depends(get_db)):
