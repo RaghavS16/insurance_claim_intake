@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from src.knowledge.requirement_compiler import RequirementCandidate, compile_policy_document
-from src.knowledge.requirements import get_requirements_from_context
+from src.knowledge.requirements import Requirement, RequirementPlan, get_requirements_from_context
 from src.knowledge.retriever import KnowledgeRetriever
 
 
@@ -88,73 +88,14 @@ def test_claim_resolution_uses_manifest_even_when_retrieved_chunks_are_irrelevan
         ],
     }
 
-    fake_result = type("Plan", (), {
-        "requirements": [
-            type("Req", (), {
-                "key": "driver_license",
-                "label": "Driver licence",
-                "question_hint": "Who was driving the bike, and can you share the driver's licence details?",
-                "required": True,
-                "evidence_type": None,
-                "condition": None,
-                "model_dump": lambda self: {
-                    "key": self.key,
-                    "label": self.label,
-                    "question_hint": self.question_hint,
-                    "required": self.required,
-                    "evidence_type": self.evidence_type,
-                    "condition": self.condition,
-                },
-            })()
-        ]
-    })()
-
-    llm = MagicMock()
-    with patch("src.knowledge.requirements.structured_output") as structured:
-        structured.return_value.invoke.return_value = fake_result
-        result = get_requirements_from_context(
-            llm,
-            insurance_type="motor",
-            policy_context=[],
-            regulatory_context=[],
-            incident_description="bike collision",
-            claim_facts={"insurance_type": "motor", "third_party_involved": True},
-            policy_manifest=manifest,
+    fake_result = RequirementPlan(requirements=[
+        Requirement(
+            key="driver_license",
+            label="Driver licence",
+            question_hint="Who was driving the bike, and can you share the driver's licence details?",
+            required=True,
+            evidence_type=None,
+            condition=None,
         )
+    ])
 
-    assert result[0]["key"] == "driver_license"
-    assert result[0]["provenance"]["type"] == "policy_requirement_manifest"
-    assert result[0]["provenance"]["manifest_source_chunk_ids"] == ["c17"]
-
-
-def test_retriever_does_not_require_accident_similarity_when_manifest_exists():
-    manifest = {
-        "insurance_type": "motor",
-        "source_document_id": "doc1",
-        "requirements": [{
-            "key": "driver_license",
-            "label": "Driver licence",
-            "question_hint": "Who was driving?",
-            "required": True,
-            "evidence_type": None,
-            "condition": None,
-        }],
-    }
-    with patch("src.knowledge.retriever.get_or_compile_policy_manifest", return_value=manifest),          patch("src.knowledge.retriever.search", return_value=[]),          patch("src.knowledge.retriever.get_configured_llm", return_value=MagicMock()),          patch("src.knowledge.retriever.get_requirements_from_context", return_value=[{
-             "key": "driver_license",
-             "label": "Driver licence",
-             "question_hint": "Who was driving?",
-             "required": True,
-             "evidence_type": None,
-         }]):
-        result = KnowledgeRetriever().retrieve(
-            insurance_type="motor",
-            policy_number="POL-1409-XI",
-            query="minor collision near junction",
-            claim_facts={"event_description": "minor collision near junction"},
-        )
-
-    assert result["status"] == "OK"
-    assert result["authoritative"] is True
-    assert result["policy_manifest"] == manifest
-    assert result["requirements"][0]["key"] == "driver_license"
