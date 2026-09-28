@@ -58,34 +58,26 @@ class KnowledgeRetriever:
 
         # Supporting retrieval now includes requirement-oriented queries as well as the
         # claimant narrative. The manifest remains the source of truth for the inventory.
-        support_queries = [
-            claim_query,
-            f"{insurance_type} claim requirements claim procedure notification evidence",
-            f"{insurance_type} claims documents conditions third party accident damage",
-        ]
+        support_query = (
+            f"{insurance_type} claim requirements claims procedure notification evidence "
+            f"documents conditions third party accident damage {claim_query}"
+        ).strip()[:4000]
         policy_rows: list[dict] = []
         guidance_rows: list[dict] = []
         try:
-            for support_query in support_queries:
-                if not support_query:
-                    continue
-                policy_rows.extend(
-                    search(
-                        support_query,
-                        insurance_type=insurance_type,
-                        policy_number=policy_number,
-                        document_types=["policy_wording"],
-                        incident_date=incident_date,
-                    )
-                )
-                guidance_rows.extend(
-                    search(
-                        support_query,
-                        insurance_type=insurance_type,
-                        document_types=["regulation", "guideline", "claim_requirement"],
-                        incident_date=incident_date,
-                    )
-                )
+            policy_rows = search(
+                support_query,
+                insurance_type=insurance_type,
+                policy_number=policy_number,
+                document_types=["policy_wording"],
+                incident_date=incident_date,
+            )
+            guidance_rows = search(
+                support_query,
+                insurance_type=insurance_type,
+                document_types=["regulation", "guideline", "claim_requirement"],
+                incident_date=incident_date,
+            )
         except Exception:
             pass
 
