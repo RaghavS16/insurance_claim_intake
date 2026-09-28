@@ -9,7 +9,7 @@ from src.knowledge.requirements import Requirement, RequirementPlan
 class RequirementCandidate(BaseModel):
     requirements: list[Requirement] = Field(default_factory=list)
 
-def _source_text(chunks: list[dict[str, Any]], limit: int = 14000) -> str:
+def _source_text(chunks: list[dict[str, Any]], limit: int = 16000) -> str:
     parts=[]; used=0
     for row in chunks:
         text=str(row.get("text") or "").strip()
@@ -40,10 +40,20 @@ def compile_policy_requirements(*, document_id: str, insurance_type: str,
                                  chunks: list[dict[str, Any]], llm=None) -> list[dict[str, Any]]:
     if not chunks or not insurance_type: return []
     llm=llm or get_configured_llm()
-    candidates=[]
-    for start in range(0,len(chunks),8):
-        try: candidates.extend(_compile_batch(llm,insurance_type,chunks[start:start+8]))
-        except Exception: continue
+    candidates = []
+    batch_size = 4
+    for start in range(0, len(chunks), batch_size):
+        batch = chunks[start:start + batch_size]
+        try:
+            batch_requirements = _compile_batch(llm, insurance_type, batch)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Policy requirement compilation failed for batch {start // batch_size + 1}"
+            ) from exc
+        expected_chunk_ids = {str(row.get("chunk_id")) for row in batch if row.get("chunk_id")}
+        for req in batch_requirements:
+            if {str(x) for x in (req.source_chunk_ids or [])} & expected_chunk_ids:
+                candidates.append(req)
     if not candidates: return []
     prompt=f"""Synthesize the final authoritative claim requirement manifest for {insurance_type}.
 Use ONLY the policy-derived candidates below. Merge duplicates, preserve conditions and provenance,
@@ -55,6 +65,8 @@ CANDIDATES:
         result=invoke_with_retry(lambda: structured_output(llm,RequirementPlan).invoke(prompt),
                                  operation_name="policy requirement manifest synthesis", attempts=2)
         final=result.requirements if isinstance(result,RequirementPlan) else RequirementPlan.model_validate(result).requirements
+        if not final:
+            final = candidates
     except Exception:
         final=candidates
     merged={}
@@ -89,7 +101,22 @@ REQUIREMENT MANIFEST:
         result=invoke_with_retry(lambda: structured_output(llm,RequirementPlan).invoke(prompt),
                                  operation_name="claim-specific policy requirement resolution", attempts=2)
         final=result.requirements if isinstance(result,RequirementPlan) else RequirementPlan.model_validate(result).requirements
-        return [r.model_dump() for r in final]
+        by_key = {str(item.get("key") or "").strip().lower(): item for item in manifest if item.get("key")}
+        output = []
+        for req in final:
+            item = req.model_dump()
+            key = str(item.get("key") or "").strip().lower()
+            if not key or key not in by_key:
+                continue
+            source = by_key[key]
+            item["key"] = key
+            item["source_chunk_ids"] = list(dict.fromkeys((source.get("source_chunk_ids") or []) + (item.get("source_chunk_ids") or [])))
+            item["source_section"] = item.get("source_section") or source.get("source_section")
+            item["source_excerpt"] = item.get("source_excerpt") or source.get("source_excerpt")
+            item["condition"] = item.get("condition") or source.get("condition")
+            item["provenance"] = source.get("provenance", {"type": "policy_requirement_manifest"})
+            output.append(item)
+        return output
     except Exception:
         # Safe fallback: keep unconditional requirements and conditionals rather than silently dropping them.
         return list(manifest)
