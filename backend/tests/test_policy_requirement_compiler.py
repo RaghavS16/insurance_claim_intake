@@ -4,37 +4,8 @@ from src.knowledge.policy_compiler import resolve_requirement_manifest
 from src.knowledge.requirements import RequirementPlan
 
 
-def test_policy_manifest_resolution_preserves_supported_provenance():
-    manifest = [{
-        "key": "police_report",
-        "label": "Police report",
-        "question_hint": "Do you have the police report?",
-        "required": True,
-        "evidence_type": "document",
-        "condition": "if the incident involved theft or a criminal act",
-        "category": "evidence",
-        "source_section": "Claims Procedure",
-        "source_chunk_ids": ["chunk-7"],
-        "source_excerpt": "Notify the police immediately in the event of theft.",
-        "provenance": {"document_id": "doc-1", "type": "policy_requirement_manifest"},
-    }]
-
-    result_obj = RequirementPlan(requirements=[])
-    with patch(
-        "src.knowledge.policy_compiler.structured_output",
-        return_value=MagicMock(invoke=MagicMock(return_value=result_obj)),
-    ):
-        resolved = resolve_requirement_manifest(
-            manifest=manifest,
-            insurance_type="motor",
-            claim_facts={"event_description": "collision with another car"},
-        )
-
-    assert resolved == []
-
-
-def test_policy_manifest_resolution_fallback_never_drops_requirements_on_llm_failure():
-    manifest = [{
+def _manifest():
+    return [{
         "key": "police_report",
         "label": "Police report",
         "question_hint": "Do you have the police report?",
@@ -45,15 +16,39 @@ def test_policy_manifest_resolution_fallback_never_drops_requirements_on_llm_fai
         "source_section": "Claims Procedure",
         "source_chunk_ids": ["chunk-7"],
         "source_excerpt": "Notify the police immediately in the event of theft.",
+        "provenance": {"document_id": "doc-1", "type": "policy_requirement_manifest"},
     }]
 
+
+def test_policy_manifest_resolution_can_exclude_non_applicable_condition():
     with patch(
-        "src.knowledge.policy_compiler.get_configured_llm", return_value=MagicMock()), patch(
+        "src.knowledge.policy_compiler.get_configured_llm",
+        return_value=MagicMock(),
+    ), patch(
+        "src.knowledge.policy_compiler.structured_output",
+        return_value=MagicMock(
+            invoke=MagicMock(return_value=RequirementPlan(requirements=[]))
+        ),
+    ):
+        resolved = resolve_requirement_manifest(
+            manifest=_manifest(),
+            insurance_type="motor",
+            claim_facts={"event_description": "collision with another car"},
+        )
+
+    assert resolved == []
+
+
+def test_policy_manifest_resolution_fallback_never_drops_requirements_on_llm_failure():
+    with patch(
+        "src.knowledge.policy_compiler.get_configured_llm",
+        return_value=MagicMock(),
+    ), patch(
         "src.knowledge.policy_compiler.structured_output",
         side_effect=RuntimeError("provider unavailable"),
     ):
         resolved = resolve_requirement_manifest(
-            manifest=manifest,
+            manifest=_manifest(),
             insurance_type="motor",
             claim_facts={"event_description": "collision"},
         )
