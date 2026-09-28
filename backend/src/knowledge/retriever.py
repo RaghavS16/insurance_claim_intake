@@ -25,10 +25,12 @@ class KnowledgeRetriever:
         policy = []
         guidance = []
         manifest = []
+        policy_docs_found = False
         # Document-level compilation is authoritative when available, but a DB/cache
         # outage must not disable the existing retrieval path.
         try:
             policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date)
+            policy_docs_found = bool(policy_docs)
             for doc in policy_docs:
                 cached = get_cached_requirement_manifest(doc["document_id"])
                 if not cached:
@@ -45,16 +47,59 @@ class KnowledgeRetriever:
         if manifest:
             manifest = list({str(x.get("key")): x for x in manifest if x.get("key")}.values())
             try:
-                resolved = resolve_requirement_manifest(manifest=manifest, insurance_type=insurance_type, claim_facts={**facts, "incident": incident_description})
+                resolved = resolve_requirement_manifest(
+                    manifest=manifest,
+                    insurance_type=insurance_type,
+                    claim_facts={**facts, "incident": incident_description},
+                )
             except Exception:
                 resolved = []
             if resolved:
                 return {
-                    "available": True, "status": "OK", "requirements": resolved,
-                    "policy": search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date),
-                    "regulations": search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date),
-                    "authoritative": True, "planning_model": "policy_manifest",
+                    "available": True,
+                    "status": "OK",
+                    "requirements": resolved,
+                    "policy": search(
+                        q,
+                        insurance_type=insurance_type,
+                        policy_number=policy_number,
+                        document_types=["policy_wording"],
+                        incident_date=incident_date,
+                    ),
+                    "regulations": search(
+                        q,
+                        insurance_type=insurance_type,
+                        document_types=["regulation", "guideline", "claim_requirement"],
+                        incident_date=incident_date,
+                    ),
+                    "authoritative": True,
+                    "planning_model": "policy_manifest",
                 }
+
+        # If an applicable policy wording exists, never replace a failed or unresolved
+        # policy manifest with top-k semantic chunks and call that authoritative.
+        # That was the source of the old "Claude sees the whole policy, our AI sees
+        # five accident-similar chunks" behavior.
+        if policy_docs_found:
+            try:
+                policy = search(
+                    q,
+                    insurance_type=insurance_type,
+                    policy_number=policy_number,
+                    document_types=["policy_wording"],
+                    incident_date=incident_date,
+                )
+            except Exception:
+                policy = []
+            return {
+                "available": False,
+                "status": "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE",
+                "requirements": [],
+                "policy": policy,
+                "regulations": [],
+                "authoritative": False,
+                "planning_model": "policy_manifest_required",
+            }
 
         try:
             policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date)
