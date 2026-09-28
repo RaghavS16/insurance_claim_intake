@@ -185,7 +185,7 @@ def ingest_document(
                         db.commit()
                 except Exception:
                     pass
-            return {
+            result = {
                 "document_id": str(existing.id),
                 "source_name": existing.source_name,
                 "source_uri": existing.source_uri,
@@ -193,6 +193,15 @@ def ingest_document(
                 "insurance_type": existing.insurance_type,
                 "duplicate": True,
             }
+            try:
+                from src.knowledge.requirement_compiler import get_or_compile_policy_manifest
+                get_or_compile_policy_manifest(
+                    insurance_type=existing.insurance_type or insurance_type or "unknown",
+                    policy_number=policy_number or (existing.metadata_json or {}).get("policy_number"),
+                )
+            except Exception as exc:
+                logger.warning("[Knowledge] Requirement manifest compilation deferred for '%s': %s", filename, exc)
+            return result
     finally:
         db.close()
 
@@ -256,13 +265,27 @@ def ingest_document(
         db.commit()
         elapsed = time.time() - t0
         logger.info("[Knowledge] Successfully indexed '%s' (%d chunks) in %.2fs!", filename, len(chunks), elapsed)
-        return {
+        result = {
             "document_id": doc.id,
             "source_name": filename,
             "source_uri": s3["uri"],
             "chunks": len(chunks),
             "insurance_type": insurance_type,
         }
+        try:
+            from src.knowledge.requirement_compiler import get_or_compile_policy_manifest
+            if (document_type or meta.document_type or "unknown") == "policy_wording":
+                get_or_compile_policy_manifest(
+                    insurance_type=insurance_type or "unknown",
+                    policy_number=policy_number,
+                    effective_from=None,
+                    incident_date=None,
+                )
+        except Exception as exc:
+            # Policy upload remains successful; claimant-time retrieval can compile the
+            # manifest lazily if the configured reasoning provider is temporarily unavailable.
+            logger.warning("[Knowledge] Requirement manifest compilation deferred for '%s': %s", filename, exc)
+        return result
     except Exception:
         db.rollback()
         raise
