@@ -16,6 +16,10 @@ class Requirement(BaseModel):
     required: bool = True
     evidence_type: str | None = None
     condition: str | None = None
+    category: str = "other"
+    source_section: str | None = None
+    source_chunk_ids: list[str] = Field(default_factory=list)
+    source_excerpt: str | None = None
 
 class RequirementPlan(BaseModel):
     requirements: list[Requirement] = Field(default_factory=list)

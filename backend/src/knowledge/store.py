@@ -269,6 +269,99 @@ def ingest_document(
     finally:
         db.close()
 
+def list_policy_documents(
+    *,
+    insurance_type: str | None = None,
+    policy_number: str | None = None,
+    incident_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """Return candidate policy-wording documents for document-level compilation."""
+    db = SessionLocal()
+    try:
+        conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording"]
+        if insurance_type:
+            conditions.append(
+                (KnowledgeDocument.insurance_type == insurance_type)
+                | (KnowledgeDocument.insurance_type.is_(None))
+            )
+        metadata = KnowledgeDocument.metadata_json
+        if policy_number:
+            conditions.append(
+                (metadata["policy_number"].as_string() == policy_number)
+                | (metadata["policy_number"].as_string().is_(None))
+            )
+        if incident_date:
+            event_date = incident_date.isoformat()
+            effective_from = metadata["effective_from"].as_string()
+            effective_to = metadata["effective_to"].as_string()
+            conditions.append((effective_from.is_(None)) | (effective_from <= event_date))
+            conditions.append((effective_to.is_(None)) | (effective_to >= event_date))
+        rows = db.execute(
+            select(KnowledgeDocument).where(*conditions).order_by(KnowledgeDocument.created_at.desc())
+        ).scalars().all()
+        return [
+            {
+                "document_id": str(row.id),
+                "source_name": row.source_name,
+                "source_uri": row.source_uri,
+                "insurance_type": row.insurance_type,
+                "metadata": dict(row.metadata_json or {}),
+            }
+            for row in rows
+        ]
+    finally:
+        db.close()
+
+
+def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
+    """Load every indexed chunk for a document in original order."""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_id == document_id)
+            .order_by(KnowledgeChunk.chunk_index.asc())
+        ).scalars().all()
+        return [
+            {
+                "chunk_id": str(row.id),
+                "chunk_index": row.chunk_index,
+                "text": row.text,
+                "metadata": dict(row.metadata_json or {}),
+            }
+            for row in rows
+        ]
+    finally:
+        db.close()
+
+
+def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        if not row:
+            return []
+        manifest = (row.metadata_json or {}).get("requirement_manifest")
+        return manifest if isinstance(manifest, list) else []
+    finally:
+        db.close()
+
+
+def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]]) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        if not row:
+            return
+        row.metadata_json = {
+            **(row.metadata_json or {}),
+            "requirement_manifest": manifest,
+            "requirement_manifest_version": 1,
+        }
+        db.commit()
+    finally:
+        db.close()
+
 def search(
     query: str,
     insurance_type: str | None = None,

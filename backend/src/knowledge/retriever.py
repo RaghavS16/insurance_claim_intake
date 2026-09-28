@@ -2,8 +2,9 @@
 from datetime import date
 from src.agents.llm_factory import LLMTransientError, get_configured_llm, get_fast_llm, is_transient_llm_error
 from .requirements import get_requirements_from_context, get_provisional_requirements
-from .store import search
+from .store import search, list_policy_documents, get_document_chunks, get_cached_requirement_manifest, save_requirement_manifest
 from .reranker import rerank
+from .policy_compiler import compile_policy_requirements, resolve_requirement_manifest
 
 class KnowledgeRetrievalError(RuntimeError):
     pass
@@ -23,7 +24,29 @@ class KnowledgeRetriever:
         
         policy = []
         guidance = []
+        manifest = []
         try:
+            policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date)
+            for doc in policy_docs:
+                cached = get_cached_requirement_manifest(doc["document_id"])
+                if not cached:
+                    chunks = get_document_chunks(doc["document_id"])
+                    try:
+                        cached = compile_policy_requirements(document_id=doc["document_id"], insurance_type=insurance_type, chunks=chunks)
+                        if cached: save_requirement_manifest(doc["document_id"], cached)
+                    except Exception:
+                        cached = []
+                manifest.extend(cached)
+            if manifest:
+                manifest = list({str(x.get("key")): x for x in manifest if x.get("key")}.values())
+                resolved = resolve_requirement_manifest(manifest=manifest, insurance_type=insurance_type, claim_facts={**facts, "incident": incident_description})
+                return {
+                    "available": bool(resolved), "status": "OK" if resolved else "REQUIREMENT_PLAN_UNAVAILABLE",
+                    "requirements": resolved,
+                    "policy": search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date),
+                    "regulations": search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date),
+                    "authoritative": bool(resolved), "planning_model": "policy_manifest",
+                }
             policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date)
             guidance = search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date)
         except Exception:
