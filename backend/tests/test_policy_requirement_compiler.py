@@ -48,6 +48,7 @@ def test_policy_manifest_resolution_fallback_never_drops_requirements_on_llm_fai
     }]
 
     with patch(
+        "src.knowledge.policy_compiler.get_configured_llm", return_value=MagicMock()), patch(
         "src.knowledge.policy_compiler.structured_output",
         side_effect=RuntimeError("provider unavailable"),
     ):
