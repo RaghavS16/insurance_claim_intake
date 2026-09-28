@@ -70,10 +70,23 @@ CANDIDATES:
     except Exception:
         final=candidates
     merged={}
+    candidate_by_key={}
+    for req in candidates:
+        item=req.model_dump()
+        key=str(item.get("key") or "").strip().lower()
+        if key:
+            candidate_by_key[key]=item
+
     for req in final:
         item=req.model_dump(); key=str(item.get("key") or "").strip().lower()
         if not key: continue
+        source=candidate_by_key.get(key, {})
         item["key"]=key
+        item["source_chunk_ids"]=sorted(set(source.get("source_chunk_ids") or []) | set(item.get("source_chunk_ids") or []))
+        item["source_section"]=item.get("source_section") or source.get("source_section")
+        item["source_excerpt"]=item.get("source_excerpt") or source.get("source_excerpt")
+        item["condition"]=item.get("condition") or source.get("condition")
+        item["evidence_type"]=item.get("evidence_type") or source.get("evidence_type")
         item["provenance"]={"document_id":document_id,"type":"policy_requirement_manifest"}
         if key not in merged: merged[key]=item
         else:
@@ -81,6 +94,16 @@ CANDIDATES:
             old["source_chunk_ids"]=sorted(set(old.get("source_chunk_ids") or []) | set(item.get("source_chunk_ids") or []))
             for k in ("source_section","source_excerpt","condition","evidence_type"):
                 if not old.get(k) and item.get(k): old[k]=item[k]
+
+    # Synthesis is allowed to merge wording, but never to drop a requirement that
+    # was extracted from the complete policy. Add any candidate it omitted.
+    for key, source in candidate_by_key.items():
+        if key in merged:
+            continue
+        source["key"]=key
+        source["provenance"]={"document_id":document_id,"type":"policy_requirement_manifest"}
+        merged[key]=source
+
     return list(merged.values())
 
 def resolve_requirement_manifest(*, manifest: list[dict[str, Any]], insurance_type: str,
