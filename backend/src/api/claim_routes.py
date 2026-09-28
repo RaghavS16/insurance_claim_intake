@@ -299,7 +299,7 @@ def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
+    return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim), "status_history": _public_status_history(db, claim)}
 
 
 @router.post("/intake")

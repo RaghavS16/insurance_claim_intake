@@ -35,6 +35,8 @@ export default function AdjusterPage() {
   const [loading, setLoading] = useState(true);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [copilotLoading, setCopilotLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [requestSending, setRequestSending] = useState(false);
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
@@ -98,6 +100,52 @@ export default function AdjusterPage() {
     },
     [api, selected]
   );
+
+  const handleCopilotChat = async (message: string) => {
+    if (!selected) return;
+    setChatSending(true);
+    setError("");
+    try {
+      const d = (await api("/api/v1/adjuster/claims/" + selected + "/copilot/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      })) as { messages?: FileData["copilot_chat"]; sources?: KnowledgeItem[] };
+      setFile((prev) =>
+        prev
+          ? {
+              ...prev,
+              copilot_chat: d.messages || prev.copilot_chat,
+              knowledge_sources: d.sources || prev.knowledge_sources,
+            }
+          : prev,
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Copilot chat failed.");
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const handleRequestEvidence = async (message: string, requestedEvidence: string[]) => {
+    if (!selected) return;
+    setRequestSending(true);
+    setError("");
+    try {
+      await api("/api/v1/adjuster/claims/" + selected + "/evidence-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, requested_evidence: requestedEvidence }),
+      });
+      setSuccessMessage("Evidence request sent to the claimant.");
+      setTimeout(() => setSuccessMessage(""), 3000);
+      await openClaim(selected);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not send evidence request.");
+    } finally {
+      setRequestSending(false);
+    }
+  };
 
   const searchKnowledge = async () => {
     setError("");
@@ -467,6 +515,8 @@ export default function AdjusterPage() {
                     onRefresh={() => openClaim(file.claim.ticket_id)}
                     onOpenEvidence={openEvidence}
                     onUpdateStatus={update}
+                    onRequestEvidence={handleRequestEvidence}
+                    requestSending={requestSending}
                   />
                 )}
 
@@ -477,6 +527,8 @@ export default function AdjusterPage() {
                     updatingStatus={updatingStatus}
                     onLoadCopilot={loadCopilot}
                     onUpdateStatus={update}
+                    onSendChat={handleCopilotChat}
+                    chatSending={chatSending}
                   />
                 )}
               </>

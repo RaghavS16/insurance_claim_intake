@@ -1,5 +1,7 @@
 """Authenticated adjuster workbench API."""
 from __future__ import annotations
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -86,6 +88,8 @@ def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
         "policy_verified":bool((state.get("policy_verification") or {}).get("valid")),
         "dynamic_requirements_complete":not bool(state.get("dynamic_missing")),
         "updated_at":c.updated_at.isoformat() if c.updated_at else None,
+        "open_adjuster_requests": len([r for r in state.get("adjuster_requests", []) if r.get("status", "open") == "open"]),
+        "last_adjuster_request": (state.get("adjuster_requests") or [])[-1] if state.get("adjuster_requests") else None,
     }
 
 def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
@@ -138,6 +142,8 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "submission_package": package,
         "conversation_phase": state.get("conversation_phase", "1_baseline"),
         "gap_analysis": state.get("gap_analysis", {}),
+        "adjuster_requests": state.get("adjuster_requests", []),
+        "copilot_chat": state.get("copilot_chat", []),
     }
 
 @router.get("/claims/{ticket_id}/package")
@@ -242,6 +248,89 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     return {"ticket_id": ticket_id, "analysis": state.get("copilot"), "status": "ready" if state.get("copilot") else "unavailable", "sources": state.get("knowledge_sources", [])}
 
 
+
+class EvidenceRequest(BaseModel):
+    message: str = Field(..., min_length=5, max_length=4000)
+    requested_evidence: list[str] = Field(default_factory=list)
+
+class CopilotChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=5000)
+
+@router.post("/claims/{ticket_id}/evidence-request")
+def request_evidence(ticket_id: str, payload: EvidenceRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = get_claim_or_404(db, ticket_id)
+    _ensure_assigned_adjuster(claim, current_user, db)
+    state = dict(claim.pipeline_state or {})
+    if claim.status == "submitted":
+        transition_claim(db, claim, "assigned", str(current_user.id), "adjuster requested additional evidence")
+    if claim.status in {"assigned", "under_review"}:
+        transition_claim(db, claim, "pending_evidence", str(current_user.id), "adjuster requested additional evidence")
+    elif claim.status != "pending_evidence":
+        raise HTTPException(status_code=409, detail=f"Evidence cannot be requested while the claim is {claim.status}.")
+    item = {
+        "id": uuid.uuid4().hex,
+        "message": payload.message.strip(),
+        "requested_evidence": [x.strip() for x in payload.requested_evidence if x.strip()],
+        "requested_by": str(current_user.id),
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "status": "open",
+    }
+    requests = list(state.get("adjuster_requests") or [])
+    requests.append(item)
+    state["adjuster_requests"] = requests[-50:]
+    state["last_adjuster_request_id"] = item["id"]
+    claim.pipeline_state = state
+    db.add(ClaimAuditEvent(
+        claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="evidence_requested",
+        new_value_json={"request_id": item["id"], "message": item["message"], "requested_evidence": item["requested_evidence"]},
+        reason=item["message"],
+    ))
+    db.commit(); db.refresh(claim)
+    return {"success": True, "request": item, "claim": _item(claim)}
+
+@router.post("/claims/{ticket_id}/copilot/chat")
+def copilot_chat(ticket_id: str, payload: CopilotChatRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_adjuster(request, db)
+    claim = get_claim_or_404(db, ticket_id)
+    _ensure_assigned_adjuster(claim, current_user, db)
+    state = dict(claim.pipeline_state or {})
+    data = state.get("extracted_data") or {}
+    context = KnowledgeRetriever().retrieve(
+        insurance_type=claim.insurance_type or "",
+        policy_number=data.get("policy_id"),
+        incident_date=claim.event_date,
+        query=claim.event_description or payload.message,
+    )
+    if not context.get("available"):
+        raise HTTPException(status_code=503, detail="Authoritative claim knowledge is unavailable; Copilot chat is paused until grounding is available.")
+    history = list(state.get("copilot_chat") or [])[-12:]
+    transcript = "\n".join(f"{m.get('role', 'assistant').upper()}: {m.get('text', '')}" for m in history)
+    prompt = (
+        "You are an insurance adjuster copilot for one claim. Be concise, practical, and advisory. "
+        "Discuss the claim using only the supplied claim facts and retrieved policy/regulatory evidence. "
+        "Do not make the final coverage or legal decision. Identify uncertainty and cite the relevant source name when possible. "
+        f"\nCLAIM FACTS: {data}\nINCIDENT: {claim.event_description}\n"
+        f"POLICY EVIDENCE: {context.get('policy', [])}\nREGULATORY EVIDENCE: {context.get('regulations', [])}\n"
+        f"PRIOR COPILOT CHAT:\n{transcript}\nADJUSTER QUESTION: {payload.message.strip()}"
+    )
+    try:
+        result = get_configured_llm().invoke(prompt)
+        reply = getattr(result, "content", str(result)).strip()
+    except Exception:
+        raise HTTPException(status_code=503, detail="AI provider is temporarily unavailable. Retry Copilot shortly.")
+    if not reply:
+        raise HTTPException(status_code=503, detail="Copilot returned an empty response. Please retry.")
+    now = datetime.now(timezone.utc).isoformat()
+    history.extend([
+        {"role": "user", "text": payload.message.strip(), "created_at": now},
+        {"role": "assistant", "text": reply, "created_at": now},
+    ])
+    state["copilot_chat"] = history[-30:]
+    state["knowledge_sources"] = [*context.get("policy", []), *context.get("regulations", [])]
+    claim.pipeline_state = state
+    db.commit()
+    return {"ticket_id": ticket_id, "reply": reply, "messages": state["copilot_chat"], "sources": state["knowledge_sources"]}
 
 class DecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(approve|partial_approve|reject|request_evidence|escalate)$")
