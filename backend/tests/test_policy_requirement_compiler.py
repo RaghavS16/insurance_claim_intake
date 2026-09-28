@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from src.knowledge.policy_compiler import resolve_requirement_manifest
+from src.knowledge.requirements import RequirementPlan
 
 
 def test_policy_manifest_resolution_preserves_supported_provenance():
@@ -18,8 +19,7 @@ def test_policy_manifest_resolution_preserves_supported_provenance():
         "provenance": {"document_id": "doc-1", "type": "policy_requirement_manifest"},
     }]
 
-    result_obj = MagicMock()
-    result_obj.requirements = []
+    result_obj = RequirementPlan(requirements=[])
     with patch(
         "src.knowledge.policy_compiler.structured_output",
         return_value=MagicMock(invoke=MagicMock(return_value=result_obj)),

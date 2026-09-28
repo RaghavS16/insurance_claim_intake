@@ -25,6 +25,8 @@ class KnowledgeRetriever:
         policy = []
         guidance = []
         manifest = []
+        # Document-level compilation is authoritative when available, but a DB/cache
+        # outage must not disable the existing retrieval path.
         try:
             policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date)
             for doc in policy_docs:
@@ -37,20 +39,28 @@ class KnowledgeRetriever:
                     except Exception:
                         cached = []
                 manifest.extend(cached)
-            if manifest:
-                manifest = list({str(x.get("key")): x for x in manifest if x.get("key")}.values())
+        except Exception:
+            manifest = []
+
+        if manifest:
+            manifest = list({str(x.get("key")): x for x in manifest if x.get("key")}.values())
+            try:
                 resolved = resolve_requirement_manifest(manifest=manifest, insurance_type=insurance_type, claim_facts={**facts, "incident": incident_description})
+            except Exception:
+                resolved = []
+            if resolved:
                 return {
-                    "available": bool(resolved), "status": "OK" if resolved else "REQUIREMENT_PLAN_UNAVAILABLE",
-                    "requirements": resolved,
+                    "available": True, "status": "OK", "requirements": resolved,
                     "policy": search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date),
                     "regulations": search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date),
-                    "authoritative": bool(resolved), "planning_model": "policy_manifest",
+                    "authoritative": True, "planning_model": "policy_manifest",
                 }
+
+        try:
             policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date)
             guidance = search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date)
         except Exception:
-            pass
+            policy, guidance = [], []
 
         if policy:
             try:
