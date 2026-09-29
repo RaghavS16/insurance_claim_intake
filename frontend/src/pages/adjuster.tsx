@@ -61,9 +61,9 @@ export default function AdjusterPage() {
   }, [api]);
 
   const openClaim = useCallback(
-    async (id: string) => {
+    async (id: string, nextView: AdjusterViewType = "file") => {
       setSelected(id);
-      setView("file");
+      setView(nextView);
       setError("");
       try {
         const data = (await api("/api/v1/adjuster/claims/" + id)) as FileData;
@@ -355,7 +355,7 @@ export default function AdjusterPage() {
               knowledgeItems={knowledgeItems} onSearchKnowledge={searchKnowledge}
             />}
 
-            {file && (
+            {file && view !== "queue" && view !== "knowledge" && (
               <>
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-5">
                   <div>
