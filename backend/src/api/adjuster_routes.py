@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
+from datetime import datetime, timezone
 from src.api.deps import get_current_user, require_role, resolve_bearer_user, get_claim_or_404
 from src.config import settings
 from src.database.models import Claim, Adjuster, User, ConversationTurn
@@ -375,6 +376,52 @@ ADJUSTER QUESTION:
     return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": [*context.get("policy", []), *context.get("regulations", [])]}
 
 
+
+class EvidenceRequestCreate(BaseModel):
+    request_text: str = Field(..., min_length=5, max_length=4000)
+
+def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id).order_by(ClaimEvidence.created_at.desc()).first()
+    return {
+        "id": str(row.id),
+        "claim_id": str(row.claim_id),
+        "adjuster_id": str(row.adjuster_id),
+        "request_text": row.request_text,
+        "status": row.status,
+        "response_note": row.response_note,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
+        "response_evidence": {
+            "id": str(evidence.id),
+            "name": evidence.original_filename,
+            "verification_status": evidence.verification_status,
+        } if evidence else None,
+    }
+
+@router.post("/claims/{ticket_id}/evidence-requests")
+def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    c = get_claim_or_404(db, ticket_id)
+    adjuster = _ensure_assigned_adjuster(c, user, db)
+    if c.status in {"approved", "partially_approved", "rejected", "closed"}:
+        raise HTTPException(status_code=409, detail="Evidence cannot be requested after a final claim outcome.")
+    row = ClaimEvidenceRequest(claim_id=str(c.id), adjuster_id=str(adjuster.id), request_text=payload.request_text.strip(), status="open")
+    db.add(row)
+    if c.status in {"submitted", "assigned", "under_review"}:
+        transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
+    db.add(ClaimAuditEvent(
+        claim_id=str(c.id), actor_user_id=str(user.id), event_type="evidence_requested",
+        new_value_json={"request_id": str(row.id), "request_text": row.request_text}, reason=row.request_text
+    ))
+    db.commit()
+    db.refresh(row)
+    return _request_payload(row, db)
+
+@router.get("/claims/{ticket_id}/evidence-requests")
+def list_evidence_requests(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    c = get_claim_or_404(db, ticket_id)
+    _ensure_assigned_adjuster(c, user, db)
+    rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == c.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+    return [_request_payload(row, db) for row in rows]
 
 class DecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(approve|partial_approve|reject|request_evidence|escalate)$")

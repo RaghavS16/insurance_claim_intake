@@ -6,6 +6,8 @@ import { apiFetch } from "@/lib/api";
 import {
   AdjusterTopBar,
   AdjusterSidebar,
+  ClaimsQueueView,
+  AdjusterKnowledgePanel,
   ClaimFileView,
   EvidenceReviewView,
   AdjusterCopilotPanel,
@@ -37,6 +39,15 @@ export default function AdjusterPage() {
   const [copilotChat, setCopilotChat] = useState<Array<{ speaker: string; message: string; created_at?: string }>>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  const [evidenceRequestText, setEvidenceRequestText] = useState("");
+  const [sendingEvidenceRequest, setSendingEvidenceRequest] = useState(false);
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
+  const [knowledgeType, setKnowledgeType] = useState("policy_wording");
+  const [knowledgeInsurance, setKnowledgeInsurance] = useState("");
+  const [knowledgePolicy, setKnowledgePolicy] = useState("");
+  const [knowledgeUploading, setKnowledgeUploading] = useState(false);
 
   const api = useAuthApi();
 
@@ -133,6 +144,52 @@ export default function AdjusterPage() {
       setUpdatingStatus(false);
     }
   };
+
+  const requestEvidence = useCallback(async () => {
+    if (!selected || evidenceRequestText.trim().length < 5) return;
+    setSendingEvidenceRequest(true);
+    try {
+      await api("/api/v1/adjuster/claims/" + selected + "/evidence-requests", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({request_text:evidenceRequestText.trim()})
+      });
+      setEvidenceRequestText("");
+      setSuccessMessage("Evidence request sent to claimant.");
+      setTimeout(()=>setSuccessMessage(""),3000);
+      await loadQueue(); await openClaim(selected);
+    } catch(e:unknown){setError(e instanceof Error?e.message:"Failed to send evidence request.");}
+    finally{setSendingEvidenceRequest(false);}
+  },[api,selected,evidenceRequestText,loadQueue,openClaim]);
+
+  const searchKnowledge = useCallback(async () => {
+    try{
+      const d=await api("/api/v1/knowledge/search?q="+encodeURIComponent(knowledgeQuery.trim()||"policy coverage claim requirements")) as {items?:KnowledgeItem[]};
+      setKnowledgeItems(d.items||[]);
+    }catch(e:unknown){setError(e instanceof Error?e.message:"Knowledge search failed.");}
+  },[api,knowledgeQuery]);
+
+  const uploadKnowledge = useCallback(async () => {
+    if(!knowledgeFile)return;
+    setKnowledgeUploading(true);
+    try{
+      const form=new FormData();
+      form.append("file",knowledgeFile); form.append("document_type",knowledgeType);
+      if(knowledgeInsurance)form.append("insurance_type",knowledgeInsurance);
+      if(knowledgePolicy)form.append("policy_number",knowledgePolicy);
+      const d=await apiFetch<{source_name?:string}>("/api/v1/knowledge/upload",{method:"POST",headers:{Authorization:"Bearer "+(getAuthToken()||"")},body:form});
+      setKnowledgeFile(null); setKnowledgeQuery(d.source_name||""); await searchKnowledge();
+    }catch(e:unknown){setError(e instanceof Error?e.message:"Knowledge upload failed.");}
+    finally{setKnowledgeUploading(false);}
+  },[apiFetch,knowledgeFile,knowledgeType,knowledgeInsurance,knowledgePolicy,searchKnowledge]);
+
+  const sendCopilotMessage = useCallback(async () => {
+    if(!selected || !copilotMessage.trim())return;
+    const message=copilotMessage.trim(); setCopilotMessage("");
+    try{
+      const d=await api("/api/v1/adjuster/claims/"+selected+"/copilot/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})}) as {chat?:Array<{speaker:string;message:string;created_at?:string}>};
+      setCopilotChat(d.chat||[]);
+    }catch(e:unknown){setError(e instanceof Error?e.message:"Copilot chat is unavailable.");}
+  },[api,selected,copilotMessage]);
 
   const handleAddNote = async () => {
     if (!selected || !newNote.trim()) return;
@@ -282,26 +339,21 @@ export default function AdjusterPage() {
               </div>
             )}
 
-            {/* Mobile access to the same three claim tools shown in desktop hover actions. */}
             <div className="flex gap-1.5 mb-5 md:hidden overflow-x-auto pb-1">
-              {[
-                ["file", "Claim Details"],
-                ["evidence", "Evidence Review"],
-                ["copilot", "AI Copilot"],
-              ].map(([v, lbl]) => (
-                <button
-                  key={v}
-                  onClick={() => {
-                    if (!selected && claims.length > 0) void openClaim(claims[0].ticket_id);
-                    setView(v as AdjusterViewType);
-                  }}
-                  className={"px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors " +
-                    (view === v ? "bg-[#00647c] text-white" : "bg-white border border-[#e0e3e5] text-[#526066]")}
-                >
-                  {lbl}
-                </button>
-              ))}
+              {[["queue","Claims Queue"],["knowledge","Policy & Regulations"],["file","Claim Details"],["evidence","Evidence Review"],["copilot","AI Copilot"]].map(([v,lbl])=><button key={v} onClick={()=>{if((v==="file"||v==="evidence"||v==="copilot")&&!selected&&claims.length)void openClaim(claims[0].ticket_id);setView(v as AdjusterViewType)}} className={"px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap "+(view===v?"bg-[#00647c] text-white":"bg-white border border-[#e0e3e5] text-[#526066]")}>{lbl}</button>)}
             </div>
+
+            {view === "queue" && <ClaimsQueueView claims={claims} selected={selected} onOpenClaim={openClaim} onRefresh={loadQueue} />}
+
+            {view === "knowledge" && <AdjusterKnowledgePanel
+              knowledgeType={knowledgeType} setKnowledgeType={setKnowledgeType}
+              knowledgeInsurance={knowledgeInsurance} setKnowledgeInsurance={setKnowledgeInsurance}
+              knowledgePolicy={knowledgePolicy} setKnowledgePolicy={setKnowledgePolicy}
+              knowledgeFile={knowledgeFile} setKnowledgeFile={setKnowledgeFile}
+              knowledgeUploading={knowledgeUploading} onUploadKnowledge={uploadKnowledge}
+              knowledgeQuery={knowledgeQuery} setKnowledgeQuery={setKnowledgeQuery}
+              knowledgeItems={knowledgeItems} onSearchKnowledge={searchKnowledge}
+            />}
 
             {file && (
               <>
