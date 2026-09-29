@@ -4,7 +4,7 @@ export const title = (v?: string) =>
 export const money = (v?: number) =>
   v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
 
-export type AdjusterViewType = "queue" | "file" | "evidence" | "knowledge" | "copilot";
+export type AdjusterViewType = "queue" | "file" | "evidence" | "copilot";
 
 export interface AdjusterUser {
   id?: string;
@@ -59,10 +59,28 @@ export interface RequirementItem {
 }
 
 export interface CopilotAnalysis {
+  executive_summary?: string;
   summary?: string;
   coverage_observations?: string[];
+  mandatory_requirements?: Array<{ label?: string; status?: string; condition?: string }>;
+  evidence_assessment?: string[];
   evidence_gaps?: string[];
+  risk_flags?: string[];
+  regulatory_considerations?: string[];
+  decision_considerations?: string[];
+  recommended_next_steps?: string[];
+  uncertainties?: string[];
   [key: string]: unknown;
+}
+
+export interface EvidenceRequest {
+  id: string;
+  request_text: string;
+  status: string;
+  response_note?: string | null;
+  requested_at?: string | null;
+  responded_at?: string | null;
+  response_evidence?: { id?: string; name?: string; verification_status?: string } | null;
 }
 
 export interface SubmissionPackage {
@@ -105,6 +123,7 @@ export interface FileData {
   missing_requirements: RequirementItem[];
   missing_evidence: RequirementItem[];
   evidence: EvidenceItem[];
+  evidence_requests?: EvidenceRequest[];
   policy_verification: Record<string, unknown>;
   knowledge_sources: KnowledgeItem[];
   copilot: CopilotAnalysis;

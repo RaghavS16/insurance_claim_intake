@@ -55,9 +55,22 @@ class ClaimEvidence(Base):
     verification_confidence: Mapped[Optional[float]]=mapped_column()
     detected_document_type: Mapped[Optional[str]]=mapped_column(String(150))
     requested_evidence_type: Mapped[Optional[str]]=mapped_column(String(150))
+    request_id: Mapped[Optional[str]]=_UUID(ForeignKey("claim_evidence_requests.id",ondelete="SET NULL"))
     analysis_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now,onupdate=_now)
+
+class ClaimEvidenceRequest(Base):
+    __tablename__="claim_evidence_requests"
+    __table_args__=(Index("ix_claim_evidence_requests_claim","claim_id"), Index("ix_claim_evidence_requests_status","status"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
+    adjuster_id: Mapped[str]=_UUID(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
+    request_text: Mapped[str]=mapped_column(Text,nullable=False)
+    status: Mapped[str]=mapped_column(String(40),nullable=False,default="open")
+    response_note: Mapped[Optional[str]]=mapped_column(Text)
+    requested_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    responded_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
 
 class ClaimDecision(Base):
     __tablename__="claim_decisions"

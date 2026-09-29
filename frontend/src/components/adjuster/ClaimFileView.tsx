@@ -10,6 +10,10 @@ interface ClaimFileViewProps {
   setNewNote: (note: string) => void;
   addingNote: boolean;
   onAddNote: () => void;
+  evidenceRequestText: string;
+  setEvidenceRequestText: (value: string) => void;
+  sendingEvidenceRequest: boolean;
+  onRequestEvidence: () => void;
 }
 
 export const ClaimFileView: React.FC<ClaimFileViewProps> = ({
@@ -21,6 +25,10 @@ export const ClaimFileView: React.FC<ClaimFileViewProps> = ({
   setNewNote,
   addingNote,
   onAddNote,
+  evidenceRequestText,
+  setEvidenceRequestText,
+  sendingEvidenceRequest,
+  onRequestEvidence,
 }) => {
   const pkg = file.submission_package;
 
@@ -279,16 +287,32 @@ export const ClaimFileView: React.FC<ClaimFileViewProps> = ({
               )}
               <span>Start Review</span>
             </button>
-            <button
-              disabled={updatingStatus}
-              onClick={() => onUpdateStatus("pending_evidence")}
-              className="border border-[#bdc8ce] hover:border-[#00647c] bg-white rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span className="material-symbols-outlined text-base">attach_file</span>
-              <span>Request Evidence</span>
-            </button>
+            <div className="border border-[#d8e0e4] rounded-lg p-3 bg-[#fbfcfd]">
+              <div className="text-[10px] uppercase tracking-wider text-[#778187] font-bold mb-1.5">Request specific evidence</div>
+              <textarea rows={3} value={evidenceRequestText} onChange={(e) => setEvidenceRequestText(e.target.value)}
+                placeholder="Describe exactly what the claimant must provide..."
+                className="w-full border border-[#cbd5e1] rounded-lg p-2.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#00647c]" />
+              <button disabled={sendingEvidenceRequest || evidenceRequestText.trim().length < 5} onClick={onRequestEvidence}
+                className="w-full mt-2 bg-[#00647c] hover:bg-[#004e61] disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold cursor-pointer">
+                {sendingEvidenceRequest ? "Sending Request..." : "Send Evidence Request"}
+              </button>
+            </div>
           </div>
         </section>
+
+        {file.evidence_requests?.length ? (
+          <section className="bg-white border border-[#e0e3e5] rounded-xl p-5 shadow-2xs">
+            <h2 className="font-headline font-bold text-[15px]">Evidence Requests</h2>
+            <div className="mt-3 space-y-2">
+              {file.evidence_requests.map((req) => (
+                <div key={req.id} className="border border-[#e0e3e5] rounded-lg p-3">
+                  <div className="text-xs text-[#334155] leading-relaxed">{req.request_text}</div>
+                  <div className="text-[10px] text-[#778187] mt-1.5 uppercase font-bold">{req.status}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="bg-white border border-[#e0e3e5] rounded-xl p-5 shadow-2xs">
           <h2 className="font-headline font-bold text-[15px]">Add Internal Note</h2>

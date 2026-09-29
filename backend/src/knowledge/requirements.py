@@ -43,15 +43,19 @@ def get_requirements_from_context(
         return []
 
     def _prompt_context(rows: list[dict]) -> list[dict]:
-        # Keep RAG prompts bounded; retrieval provenance is persisted separately.
+        # Policy manifests are compiled document-wide. For the fallback semantic
+        # planner, keep a larger evidence window so later policy sections are not
+        # silently lost before requirement extraction.
         return [
             {
                 "source_name": row.get("source_name"),
+                "document_id": row.get("document_id"),
+                "chunk_id": row.get("chunk_id") or row.get("id"),
                 "document_type": row.get("document_type"),
                 "score": row.get("rerank_score", row.get("score")),
-                "text": str(row.get("text") or "")[:3500],
+                "text": str(row.get("text") or "")[:5000],
             }
-            for row in rows[:3]
+            for row in rows[:12]
         ]
 
     policy_prompt_context = _prompt_context(policy_context)
@@ -67,7 +71,9 @@ Do not ask for a notification date/time for this same intake channel. Only requi
 
 Based SOLELY on these retrieved documents:
 1. Identify specific follow-up information details required from the claimant to process and assess coverage for this claim.
-2. Identify all required supporting evidence or document uploads explicitly mandated by the retrieved policy wording, regulatory guidance, or claim conditions. Do not infer a document requirement from general insurance practice; only return evidence requirements that are supported by the retrieved sources.
+2. Identify ALL required supporting evidence or document uploads explicitly mandated by the retrieved policy wording, regulatory guidance, or claim conditions. Do not infer a document requirement from general insurance practice; only return evidence requirements that are supported by the retrieved sources.
+3. Do not summarize the checklist into a small number of "representative" items. Preserve every distinct source-backed claimant detail, document, notification, add-on obligation, and conditional requirement that appears in the supplied evidence.
+4. When a requirement is conditional and the condition is not resolved by the known claim facts, keep it in the plan with its condition so the conversation can collect the fact needed to resolve it.
 
 Do NOT repeat the 6 baseline fields already collected: policy number, incident date, insurance type, incident description, incident location, estimated loss amount.
 

@@ -106,40 +106,83 @@ CANDIDATES:
 
     return list(merged.values())
 
+def _condition_is_clearly_false(condition: str | None, claim_facts: dict[str, Any]) -> bool:
+    """Conservatively exclude only conditions disproved by explicit claim facts."""
+    if not condition:
+        return False
+    text = condition.lower()
+    facts = json.dumps(claim_facts, ensure_ascii=False, default=str).lower()
+    negative_pairs = (
+        ("theft", ("collision", "accident", "crash", "medical", "illness", "trip delay", "baggage")),
+        ("burglary", ("collision", "medical", "illness", "trip delay")),
+        ("fire brigade", ("medical", "motor accident", "travel")),
+        ("post-mortem", ("no death", "survived", "alive")),
+        ("loss of rent", ("motor", "health", "travel", "cyber")),
+        ("online shopping", ("motor", "home", "health", "travel")),
+        ("social media", ("motor", "home", "health", "travel")),
+        ("surgery", ("no surgery", "medication only", "outpatient only")),
+        ("implant", ("no implant", "medication only")),
+        ("baggage", ("motor", "home", "health", "cyber")),
+        ("flight delay", ("motor", "home", "health", "cyber")),
+        ("cashless", ("reimbursement",)),
+    )
+    for trigger, negatives in negative_pairs:
+        if trigger in text and any(n in facts for n in negatives):
+            return True
+    return False
+
+
 def resolve_requirement_manifest(*, manifest: list[dict[str, Any]], insurance_type: str,
                                  claim_facts: dict[str, Any], llm=None) -> list[dict[str, Any]]:
-    """Select applicable requirements for this claim without losing unresolved conditions."""
-    if not manifest: return []
-    llm=llm or get_configured_llm()
-    prompt=f"""Resolve this authoritative {insurance_type} policy requirement manifest against the known claim facts.
-Include requirements that clearly apply. Exclude requirements whose conditions clearly do not apply.
-If a condition cannot yet be determined from the facts, KEEP the requirement and preserve its condition so
-the conversation can collect the fact needed to resolve it. Never invent a claimant fact.
-Return the same RequirementPlan structure and preserve source provenance.
+    """Resolve applicability conservatively; never let an LLM shrink the authoritative checklist."""
+    if not manifest:
+        return []
+    by_key = {
+        str(item.get("key") or "").strip().lower(): dict(item)
+        for item in manifest if item.get("key")
+    }
+    if not by_key:
+        return []
+
+    llm = llm or get_configured_llm()
+    prompt = f"""Resolve applicability for this authoritative {insurance_type} claim requirement manifest.
+For EVERY manifest key, return the same requirement object when it applies or when its condition is still unknown.
+Only omit a key when the claim facts clearly prove its condition does not apply.
+Never invent claimant facts and never remove a source-backed requirement merely because the claim fact is missing.
 KNOWN CLAIM FACTS:
-{json.dumps(claim_facts,ensure_ascii=False,default=str)}
+{json.dumps(claim_facts, ensure_ascii=False, default=str)}
 REQUIREMENT MANIFEST:
-{json.dumps(manifest,ensure_ascii=False,default=str)}"""
+{json.dumps(manifest, ensure_ascii=False, default=str)}"""
+
+    llm_items: dict[str, dict[str, Any]] = {}
     try:
-        result=invoke_with_retry(lambda: structured_output(llm,RequirementPlan).invoke(prompt),
-                                 operation_name="claim-specific policy requirement resolution", attempts=2)
-        final=result.requirements if isinstance(result,RequirementPlan) else RequirementPlan.model_validate(result).requirements
-        by_key = {str(item.get("key") or "").strip().lower(): item for item in manifest if item.get("key")}
-        output = []
-        for req in final:
-            item = req.model_dump()
-            key = str(item.get("key") or "").strip().lower()
-            if not key or key not in by_key:
-                continue
-            source = by_key[key]
-            item["key"] = key
-            item["source_chunk_ids"] = list(dict.fromkeys((source.get("source_chunk_ids") or []) + (item.get("source_chunk_ids") or [])))
-            item["source_section"] = item.get("source_section") or source.get("source_section")
-            item["source_excerpt"] = item.get("source_excerpt") or source.get("source_excerpt")
-            item["condition"] = item.get("condition") or source.get("condition")
-            item["provenance"] = source.get("provenance", {"type": "policy_requirement_manifest"})
-            output.append(item)
-        return output
+        result = invoke_with_retry(
+            lambda: structured_output(llm, RequirementPlan).invoke(prompt),
+            operation_name="claim-specific policy requirement resolution", attempts=2,
+        )
+        final = result.requirements if isinstance(result, RequirementPlan) else RequirementPlan.model_validate(result).requirements
+        llm_items = {
+            str(req.key).strip().lower(): req.model_dump()
+            for req in final
+            if req.key
+        }
     except Exception:
-        # Safe fallback: keep unconditional requirements and conditionals rather than silently dropping them.
-        return list(manifest)
+        llm_items = {}
+
+    output = []
+    for key, source in by_key.items():
+        if _condition_is_clearly_false(source.get("condition"), claim_facts):
+            continue
+        enriched = dict(source)
+        model_item = llm_items.get(key)
+        if model_item:
+            for field in ("label", "question_hint", "required", "evidence_type", "condition", "category", "source_section", "source_excerpt"):
+                if model_item.get(field) not in (None, ""):
+                    enriched[field] = model_item[field]
+            enriched["source_chunk_ids"] = list(dict.fromkeys(
+                (source.get("source_chunk_ids") or []) + (model_item.get("source_chunk_ids") or [])
+            ))
+        enriched["key"] = key
+        enriched["provenance"] = source.get("provenance", {"type": "policy_requirement_manifest"})
+        output.append(enriched)
+    return output

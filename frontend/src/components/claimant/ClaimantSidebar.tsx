@@ -23,7 +23,7 @@ interface ClaimantSidebarProps {
   userName: string;
   claims: ClaimSummary[];
   activeTicketId?: string;
-  activeRoute?: "claimant" | "link-policy";
+  activeRoute?: "claimant" | "link-policy" | "track-claim";
   loadingClaims?: boolean;
   onSelectClaim: (ticketId: string) => void;
   onNewClaim: () => void;
@@ -109,9 +109,11 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const currentActiveRoute = activeRoute || (router.pathname.includes("link-policy") ? "link-policy" : "claimant");
+  const currentActiveRoute = activeRoute || (router.pathname.includes("link-policy") ? "link-policy" : router.pathname.includes("track-claim") ? "track-claim" : "claimant");
+  const postSubmissionStatuses = new Set(["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]);
 
   const startedClaims = claims.filter((c) => {
+    if (postSubmissionStatuses.has((c.status || "").toLowerCase())) return false;
     const hasInteraction =
       (c.turn_count && c.turn_count > 0) ||
       c.status === "submitted" ||
@@ -205,6 +207,18 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         </Link>
 
         <Link
+          href="/claimant/track-claim"
+          onClick={() => { if (mobileOpen) setMobileOpen(false); }}
+          className={currentActiveRoute === "track-claim" ? "flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold bg-white text-[#00647c] border border-[#00647c]/20" : "flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-[#00647c] hover:bg-slate-200/50 border border-transparent"}
+        >
+          <span className="material-symbols-outlined text-[18px]">track_changes</span>
+          <span className="flex-1">Track Claim</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200/80 text-slate-600">
+            {claims.filter((c) => postSubmissionStatuses.has((c.status || "").toLowerCase())).length}
+          </span>
+        </Link>
+
+        <Link
           href="/link-policy"
           onClick={() => { if (mobileOpen) setMobileOpen(false); }}
           className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${currentActiveRoute === "link-policy"
@@ -276,7 +290,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                 const badge = getStatusBadge(claim.status);
                 const icon = getInsuranceIcon(claim.insurance_type);
                 const timeAgo = formatTimeAgo(claim.updated_at || claim.created_at);
-                const canDelete = claim.status?.toLowerCase() !== "submitted";
+                const canDelete = !postSubmissionStatuses.has((claim.status || "").toLowerCase());
 
                 return (
                   <div

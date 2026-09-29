@@ -717,6 +717,10 @@ export default function ClaimantPage() {
       setConfirmed(true);
       setClaimSubmitted(true);
       fetchClaimsList(token);
+      try { wsRef.current?.close(); } catch {}
+      wsRef.current = null;
+      await router.push("/claimant/track-claim");
+
     } catch (err: unknown) {
       setErrorBanner(err instanceof Error ? err.message : "An error occurred while submitting your claim.");
     } finally {

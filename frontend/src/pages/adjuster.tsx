@@ -6,10 +6,8 @@ import { apiFetch } from "@/lib/api";
 import {
   AdjusterTopBar,
   AdjusterSidebar,
-  ClaimsQueueView,
   ClaimFileView,
   EvidenceReviewView,
-  AdjusterKnowledgePanel,
   AdjusterCopilotPanel,
   AdjusterUser,
   Claim,
@@ -35,13 +33,8 @@ export default function AdjusterPage() {
   const [loading, setLoading] = useState(true);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [copilotLoading, setCopilotLoading] = useState(false);
-  const [knowledgeQuery, setKnowledgeQuery] = useState("");
-  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
-  const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
-  const [knowledgeType, setKnowledgeType] = useState("policy_wording");
-  const [knowledgeInsurance, setKnowledgeInsurance] = useState("");
-  const [knowledgePolicy, setKnowledgePolicy] = useState("");
-  const [knowledgeUploading, setKnowledgeUploading] = useState(false);
+  const [copilotMessage, setCopilotMessage] = useState("");
+  const [copilotChat, setCopilotChat] = useState<Array<{ speaker: string; message: string; created_at?: string }>>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
@@ -99,22 +92,6 @@ export default function AdjusterPage() {
     [api, selected]
   );
 
-  const searchKnowledge = async () => {
-    setError("");
-    try {
-      const q = knowledgeQuery.trim() || "policy coverage claim requirements";
-      const d = (await api(
-        "/api/v1/knowledge/search?q=" +
-          encodeURIComponent(q) +
-          (knowledgeInsurance ? "&insurance_type=" + encodeURIComponent(knowledgeInsurance) : "") +
-          (knowledgePolicy ? "&policy_number=" + encodeURIComponent(knowledgePolicy) : "")
-      )) as { items?: KnowledgeItem[] };
-      setKnowledgeItems(d.items || []);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Knowledge search failed.");
-    }
-  };
-
   const openEvidence = async (e: EvidenceItem) => {
     if (!selected) return;
     setError("");
@@ -133,37 +110,6 @@ export default function AdjusterPage() {
       window.open(d.url, "_blank", "noopener,noreferrer");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to open evidence.");
-    }
-  };
-
-  const uploadKnowledge = async () => {
-    if (!knowledgeFile) return;
-    setKnowledgeUploading(true);
-    setError("");
-    try {
-      const form = new FormData();
-      form.append("file", knowledgeFile);
-      form.append("document_type", knowledgeType);
-      if (knowledgeInsurance) form.append("insurance_type", knowledgeInsurance);
-      if (knowledgePolicy) form.append("policy_number", knowledgePolicy);
-      const token = getAuthToken();
-      const d = await apiFetch<{ detail?: string; source_name?: string }>(
-        "/api/v1/knowledge/upload",
-        {
-          method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          body: form,
-        },
-      );
-      setKnowledgeFile(null);
-      setSuccessMessage("Knowledge document uploaded and indexed successfully!");
-      setTimeout(() => setSuccessMessage(""), 3000);
-      setKnowledgeQuery(d.source_name || knowledgeQuery);
-      await searchKnowledge();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to upload knowledge document.");
-    } finally {
-      setKnowledgeUploading(false);
     }
   };
 
@@ -336,74 +282,26 @@ export default function AdjusterPage() {
               </div>
             )}
 
-            {/* Mobile Tab Navigation */}
+            {/* Mobile access to the same three claim tools shown in desktop hover actions. */}
             <div className="flex gap-1.5 mb-5 md:hidden overflow-x-auto pb-1">
               {[
-                ["queue", "Queue"],
-                ["file", "Claim File"],
-                ["evidence", "Evidence"],
-                ["copilot", "Copilot"],
-                ["knowledge", "Policies"],
+                ["file", "Claim Details"],
+                ["evidence", "Evidence Review"],
+                ["copilot", "AI Copilot"],
               ].map(([v, lbl]) => (
                 <button
                   key={v}
                   onClick={() => {
-                    if ((v === "file" || v === "evidence" || v === "copilot") && !selected && claims.length > 0) {
-                      openClaim(claims[0].ticket_id);
-                    }
-                    setView(v as typeof view);
+                    if (!selected && claims.length > 0) void openClaim(claims[0].ticket_id);
+                    setView(v as AdjusterViewType);
                   }}
-                  className={
-                    "px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors " +
-                    (view === v ? "bg-[#00647c] text-white" : "bg-white border border-[#e0e3e5] text-[#526066]")
-                  }
+                  className={"px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors " +
+                    (view === v ? "bg-[#00647c] text-white" : "bg-white border border-[#e0e3e5] text-[#526066]")}
                 >
                   {lbl}
                 </button>
               ))}
             </div>
-
-            {view === "queue" && (
-              <ClaimsQueueView
-                claims={claims}
-                selected={selected}
-                onOpenClaim={openClaim}
-                onRefresh={loadQueue}
-              />
-            )}
-
-            {view !== "queue" && view !== "knowledge" && !file && (
-              <div className="bg-white border border-[#e0e3e5] rounded-xl p-12 text-center shadow-sm">
-                <span className="material-symbols-outlined text-4xl text-[#bdc8ce] mb-2">folder_open</span>
-                <h2 className="font-headline font-bold text-lg text-[#191c1e]">Select a claim</h2>
-                <p className="text-xs text-[#6e797e] mt-1">Open a claim from the queue to review its file.</p>
-                <button
-                  onClick={() => setView("queue")}
-                  className="mt-5 bg-[#00647c] hover:bg-[#004e61] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  Open Claims Queue
-                </button>
-              </div>
-            )}
-
-            {view === "knowledge" && (
-              <AdjusterKnowledgePanel
-                knowledgeType={knowledgeType}
-                setKnowledgeType={setKnowledgeType}
-                knowledgeInsurance={knowledgeInsurance}
-                setKnowledgeInsurance={setKnowledgeInsurance}
-                knowledgePolicy={knowledgePolicy}
-                setKnowledgePolicy={setKnowledgePolicy}
-                knowledgeFile={knowledgeFile}
-                setKnowledgeFile={setKnowledgeFile}
-                knowledgeUploading={knowledgeUploading}
-                onUploadKnowledge={uploadKnowledge}
-                knowledgeQuery={knowledgeQuery}
-                setKnowledgeQuery={setKnowledgeQuery}
-                knowledgeItems={knowledgeItems}
-                onSearchKnowledge={searchKnowledge}
-              />
-            )}
 
             {file && (
               <>
@@ -458,6 +356,10 @@ export default function AdjusterPage() {
                     setNewNote={setNewNote}
                     addingNote={addingNote}
                     onAddNote={handleAddNote}
+                    evidenceRequestText={evidenceRequestText}
+                    setEvidenceRequestText={setEvidenceRequestText}
+                    sendingEvidenceRequest={sendingEvidenceRequest}
+                    onRequestEvidence={requestEvidence}
                   />
                 )}
 
@@ -477,6 +379,10 @@ export default function AdjusterPage() {
                     updatingStatus={updatingStatus}
                     onLoadCopilot={loadCopilot}
                     onUpdateStatus={update}
+                    copilotMessage={copilotMessage}
+                    setCopilotMessage={setCopilotMessage}
+                    copilotChat={copilotChat}
+                    onSendCopilotMessage={sendCopilotMessage}
                   />
                 )}
               </>
