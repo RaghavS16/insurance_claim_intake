@@ -4,7 +4,7 @@ export const title = (v?: string) =>
 export const money = (v?: number) =>
   v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN");
 
-export type AdjusterViewType = "queue" | "file" | "evidence" | "copilot";
+export type AdjusterViewType = "queue" | "knowledge" | "file" | "evidence" | "copilot";
 
 export interface AdjusterUser {
   id?: string;
