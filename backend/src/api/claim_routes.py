@@ -22,7 +22,8 @@ from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.models import Adjuster
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest
+from datetime import datetime, timezone
 from src.evidence.verifier import verify_evidence
 from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim
@@ -44,6 +45,20 @@ class VoiceSessionRequest(BaseModel):
 
 class TextTurnRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
+
+def _is_post_submission_status(status: str | None) -> bool:
+    return str(status or "") in {"submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"}
+
+def _request_payload(row: ClaimEvidenceRequest, db: Session) -> Dict[str, Any]:
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id).order_by(ClaimEvidence.created_at.desc()).first()
+    return {
+        "id": str(row.id), "claim_id": str(row.claim_id), "adjuster_id": str(row.adjuster_id),
+        "request_text": row.request_text, "status": row.status, "response_note": row.response_note,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
+        "response_evidence": {"id": str(evidence.id), "name": evidence.original_filename, "verification_status": evidence.verification_status} if evidence else None,
+    }
+
 
 class UpdateClaimRequest(BaseModel):
     policy_id: Optional[str] = None
@@ -329,6 +344,8 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
+    if _is_post_submission_status(claim.status):
+        raise HTTPException(status_code=409, detail="This claim has already been submitted. Use Track Claim to view status and respond to adjuster requests.")
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.text, "text", prior_turns // 2 + 1)
@@ -414,21 +431,66 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         if claim.status != "verified":
             transition_claim(db, claim, "verified", str(current_user.id), "claimant confirmation and policy verification")
         assigned = assign_claim(db, claim, str(current_user.id))
-        transition_claim(db, claim, "assigned", str(current_user.id), "automatic assignment")
+        transition_claim(db, claim, "submitted", str(current_user.id), "claimant submission")
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc))
     state["assigned_adjuster_id"] = str(assigned.id)
     state["assigned_adjuster_name"] = assigned.name
-    claim.conversation_status = "confirmed"
+    claim.conversation_status = "submitted"
     claim.pipeline_state = state
     db.commit()
     return {**_claim_payload(claim), "policy_verification": verification,
             "assigned_adjuster": {"id": str(assigned.id), "name": assigned.name, "specialization": assigned.specialization},
-            "message": f"Claim #{ticket_id} has been verified, confirmed, and assigned to {assigned.name}."}
+            "message": f"Claim #{ticket_id} has been submitted successfully and assigned to {assigned.name}. You can track its status from Track Claim."}
 
 
 
+
+
+@router.get("/track")
+def track_claims(request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    statuses = ["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]
+    claims = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.status.in_(statuses)).order_by(Claim.updated_at.desc()).all()
+    items = []
+    for claim in claims:
+        payload = _claim_payload(claim)
+        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+        payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
+        payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
+        items.append(payload)
+    return {"items": items, "total": len(items)}
+
+@router.post("/{ticket_id}/requests/{request_id}/respond")
+async def respond_to_evidence_request(ticket_id: str, request_id: str, request: Request, response_note: Optional[str] = None, file: Optional[UploadFile] = File(None), db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+    row = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.id == request_id, ClaimEvidenceRequest.claim_id == claim.id, ClaimEvidenceRequest.status == "open").first()
+    if not row: raise HTTPException(status_code=404, detail="Evidence request is not open or does not belong to this claim.")
+    if not file and not (response_note or "").strip():
+        raise HTTPException(status_code=400, detail="Attach the requested evidence or add a response note.")
+    evidence = None
+    if file:
+        from pathlib import Path
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in {".pdf",".jpg",".jpeg",".png",".webp",".doc",".docx",".txt"}:
+            raise HTTPException(status_code=400, detail="Unsupported evidence format.")
+        content = await file.read()
+        if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Evidence file is too large.")
+        s3 = put_bytes(content, prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}", filename=file.filename or "evidence", content_type=file.content_type or "application/octet-stream")
+        evidence = ClaimEvidence(claim_id=str(claim.id), uploaded_by=str(current_user.id), request_id=str(row.id), object_key=s3["key"], original_filename=file.filename or "evidence", content_type=file.content_type or "application/octet-stream", size_bytes=len(content), status="uploaded", verification_status="REVIEW_REQUIRED", requested_evidence_type="adjuster_request", analysis_json={"request_text": row.request_text})
+        db.add(evidence)
+    row.status = "responded"
+    row.response_note = (response_note or "").strip() or None
+    row.responded_at = datetime.now(timezone.utc)
+    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="evidence_request_responded", new_value_json={"request_id": str(row.id), "evidence_id": str(evidence.id) if evidence else None}))
+    db.commit()
+    db.refresh(row)
+    return {"request": _request_payload(row, db), "message": "Your response has been submitted to the adjuster."}
 
 @router.post("/{ticket_id}/evidence")
 async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFile = File(...), evidence_key: Optional[str] = None, db: Session = Depends(get_db)):
