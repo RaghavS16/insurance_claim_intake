@@ -4,7 +4,7 @@ import { Claim, title, money } from "./types";
 interface ClaimsQueueViewProps {
   claims: Claim[];
   selected?: string;
-  onOpenClaim: (ticketId: string) => void;
+  onOpenClaim: (ticketId: string, nextView?: "file" | "evidence" | "copilot") => void;
   onRefresh: () => void;
 }
 
@@ -81,11 +81,11 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
           </div>
         ) : (
           claims.map((c) => (
-            <button
+            <div
               key={c.ticket_id}
-              onClick={() => onOpenClaim(c.ticket_id)}
+              onClick={() => onOpenClaim(c.ticket_id, "file")}
               className={
-                "w-full text-left grid grid-cols-1 md:grid-cols-5 gap-2 md:gap-4 px-5 py-4 border-t border-[#edf0f1] hover:bg-[#f8fbfc] transition-colors cursor-pointer " +
+                "group relative w-full text-left grid grid-cols-1 md:grid-cols-5 gap-2 md:gap-4 px-5 py-4 pr-5 md:pr-48 border-t border-[#edf0f1] hover:bg-[#f8fbfc] transition-colors cursor-pointer " +
                 (selected === c.ticket_id ? "bg-[#eef7fa] border-l-4 border-l-[#00647c]" : "")
               }
             >
@@ -120,7 +120,33 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
                   <span className="text-[#00647c] italic">Auto-assigned</span>
                 )}
               </div>
-            </button>
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+              >
+                <button
+                  type="button"
+                  onClick={() => onOpenClaim(c.ticket_id, "evidence")}
+                  className="px-2.5 py-1.5 rounded-lg bg-white border border-[#cfd9de] text-[10px] font-semibold text-[#334155] hover:border-[#00647c] shadow-sm cursor-pointer"
+                >
+                  Evidence
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenClaim(c.ticket_id, "file")}
+                  className="px-2.5 py-1.5 rounded-lg bg-white border border-[#cfd9de] text-[10px] font-semibold text-[#334155] hover:border-[#00647c] shadow-sm cursor-pointer"
+                >
+                  Claim Details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenClaim(c.ticket_id, "copilot")}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#00647c] text-white text-[10px] font-semibold hover:bg-[#004e61] shadow-sm cursor-pointer"
+                >
+                  AI Copilot
+                </button>
+              </div>
+            </div>
           ))
         )}
       </div>
