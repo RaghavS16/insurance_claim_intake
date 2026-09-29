@@ -243,6 +243,20 @@ def get_active_claim(request: Request, db: Session = Depends(get_db)):
     return {"active": True, **_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
 
 
+@router.get("/track")
+def track_claims(request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    statuses = ["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]
+    claims = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.status.in_(statuses)).order_by(Claim.updated_at.desc()).all()
+    items = []
+    for claim in claims:
+        payload = _claim_payload(claim)
+        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+        payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
+        payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
+        items.append(payload)
+    return {"items": items, "total": len(items)}
+
 @router.get("/{ticket_id}/conversation")
 def get_conversation_history(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
@@ -447,20 +461,6 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
 
 
-
-@router.get("/track")
-def track_claims(request: Request, db: Session = Depends(get_db)):
-    current_user = _resolve_user(request, db)
-    statuses = ["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]
-    claims = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.status.in_(statuses)).order_by(Claim.updated_at.desc()).all()
-    items = []
-    for claim in claims:
-        payload = _claim_payload(claim)
-        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
-        payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
-        payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
-        items.append(payload)
-    return {"items": items, "total": len(items)}
 
 @router.post("/{ticket_id}/requests/{request_id}/respond")
 async def respond_to_evidence_request(ticket_id: str, request_id: str, request: Request, response_note: Optional[str] = None, file: Optional[UploadFile] = File(None), db: Session = Depends(get_db)):
