@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from src.api.deps import get_current_user, require_role, resolve_bearer_user, get_claim_or_404
 from src.config import settings
 from src.database.models import Claim, Adjuster, User, ConversationTurn
-from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis
+from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis, ClaimEvidenceRequest, ClaimEvidence
 from src.database.claim_workflow import transition_claim
 from src.database.session import get_db
 from src.agents.llm_factory import get_configured_llm
