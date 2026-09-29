@@ -7,7 +7,7 @@ interface AdjusterSidebarProps {
   user: AdjusterUser | null;
   selected?: string;
   claims: Claim[];
-  onOpenClaim: (id: string) => void;
+  onOpenClaim: (id: string, nextView?: AdjusterViewType) => void;
 }
 
 export const AdjusterSidebar: React.FC<AdjusterSidebarProps> = ({
@@ -15,11 +15,33 @@ export const AdjusterSidebar: React.FC<AdjusterSidebarProps> = ({
 }) => {
   const [hovered, setHovered] = useState<string | null>(null);
   const open = (id: string, next: AdjusterViewType) => {
-    onOpenClaim(id);
-    setView(next);
+    onOpenClaim(id, next);
   };
   return (
     <aside className="hidden md:flex w-72 bg-white border-r border-[#e0e3e5] p-3 flex-col shrink-0">
+      <div className="px-2 py-3 border-b border-[#e0e3e5]">
+        <div className="text-[9px] uppercase tracking-[.12em] text-[#778187] font-bold">Operations</div>
+        <div className="mt-2 space-y-1">
+          <button
+            type="button"
+            onClick={() => setView("queue")}
+            className={"w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-semibold text-left cursor-pointer " +
+              (view === "queue" ? "bg-[#eef7fa] text-[#00647c]" : "text-[#526066] hover:bg-[#f5f8f9]")}
+          >
+            <span className="material-symbols-outlined text-[16px]">inbox</span>
+            <span>Claims Queue</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("knowledge")}
+            className={"w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-semibold text-left cursor-pointer " +
+              (view === "knowledge" ? "bg-[#eef7fa] text-[#00647c]" : "text-[#526066] hover:bg-[#f5f8f9]")}
+          >
+            <span className="material-symbols-outlined text-[16px]">policy</span>
+            <span>Policy &amp; Regulations</span>
+          </button>
+        </div>
+      </div>
       <div className="px-2 py-3 border-b border-[#e0e3e5]">
         <div className="text-[9px] uppercase tracking-[.12em] text-[#778187] font-bold">Assigned Claims</div>
         <div className="text-xs text-[#526066] mt-1">{claims.length} claim{claims.length === 1 ? "" : "s"} assigned to you</div>
