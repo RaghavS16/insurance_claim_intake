@@ -97,6 +97,8 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
         "confirmed": bool(state.get("confirmed")),
         "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "chat_intent": state.get("chat_intent") or {},
+        "chat_retrieval": state.get("chat_retrieval") or {},
         "gap_analysis": state.get("gap_analysis") or {},
         "submission_package": state.get("submission_package") or {},
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
