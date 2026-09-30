@@ -69,7 +69,6 @@ def test_generic_question_does_not_invoke_dynamic_requirement_planner(monkeypatc
         called["value"] = True
         raise AssertionError("dynamic requirement planning should not run for a pure Q&A turn")
 
-    original = graph.build_dynamic_context
     monkeypatch.setattr(graph, "build_dynamic_context", fail_if_called)
     state = {
         "last_user_utterance": "What is a deductible?",
