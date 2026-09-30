@@ -80,5 +80,7 @@ class ClaimState(TypedDict, total=False):
     gap_analysis: Dict[str, Any]
     submission_package: Dict[str, Any]
     sentiment_state: Dict[str, Any]
+    chat_intent: Dict[str, Any]
+    chat_retrieval: Dict[str, Any]
 
     audit_log: List[str]
