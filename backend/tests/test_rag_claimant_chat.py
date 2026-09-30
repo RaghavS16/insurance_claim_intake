@@ -54,14 +54,16 @@ def test_response_planner_preserves_rag_answer_and_asks_only_one_intake_item(mon
 
 
 def test_generic_question_does_not_invoke_dynamic_requirement_planner(monkeypatch):
-    monkeypatch.setattr(graph, "KnowledgeRetriever", lambda: type(
-        "R", (), {"answer_query": lambda self, **kwargs: {
-            "answer": "The indexed guidance does not define that term.",
-            "grounded": True,
-            "sources": [{"source_name": "guide.pdf", "document_type": "guideline", "text": "Definition unavailable."}],
-            "status": "OK",
-        }}
-    )())
+    class FakeGenericRetriever:
+        def answer_query(self, **kwargs):
+            return {
+                "answer": "The indexed guidance does not define that term.",
+                "grounded": True,
+                "sources": [{"source_name": "guide.pdf", "document_type": "guideline", "text": "Definition unavailable."}],
+                "status": "OK",
+            }
+
+    monkeypatch.setattr(graph, "KnowledgeRetriever", lambda: FakeGenericRetriever())
 
     called = {"value": False}
 
