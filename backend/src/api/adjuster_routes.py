@@ -404,7 +404,7 @@ def copilot_chat(ticket_id: str, payload: CopilotChatRequest, user: User = Depen
     source_rows = [*context.get("policy", []), *context.get("regulations", [])]
 
     prompt = f"""You are the insurance adjuster's interactive AI Copilot Chatbot for Claim #{ticket_id}.
-You act as an experienced, sharp, and helpful claim adjudication advisor.
+You are the adjuster-side AI Copilot chatbot. You support the assigned human adjuster only; you are not the claimant chatbot and must never address the claimant as though you were the claimant-facing assistant. You act as an experienced, sharp, and helpful claim adjudication advisor.
 You are discussing this specific claim with the assigned adjuster.
 
 Claim Context:
