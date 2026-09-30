@@ -15,25 +15,25 @@ from src.agents.dynamic_requirements import build_dynamic_context, extract_answe
 
 from src.agents.gap_analysis import analyze_claim_gaps
 
-_RESPONSE_SYSTEM_PROMPT = """You are an intelligent, empathetic conversational AI dialogue agent for insurance claims intake.
-You operate as a dynamic dialogue partner rather than a static or rigid Q&A chatbot.
-You engage claimants in natural, flowing conversation to progressively gather, validate, and verify all required information.
+_RESPONSE_SYSTEM_PROMPT = """You are the claimant-facing conversational AI for an insurance agency.
+You are a general-purpose insurance assistant with RAG-backed claim intake.
 
-The conversational flow follows this structured 5-phase progression:
-1. Baseline Information Collection: Open with warm, contextual dialogue to establish rapport while collecting foundational details (policyholder identity/name, policy number, contact phone/email, incident date and time, claim category motor/property/health/travel/cyber, description narrative, location, estimated repair/loss amount). Acknowledge facts provided, respond empathetically to distress or frustration, and ask only for what is still needed.
-2. Identity and Eligibility Verification: Confirm baseline facts and reassure the claimant as their policy status, coverage period, and claim eligibility are verified against underwriting records.
-3. Intelligent RAG-Powered Question Generation & Real-Time Evidence Guidance: Using retrieved policy documents, claim procedures, and regulatory requirements, generate precise, context-adaptive follow-up questions tailored to their claim type (motor: accident dynamics, third-party involvement, police report/FIR, vehicle damage, drivability; property: damage cause, extent, mitigation, affected items; health: hospital admission, diagnosis, attending physician, cashless vs reimbursement). Guide users through uploading, describing, and validating required materials (photos, receipts, police reports, medical bills) in real-time, explaining why each is needed.
-4. Information Validation & Gap Analysis: Continuously cross-check collected data against policy requirements and regulatory mandates, flagging inconsistencies or missing elements conversationally, and circling back smoothly to resolve gaps without restarting.
-5. Adjuster-Ready Submission Package Compilation: Synthesize all verified information and guide the claimant through final confirmation for immediate adjuster review.
+Answer the claimant's actual question or request first. Claim intake is parallel background work, not a prerequisite for conversation.
+Use retrieved policy, procedure, regulatory, and claim-guidance evidence when available. Never invent policy terms, exclusions, limits, deadlines, eligibility rules, or required documents.
+When retrieved evidence is insufficient for a policy-specific answer, say so clearly instead of guessing.
 
-Conversation Design Rules:
-- Speak naturally, warmly, and empathetically. Never sound like a rigid questionnaire.
-- If the claimant provided multiple details at once, warmly acknowledge all of them together before asking the next question.
-- If the claimant made a correction (e.g. "my policy number is POL-1409-XI"), warmly acknowledge the correction and use the updated value.
-- If the claimant is frustrated or distressed, empathize first, provide reassuring clarity, and explain why the remaining detail helps their payout.
-- If the claimant asks a question, answer it helpfully based on available insurance context.
-- Keep voice-friendly: 1 to 3 clear, natural, reassuring sentences suitable for speech and text.
-- Never output raw JSON, schemas, Python code, internal variables, or LangGraph state terms.
+When a claimant shares facts, extract and preserve them without making them repeat information already provided. When a claimant is filing a claim, use the applicable retrieved requirements to identify the next useful detail or document dynamically.
+A claimant can ask questions at any point—before, during, or after intake, while documents are being reviewed, and while a claim is being prepared for submission.
+Policy verification remains a workflow gate before submission; it is not a gate for answering questions.
+Final submission remains a strict workflow action after required information/evidence and authoritative policy checks are satisfied.
+
+Conversation rules:
+- Be natural, concise, empathetic, and direct.
+- Answer the question before asking an intake follow-up.
+- Never restart the conversation or dump the full missing-field list.
+- If the claimant already supplied a fact, acknowledge it and move on.
+- Never expose raw JSON, schemas, Python code, internal state names, or orchestration details.
+- Keep voice-friendly responses normally to 2–6 sentences.
 """
 
 _FIELD_LABELS = {
@@ -100,6 +100,113 @@ def _message_text(result: Any) -> str:
                 parts.append(item["text"])
         return " ".join(parts).strip()
     return str(content or "").strip()
+
+
+def _looks_like_question(state: ClaimState) -> bool:
+    text = str(state.get("last_user_utterance") or "").strip().lower()
+    intent = str(state.get("last_intent") or "").lower()
+    if intent in {"question", "repeat"}:
+        return True
+    return bool(
+        re.match(
+            r"^(what|why|how|when|where|who|whose|which|can|could|would|will|should|do|does|did|is|are|am|was|were|may|might|tell me|explain)\b",
+            text,
+        )
+        or re.search(r"\?\s*$", text)
+    )
+
+
+def _claim_intake_context_requested(state: ClaimState) -> bool:
+    text = str(state.get("last_user_utterance") or "").lower()
+    return bool(
+        re.search(
+            r"\b(file|filing|claim|submit|submission|procedure|process|document|documents|upload|evidence|report|reimburse|reimbursement|cashless|coverage|eligible|eligibility|next step|what do i need)\b",
+            text,
+        )
+        or state.get("recently_extracted_fields")
+        or state.get("confirmed")
+        or state.get("dynamic_requirements")
+    )
+
+
+def _single_intake_follow_up(state: ClaimState) -> str:
+    labels = {
+        "policy_id": "your policy number",
+        "event_date": "the incident date",
+        "insurance_type": "the type of insurance",
+        "event_description": "what happened",
+        "event_location": "where the incident happened",
+        "estimated_claim_amount": "the approximate loss or repair amount",
+    }
+    missing = list(state.get("missing_fields") or [])
+    if missing:
+        field = missing[0]
+        return f"To start the claim, could you share {labels.get(field, field.replace('_', ' '))}?"
+    dynamic = list(state.get("dynamic_missing") or [])
+    if dynamic:
+        hint = dynamic[0].get("question_hint")
+        if hint:
+            return str(hint).strip()
+        return f"Could you provide {str(dynamic[0].get('label') or dynamic[0].get('key') or 'the next required detail').lower()}?"
+    evidence = list(state.get("missing_evidence") or [])
+    if evidence:
+        hint = evidence[0].get("question_hint")
+        if hint:
+            return str(hint).strip()
+        return f"Please upload {str(evidence[0].get('label') or 'the required supporting document').lower()} when ready."
+    return ""
+
+
+def _rag_question_responder(state: ClaimState) -> ClaimState:
+    state["rag_answer"] = ""
+    state["rag_answer_sources"] = []
+    state["rag_answer_grounded"] = False
+    state["rag_answer_query"] = ""
+    state["rag_answer_status"] = None
+
+    if state.get("_skip_all") or not _looks_like_question(state):
+        return state
+
+    from src.knowledge.retriever import KnowledgeRetriever
+    from datetime import date
+
+    data = state.get("extracted_data") or {}
+    incident_date = None
+    try:
+        if data.get("event_date"):
+            incident_date = date.fromisoformat(str(data.get("event_date")))
+    except ValueError:
+        incident_date = None
+
+    query = str(state.get("last_user_utterance") or "").strip()
+    if not query:
+        return state
+
+    try:
+        result = KnowledgeRetriever().answer_query(
+            query=query,
+            insurance_type=data.get("insurance_type"),
+            policy_number=data.get("policy_id"),
+            incident_date=incident_date,
+            claim_facts=data,
+        )
+        state["rag_answer"] = str(result.get("answer") or "").strip()
+        state["rag_answer_sources"] = list(result.get("sources") or [])
+        state["rag_answer_grounded"] = bool(result.get("grounded"))
+        state["rag_answer_query"] = query
+        state["rag_answer_status"] = result.get("status")
+    except Exception as exc:
+        nodes.logger.warning("Claimant RAG question answering failed: %s", exc)
+        state["rag_answer"] = (
+            "I can help with that, but the insurance knowledge service is temporarily unavailable. "
+            "I won't guess at policy-specific details."
+        )
+        state["rag_answer_status"] = "LLM_TEMPORARILY_UNAVAILABLE"
+
+    # Pure Q&A should not invoke the more expensive dynamic requirement planner.
+    # Filing/process questions continue through intake in the same turn.
+    state["_rag_question_only"] = not _claim_intake_context_requested(state)
+    return state
 
 
 def _response_is_usable(response: str, missing: list[str], data: dict[str, Any]) -> bool:
@@ -184,38 +291,13 @@ def _dynamic_fallback(state: ClaimState) -> str:
 
 
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
-    if state.get("_skip_all"):
+    if state.get("_skip_all") or state.get("_rag_question_only"):
         return state
 
-    # Claim-specific RAG starts only after baseline confirmation AND successful
-    # policy verification. This avoids expensive RAG/LLM work during baseline intake.
+    # Requirement planning is available as soon as an insurance type is known.
+    # Policy verification remains a submission gate, not a conversation gate.
     if not state.get("confirmed"):
-        state["dynamic_missing"] = []
-        state["missing_evidence"] = []
-        state["pending_evidence_review"] = []
-        state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
-        state["conversation_phase"] = "2_verification" if state.get("awaiting_confirmation") else "1_baseline"
-        state["conversation_status"] = "reviewing" if state.get("awaiting_confirmation") else "collecting"
-        return state
-
-    policy_verification = state.get("policy_verification")
-    if isinstance(policy_verification, dict) and not policy_verification.get("valid"):
-        state["dynamic_missing"] = []
-        state["missing_evidence"] = []
-        state["pending_evidence_review"] = []
-        state["rag_status"] = "POLICY_VERIFICATION_FAILED"
-        state["conversation_phase"] = "2_verification"
-        state["conversation_status"] = "verification_failed"
-        return state
-    if not isinstance(policy_verification, dict) or not policy_verification.get("valid"):
-        state["dynamic_missing"] = []
-        state["missing_evidence"] = []
-        state["pending_evidence_review"] = []
-        state["rag_status"] = "WAITING_FOR_POLICY_VERIFICATION"
-        state["conversation_phase"] = "2_verification"
-        state["conversation_status"] = "pending_verification"
-        return state
-
+        state["conversation_phase"] = "1_baseline"
     data = state.get("extracted_data") or {}
     insurance_type = data.get("insurance_type")
     if not insurance_type:
@@ -324,6 +406,22 @@ def _response_planner(state: ClaimState) -> ClaimState:
     # Continuous Gap & Validation Analysis
     gaps_result = analyze_claim_gaps(state)
     state["gap_analysis"] = gaps_result
+
+    rag_answer = str(state.get("rag_answer") or "").strip()
+    if rag_answer:
+        reply = rag_answer
+        if _claim_intake_context_requested(state):
+            follow_up = _single_intake_follow_up(state)
+            if follow_up and follow_up.lower() not in reply.lower():
+                reply = f"{reply}\\n\\n{follow_up}"
+        state["next_question_field"] = "question"
+        state["next_question"] = reply
+        state["message"] = reply
+        if state.get("confirmed"):
+            state["conversation_phase"] = "3_rag_intake" if (dynamic_missing or missing_evidence) else "4_gap_analysis"
+        else:
+            state["conversation_phase"] = "1_baseline"
+        return state
 
     if state.get("awaiting_confirmation") and not state.get("confirmed") and not missing:
         state["conversation_phase"] = "2_verification"
@@ -442,6 +540,7 @@ def _build_conversation_graph():
     graph.add_node("workflow_event_router", lambda state: state)
     graph.add_node("conversation_turn_processor", conversation_turn_processor)
     graph.add_node("claim_extractor", nodes.claim_extractor)
+    graph.add_node("rag_question_responder", _rag_question_responder)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
     graph.add_node("next_question_generator", _response_planner)
@@ -456,7 +555,8 @@ def _build_conversation_graph():
         lambda state: "done" if state.get("_skip_all") else "continue",
         {"continue": "claim_extractor", "done": END},
     )
-    graph.add_edge("claim_extractor", "mandatory_field_checker")
+    graph.add_edge("claim_extractor", "rag_question_responder")
+    graph.add_edge("rag_question_responder", "mandatory_field_checker")
     graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
     graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
     graph.add_edge("next_question_generator", END)
