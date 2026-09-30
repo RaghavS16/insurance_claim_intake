@@ -278,3 +278,180 @@ class KnowledgeRetriever:
             "regulations": guidance,
             "authoritative": True,
         }
+
+    def answer_query(
+        self,
+        *,
+        query: str,
+        insurance_type: str | None = None,
+        policy_number: str | None = None,
+        incident_date: date | None = None,
+        claim_facts: dict | None = None,
+        top_k: int = 6,
+    ) -> dict:
+        """Answer an arbitrary claimant question from retrieved policy/guidance evidence.
+
+        This is deliberately separate from requirement planning. It is query-first:
+        claimant questions can be answered before baseline confirmation or policy
+        verification. No policy-specific assertion is generated without retrieved
+        evidence.
+        """
+        question = " ".join(str(query or "").split()).strip()
+        if not question:
+            return {
+                "answer": "Tell me what you would like to know about your insurance claim.",
+                "grounded": False,
+                "sources": [],
+                "status": "EMPTY_QUERY",
+            }
+
+        facts = dict(claim_facts or {})
+        fact_context = " ".join(
+            f"{key}: {value}"
+            for key, value in facts.items()
+            if value not in (None, "", "UNKNOWN")
+            and key not in {"event_description"}
+        )
+        retrieval_query = " ".join(
+            part for part in (question, insurance_type or "", fact_context) if part
+        ).strip()[:4000]
+
+        document_types = [
+            "policy_wording",
+            "regulation",
+            "guideline",
+            "claim_requirement",
+        ]
+        rows: list[dict] = []
+        try:
+            rows = search(
+                retrieval_query,
+                insurance_type=insurance_type,
+                policy_number=policy_number,
+                document_types=document_types,
+                incident_date=incident_date,
+                limit=max(top_k * 2, 8),
+            )
+        except Exception:
+            rows = []
+
+        # A general process question is still valid before the claimant supplies a
+        # policy number/type. Broaden retrieval once rather than forcing intake first.
+        if not rows and (insurance_type or policy_number):
+            try:
+                rows = search(
+                    question,
+                    document_types=document_types,
+                    limit=max(top_k * 2, 8),
+                )
+            except Exception:
+                rows = []
+
+        try:
+            ranked = rerank(retrieval_query, rows, top_n=top_k) if rows else []
+        except Exception:
+            ranked = rows[:top_k]
+
+        sources = [
+            {
+                key: row.get(key)
+                for key in (
+                    "chunk_id",
+                    "document_id",
+                    "source_name",
+                    "source_uri",
+                    "document_type",
+                    "insurance_type",
+                    "score",
+                    "rerank_score",
+                    "text",
+                )
+                if row.get(key) is not None
+            }
+            for row in ranked
+        ]
+        if not sources:
+            return {
+                "answer": (
+                    "I can help with the insurance process, but I do not have a matching "
+                    "policy or claims-guidance source indexed for that question yet, so I "
+                    "won't guess at a policy-specific answer. I can still help you collect "
+                    "the details and documents needed for your claim."
+                ),
+                "grounded": False,
+                "sources": [],
+                "status": "NO_RELEVANT_KNOWLEDGE",
+            }
+
+        evidence_text = "\n\n".join(
+            (
+                f"[SOURCE {idx}] {row.get('source_name') or 'Unknown source'} "
+                f"({row.get('document_type') or 'guidance'})\n"
+                f"{str(row.get('text') or '')[:2500]}"
+            )
+            for idx, row in enumerate(sources, 1)
+        )
+        prompt = f"""You are the claimant-facing insurance RAG answerer.
+
+Answer the claimant's actual question directly using ONLY the retrieved evidence below.
+The claimant may ask a general process question, a policy question, a coverage question,
+a document/evidence question, or a question about what happens next.
+
+Rules:
+- Answer the question first. Do not force a baseline questionnaire before answering.
+- Treat retrieved policy wording as authoritative for policy-specific terms.
+- Treat retrieved regulatory/guidance sources as authoritative for procedural or regulatory points.
+- Never invent exclusions, coverage, limits, waiting periods, deadlines, reimbursement rules, or required documents.
+- If the evidence does not establish a policy-specific answer, explicitly say that the indexed sources do not establish it.
+- Do not copy the claimant's missing-field list into the answer.
+- Keep the response clear and voice-friendly, normally 2 to 6 sentences.
+- You may mention the source name when useful.
+- Intake collection is parallel work. Do not ask for claim details unless the question itself is about filing/processing
+  or the caller is clearly continuing a claim; when you do ask, ask for only one useful next detail.
+
+Claim context:
+Insurance type: {insurance_type or "unknown"}
+Policy number: {policy_number or "unknown"}
+Incident date: {incident_date or "unknown"}
+
+Retrieved evidence:
+{evidence_text}
+
+Claimant question:
+{question}
+"""
+        try:
+            result = invoke_with_retry(
+                lambda: get_fast_llm().invoke(prompt),
+                operation_name="claimant RAG question answering",
+                attempts=1,
+            )
+            content = getattr(result, "content", result)
+            if isinstance(content, list):
+                answer = " ".join(
+                    item if isinstance(item, str)
+                    else str(item.get("text") or "")
+                    for item in content
+                    if isinstance(item, (str, dict))
+                ).strip()
+            else:
+                answer = str(content or "").strip()
+            if answer:
+                return {
+                    "answer": answer,
+                    "grounded": True,
+                    "sources": sources,
+                    "status": "OK",
+                }
+        except Exception:
+            pass
+
+        return {
+            "answer": (
+                "I found relevant insurance guidance, but the answer service is temporarily "
+                "unavailable. I won't guess at the policy-specific details."
+            ),
+            "grounded": False,
+            "sources": sources,
+            "status": "LLM_TEMPORARILY_UNAVAILABLE",
+        }
