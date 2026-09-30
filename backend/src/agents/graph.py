@@ -415,7 +415,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         if _claim_intake_context_requested(state):
             follow_up = _single_intake_follow_up(state)
             if follow_up and follow_up.lower() not in reply.lower():
-                reply = f"{reply}\\n\\n{follow_up}"
+                reply = f"{reply}\n\n{follow_up}"
         state["next_question_field"] = "question"
         state["next_question"] = reply
         state["message"] = reply
