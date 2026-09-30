@@ -1,4 +1,7 @@
-"""Retrieval-first claimant conversation layer.
+"""Retrieval-first CLAIMANT chatbot conversation layer.
+
+This module is intentionally NOT the adjuster AI Copilot. The adjuster Copilot lives in
+`src.api.adjuster_routes` and operates only in the authenticated adjuster workbench.
 
 The claimant experience is RAG-first:
 - Answer the human's question from indexed policy/guidance when available.
