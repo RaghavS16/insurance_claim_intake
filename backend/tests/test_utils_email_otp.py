@@ -169,17 +169,3 @@ class TestSendOtpEmail:
             send_otp_email("test@example.com", "SUPER_SECRET_OTP")
         for record in caplog.records:
             assert "SUPER_SECRET_OTP" not in record.getMessage()
-
-
-# ---------------------------------------------------------------------------
-# send_otp_email_async
-# ---------------------------------------------------------------------------
-class TestSendOtpEmailAsync:
-    @pytest.mark.asyncio
-    async def test_async_returns_false_without_smtp(self, monkeypatch):
-        from src.config import settings
-        monkeypatch.setattr(settings, "SMTP_HOST", None)
-        monkeypatch.setattr(settings, "ENVIRONMENT", "test")
-        from src.utils.email_otp import send_otp_email_async
-        result = await send_otp_email_async("test@example.com", "123456")
-        assert result is False

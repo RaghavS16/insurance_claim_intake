@@ -272,32 +272,58 @@ export const ClaimFileView: React.FC<ClaimFileViewProps> = ({
           <p className="text-[11px] text-[#6e797e] leading-relaxed mt-1">
             Review evidence and Copilot guidance before modifying claim workflow state.
           </p>
-          <div className="grid gap-2.5 mt-4">
-            <button
-              disabled={updatingStatus}
-              onClick={() => onUpdateStatus("under_review")}
-              className="bg-[#00647c] hover:bg-[#004e61] disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              {updatingStatus ? (
-                <span className="material-symbols-outlined text-sm animate-spin">
-                  progress_activity
-                </span>
-              ) : (
-                <span className="material-symbols-outlined text-base">rate_review</span>
-              )}
-              <span>Start Review</span>
-            </button>
-            <div className="border border-[#d8e0e4] rounded-lg p-3 bg-[#fbfcfd]">
-              <div className="text-[10px] uppercase tracking-wider text-[#778187] font-bold mb-1.5">Request specific evidence</div>
-              <textarea rows={3} value={evidenceRequestText} onChange={(e) => setEvidenceRequestText(e.target.value)}
-                placeholder="Describe exactly what the claimant must provide..."
-                className="w-full border border-[#cbd5e1] rounded-lg p-2.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#00647c]" />
-              <button disabled={sendingEvidenceRequest || evidenceRequestText.trim().length < 5} onClick={onRequestEvidence}
-                className="w-full mt-2 bg-[#00647c] hover:bg-[#004e61] disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold cursor-pointer">
-                {sendingEvidenceRequest ? "Sending Request..." : "Send Evidence Request"}
+          {file.claim.status === "approved" || file.claim.status === "partially_approved" ? (
+            <div className="mt-4 space-y-3">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-2.5">
+                <span className="material-symbols-outlined text-emerald-600 text-lg mt-0.5">verified</span>
+                <div>
+                  <div className="text-xs font-bold text-emerald-900">Claim Approved &amp; Retained</div>
+                  <p className="text-[11px] text-emerald-700 mt-0.5 leading-snug">
+                    This claim is approved. The complete dossier, evidence, and notes are preserved in your queue for future access.
+                  </p>
+                </div>
+              </div>
+              <button
+                disabled={updatingStatus}
+                onClick={() => onUpdateStatus("under_review")}
+                className="w-full border border-slate-300 hover:border-slate-400 bg-white text-slate-700 disabled:opacity-50 rounded-lg py-2 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-sm">replay</span>
+                <span>Reopen for Review</span>
               </button>
             </div>
-          </div>
+          ) : (
+            <div className="grid gap-2.5 mt-4">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  disabled={updatingStatus || file.claim.status === "under_review"}
+                  onClick={() => onUpdateStatus("under_review")}
+                  className="bg-[#00647c] hover:bg-[#004e61] disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-sm">rate_review</span>
+                  <span>{file.claim.status === "under_review" ? "In Review" : "Start Review"}</span>
+                </button>
+                <button
+                  disabled={updatingStatus}
+                  onClick={() => onUpdateStatus("approved")}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-sm">check</span>
+                  <span>Approve</span>
+                </button>
+              </div>
+              <div className="border border-[#d8e0e4] rounded-lg p-3 bg-[#fbfcfd]">
+                <div className="text-[10px] uppercase tracking-wider text-[#778187] font-bold mb-1.5">Request specific evidence</div>
+                <textarea rows={3} value={evidenceRequestText} onChange={(e) => setEvidenceRequestText(e.target.value)}
+                  placeholder="Describe exactly what the claimant must provide..."
+                  className="w-full border border-[#cbd5e1] rounded-lg p-2.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-[#00647c]" />
+                <button disabled={sendingEvidenceRequest || evidenceRequestText.trim().length < 5} onClick={onRequestEvidence}
+                  className="w-full mt-2 bg-[#00647c] hover:bg-[#004e61] disabled:opacity-50 text-white rounded-lg py-2.5 text-xs font-semibold cursor-pointer">
+                  {sendingEvidenceRequest ? "Sending Request..." : "Send Evidence Request"}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {file.evidence_requests?.length ? (

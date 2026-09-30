@@ -44,13 +44,25 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
 def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     if user.role == "ADMIN":
         return True
-    if db is not None and db.query(ClaimAssignment).filter(
-        ClaimAssignment.claim_id == c.id,
-        ClaimAssignment.adjuster_id == user.id,
-        ClaimAssignment.is_active.is_(True),
-    ).first():
+    assigned_adj_id = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
+    if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
-    return str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
+    if db is not None:
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        if adjuster:
+            if assigned_adj_id and assigned_adj_id == str(adjuster.id):
+                return True
+            if db.query(ClaimAssignment).filter(
+                ClaimAssignment.claim_id == c.id,
+                ClaimAssignment.adjuster_id == adjuster.id,
+            ).first():
+                return True
+        if db.query(ClaimAssignment).filter(
+            ClaimAssignment.claim_id == c.id,
+            ClaimAssignment.adjuster_id == user.id,
+        ).first():
+            return True
+    return False
 
 
 
@@ -59,15 +71,23 @@ def _resolve_adjuster(request: Request, db: Session) -> User:
     return resolve_bearer_user(request, db, ["ADJUSTER", "ADMIN"])
 
 def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster:
-    assigned_id=(claim.pipeline_state or {}).get("assigned_adjuster_id")
+    assigned_id = (claim.pipeline_state or {}).get("assigned_adjuster_id")
     if user.role == "ADMIN":
-        a=db.query(Adjuster).filter(Adjuster.id == assigned_id).first()
+        a = db.query(Adjuster).filter(Adjuster.id == assigned_id).first() if assigned_id else None
+        if not a:
+            a = db.query(Adjuster).first()
         if a: return a
-    if str(assigned_id) != str(user.id):
-        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
-    a=db.query(Adjuster).filter(Adjuster.id == user.id).first()
-    if not a: raise HTTPException(status_code=403, detail="Adjuster profile not found.")
-    return a
+    adj = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+    if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
+        return adj
+    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.adjuster_id == adj.id).first():
+        return adj
+    if str(assigned_id) == str(user.id):
+        a = db.query(Adjuster).filter(Adjuster.id == user.id).first()
+        if a: return a
+    if adj:
+        return adj
+    raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
 
 class ClaimUpdate(BaseModel):
     status: str|None=None
@@ -105,18 +125,43 @@ def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
     }
 
 @router.get("/queue")
-def queue(user:User=Depends(_guard),db:Session=Depends(get_db)):
-    q=db.query(Claim).filter(Claim.status.in_(["submitted","assigned","under_review","pending_evidence"]))
-    claims=q.order_by(Claim.updated_at.desc()).all()
-    if user.role=="ADJUSTER":
-        adjuster=db.query(Adjuster).filter(Adjuster.email==user.email).first()
-        assigned_ids=set()
+def queue(status: str | None = None, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    valid_queue_statuses = [
+        "submitted",
+        "pending_adjuster",
+        "assigned",
+        "under_review",
+        "pending_evidence",
+        "approved",
+        "partially_approved",
+        "rejected",
+        "escalated",
+        "closed",
+    ]
+    if status and status.lower() != "all":
+        q = db.query(Claim).filter(Claim.status == status.lower())
+    else:
+        q = db.query(Claim).filter(Claim.status.in_(valid_queue_statuses))
+
+    claims = q.order_by(Claim.updated_at.desc()).all()
+    if user.role == "ADJUSTER":
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        assigned_ids = set()
         if adjuster:
-            assigned_ids={str(x.claim_id) for x in db.query(ClaimAssignment).filter(
-                ClaimAssignment.adjuster_id==adjuster.id, ClaimAssignment.is_active.is_(True)
-            ).all()}
-        claims=[c for c in claims if str(c.id) in assigned_ids or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id"))==str(adjuster.id))]
-    return {"items":[_item(c) for c in claims],"total":len(claims)}
+            assigned_ids = {
+                str(x.claim_id)
+                for x in db.query(ClaimAssignment).filter(
+                    ClaimAssignment.adjuster_id == adjuster.id
+                ).all()
+            }
+        claims = [
+            c
+            for c in claims
+            if str(c.id) in assigned_ids
+            or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id")) in {str(adjuster.id), str(user.id)})
+            or str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
+        ]
+    return {"items": [_item(c) for c in claims], "total": len(claims)}
 
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):

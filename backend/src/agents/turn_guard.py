@@ -66,29 +66,6 @@ def _incident_description_from_text(text: str, state) -> str | None:
     return candidate if len(candidate) >= 4 and nodes._INCIDENT_TERMS.search(candidate) else None
 
 
-def _requested_correction_field(text: str, state) -> str | None:
-    low = text.lower()
-    if re.search(r"amount|cost|loss|repair|price|rupees?|inr|₹", low): return "estimated_claim_amount"
-    if re.search(r"policy", low): return "policy_id"
-    if re.search(r"location|place|where", low): return "event_location"
-    if re.search(r"date|day|when", low): return "event_date"
-    if re.search(r"insurance|motor|health|home|travel|cyber", low): return "insurance_type"
-    if re.search(r"happened|accident|incident|damage|crash|collision", low): return "event_description"
-    return state.get("next_question_field") if state.get("next_question_field") not in {None, "confirmation"} else None
-
-
-def _correction_prompt(field: str | None) -> str:
-    prompts: dict[str, str] = {
-        "estimated_claim_amount": "No problem. What is the corrected loss or repair amount?",
-        "policy_id": "No problem. What is the correct policy number?",
-        "event_location": "No problem. What is the correct incident location?",
-        "event_date": "No problem. What is the correct incident date?",
-        "insurance_type": "No problem. What is the correct insurance type?",
-        "event_description": "No problem. Please tell me the correct description of what happened.",
-    }
-    if field and field in prompts:
-        return prompts[field]
-    return "No problem. Tell me which detail you'd like to correct."
 
 
 def conversation_turn_processor(state):

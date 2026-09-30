@@ -4,28 +4,9 @@ Centralized authorization dependencies.
 Extracts the claim ownership check into a reusable FastAPI dependency
 to eliminate the 6-way duplication across endpoint handlers.
 """
-from fastapi import Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import HTTPException, status
 
-from src.database.session import get_db
 from src.database.models import Claim, User
-
-
-def get_claim_with_ownership(
-    ticket_id: str,
-    db: Session = Depends(get_db),
-) -> Claim:
-    """
-    Fetch a claim by ticket_id. Raises 404 if not found.
-    Does NOT enforce ownership — use `enforce_claim_ownership` for that.
-    """
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Claim not found for the given ticket_id.",
-        )
-    return claim
 
 
 def enforce_claim_ownership(claim: Claim, current_user: User) -> None:

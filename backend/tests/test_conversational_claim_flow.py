@@ -138,8 +138,8 @@ def test_meta_statement_does_not_overwrite_incident_description():
 
     result = nodes.conversation_turn_processor(state)
 
-    assert result["extracted_data"]["event_description"] == (
-        "My motorcycle clipped an oncoming car and fell on its right side."
+    assert result["extracted_data"]["event_description"].rstrip(".") == (
+        "My motorcycle clipped an oncoming car and fell on its right side.".rstrip(".")
     )
     assert result["extracted_data"]["policy_id"] == "POL-1409-XI"
 

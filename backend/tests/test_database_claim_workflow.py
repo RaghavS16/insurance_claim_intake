@@ -87,6 +87,47 @@ class TestTransitionClaim:
         transition_claim(db, claim, "rejected")
         assert claim.status == "rejected"
 
+    def test_transition_submitted_to_approved(self):
+        claim = self._make_claim("submitted")
+        db = self._make_db()
+        transition_claim(db, claim, "approved")
+        assert claim.status == "approved"
+
+    def test_transition_submitted_to_rejected(self):
+        claim = self._make_claim("submitted")
+        db = self._make_db()
+        transition_claim(db, claim, "rejected")
+        assert claim.status == "rejected"
+
+    def test_transition_approved_to_under_review(self):
+        claim = self._make_claim("approved")
+        db = self._make_db()
+        transition_claim(db, claim, "under_review")
+        assert claim.status == "under_review"
+
+    def test_transition_partially_approved_to_under_review(self):
+        claim = self._make_claim("partially_approved")
+        db = self._make_db()
+        transition_claim(db, claim, "under_review")
+        assert claim.status == "under_review"
+
+    def test_transition_rejected_to_under_review(self):
+        claim = self._make_claim("rejected")
+        db = self._make_db()
+        transition_claim(db, claim, "under_review")
+        assert claim.status == "under_review"
+
+    def test_transition_escalated_to_approved_or_rejected(self):
+        claim = self._make_claim("escalated")
+        db = self._make_db()
+        transition_claim(db, claim, "approved")
+        assert claim.status == "approved"
+
+        claim2 = self._make_claim("escalated")
+        db2 = self._make_db()
+        transition_claim(db2, claim2, "rejected")
+        assert claim2.status == "rejected"
+
     def test_none_actor_allowed(self):
         claim = self._make_claim("draft")
         db = self._make_db()

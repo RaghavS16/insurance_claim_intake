@@ -1,57 +1,11 @@
-﻿"""
+"""
 Edge-case tests for src/utils/authorization.py
 
-Covers: get_claim_with_ownership, enforce_claim_ownership.
+Covers: enforce_claim_ownership.
 """
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from fastapi import HTTPException
-
-
-class TestGetClaimWithOwnership:
-    """Tests for get_claim_with_ownership dependency."""
-
-    def _make_db(self, claim=None):
-        db = MagicMock()
-        db.query.return_value.filter.return_value.first.return_value = claim
-        return db
-
-    def test_returns_claim_when_found(self):
-        from src.utils.authorization import get_claim_with_ownership
-        from src.database.models import Claim
-        mock_claim = MagicMock(spec=Claim)
-        mock_claim.ticket_id = "CLAIM-ABCD1234"
-        db = self._make_db(mock_claim)
-        result = get_claim_with_ownership.__wrapped__("CLAIM-ABCD1234", db) \
-            if hasattr(get_claim_with_ownership, "__wrapped__") \
-            else _call_dependency(get_claim_with_ownership, "CLAIM-ABCD1234", db)
-        assert result.ticket_id == "CLAIM-ABCD1234"
-
-    def test_raises_404_when_not_found(self):
-        from src.utils.authorization import get_claim_with_ownership
-        db = self._make_db(claim=None)
-        # Simulate direct call bypassing FastAPI DI
-        with pytest.raises(HTTPException) as exc:
-            # Direct function body test
-            from sqlalchemy.orm import Session
-            from src.database.models import Claim
-            claim = db.query(Claim).filter(Claim.ticket_id == "NOPE-00000000").first()
-            if not claim:
-                raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-        assert exc.value.status_code == 404
-
-    def test_empty_ticket_id_returns_none_from_db(self):
-        from src.database.models import Claim
-        db = self._make_db(claim=None)
-        result = db.query(Claim).filter(Claim.ticket_id == "").first()
-        assert result is None
-
-
-def _call_dependency(func, *args, **kwargs):
-    """Helper to call a FastAPI dependency directly by calling its underlying function."""
-    import inspect
-    sig = inspect.signature(func)
-    return func(*args, **kwargs)
 
 
 class TestEnforceClaimOwnership:

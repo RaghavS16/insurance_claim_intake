@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { Claim, title, money } from "./types";
 
 interface ClaimsQueueViewProps {
@@ -8,12 +8,70 @@ interface ClaimsQueueViewProps {
   onRefresh: () => void;
 }
 
+type QueueFilter = "all" | "active" | "approved" | "pending_evidence" | "rejected";
+
 export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
   claims,
   selected,
   onOpenClaim,
   onRefresh,
 }) => {
+  const [filter, setFilter] = useState<QueueFilter>("all");
+  const [search, setSearch] = useState("");
+
+  const activeClaims = useMemo(
+    () =>
+      claims.filter((c) =>
+        ["submitted", "pending_adjuster", "assigned", "under_review", "pending_evidence"].includes(
+          c.status
+        )
+      ),
+    [claims]
+  );
+
+  const approvedClaims = useMemo(
+    () => claims.filter((c) => ["approved", "partially_approved"].includes(c.status)),
+    [claims]
+  );
+
+  const pendingEvidenceClaims = useMemo(
+    () => claims.filter((c) => c.status === "pending_evidence"),
+    [claims]
+  );
+
+  const rejectedClaims = useMemo(
+    () => claims.filter((c) => c.status === "rejected"),
+    [claims]
+  );
+
+  const filteredClaims = useMemo(() => {
+    let list = claims;
+    if (filter === "active") {
+      list = activeClaims;
+    } else if (filter === "approved") {
+      list = approvedClaims;
+    } else if (filter === "pending_evidence") {
+      list = pendingEvidenceClaims;
+    } else if (filter === "rejected") {
+      list = rejectedClaims;
+    }
+
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter((c) => {
+        return (
+          c.ticket_id?.toLowerCase().includes(q) ||
+          c.insurance_type?.toLowerCase().includes(q) ||
+          c.status?.toLowerCase().includes(q) ||
+          c.event_location?.toLowerCase().includes(q) ||
+          c.assigned_adjuster_name?.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    return list;
+  }, [claims, filter, search, activeClaims, approvedClaims, pendingEvidenceClaims, rejectedClaims]);
+
   return (
     <>
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
@@ -23,7 +81,7 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
           </div>
           <h1 className="font-headline text-2xl font-bold">Claims Queue</h1>
           <p className="text-xs text-[#657177] mt-0.5">
-            Claims that completed conversational intake, verification, and assignment.
+            Claims that completed conversational intake, verification, and assignment — retained permanently for ongoing audit and future review.
           </p>
         </div>
         <button
@@ -35,32 +93,120 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
         </button>
       </div>
 
+      {/* Interactive Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         {[
-          ["Total claims", claims.length, "inbox"],
-          ["Assigned", claims.filter((c) => c.assigned_adjuster_id).length, "person_check"],
-          ["Evidence pending", claims.filter((c) => c.status === "pending_evidence").length, "assignment_late"],
-          ["Policy verified", claims.filter((c) => c.policy_verified).length, "verified"],
-        ].map(([label, count, icon]) => (
-          <div key={label as string} className="bg-white border border-[#e0e3e5] rounded-xl p-4 shadow-2xs">
-            <div className="flex justify-between text-[10px] uppercase tracking-[.08em] text-[#778187] font-semibold">
-              <span>{label}</span>
-              <span className="material-symbols-outlined text-[#00647c] text-[18px]">{icon}</span>
+          {
+            label: "Total claims",
+            count: claims.length,
+            icon: "inbox",
+            targetFilter: "all" as QueueFilter,
+            badgeColor: "text-[#00647c]",
+          },
+          {
+            label: "Action required",
+            count: activeClaims.length,
+            icon: "pending_actions",
+            targetFilter: "active" as QueueFilter,
+            badgeColor: "text-amber-600",
+          },
+          {
+            label: "Approved & Retained",
+            count: approvedClaims.length,
+            icon: "verified",
+            targetFilter: "approved" as QueueFilter,
+            badgeColor: "text-emerald-600",
+          },
+          {
+            label: "Evidence pending",
+            count: pendingEvidenceClaims.length,
+            icon: "assignment_late",
+            targetFilter: "pending_evidence" as QueueFilter,
+            badgeColor: "text-orange-600",
+          },
+        ].map((item) => {
+          const isSelected = filter === item.targetFilter;
+          return (
+            <div
+              key={item.label}
+              onClick={() => setFilter(item.targetFilter)}
+              className={
+                "bg-white border rounded-xl p-4 shadow-2xs cursor-pointer transition-all hover:border-[#00647c] " +
+                (isSelected ? "border-[#00647c] ring-1 ring-[#00647c]/30 bg-sky-50/20" : "border-[#e0e3e5]")
+              }
+            >
+              <div className="flex justify-between text-[10px] uppercase tracking-[.08em] text-[#778187] font-semibold">
+                <span>{item.label}</span>
+                <span className={`material-symbols-outlined text-[18px] ${item.badgeColor}`}>
+                  {item.icon}
+                </span>
+              </div>
+              <div className="font-headline text-2xl font-bold mt-2">{item.count}</div>
+              <div className="text-[10px] text-[#6e797e] mt-1 flex items-center gap-1">
+                <span>{isSelected ? "Active filter" : "Click to filter"}</span>
+                {isSelected && <span className="material-symbols-outlined text-xs text-[#00647c]">check</span>}
+              </div>
             </div>
-            <div className="font-headline text-2xl font-bold mt-2">{count}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="bg-white border border-[#e0e3e5] rounded-xl overflow-hidden shadow-sm">
-        <div className="px-5 py-4 border-b border-[#e0e3e5] flex justify-between items-center">
-          <div>
-            <h2 className="font-headline font-bold">Review Queue</h2>
-            <p className="text-[11px] text-[#6e797e] mt-0.5">
-              Automatically assigned claims requiring adjuster action.
-            </p>
+        {/* Controls Bar: Filter Tabs & Search */}
+        <div className="px-5 py-4 border-b border-[#e0e3e5] flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {[
+              { id: "all" as QueueFilter, label: "All Claims", count: claims.length },
+              { id: "active" as QueueFilter, label: "Needs Action", count: activeClaims.length },
+              { id: "approved" as QueueFilter, label: "Approved", count: approvedClaims.length },
+              { id: "pending_evidence" as QueueFilter, label: "Evidence Pending", count: pendingEvidenceClaims.length },
+              { id: "rejected" as QueueFilter, label: "Rejected", count: rejectedClaims.length },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setFilter(tab.id)}
+                className={
+                  "px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer " +
+                  (filter === tab.id
+                    ? "bg-[#00647c] text-white"
+                    : "bg-[#f1f5f7] text-[#526066] hover:bg-[#e4ebef]")
+                }
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={
+                    "text-[10px] px-1.5 py-0.2 rounded-full font-bold " +
+                    (filter === tab.id ? "bg-white/20 text-white" : "bg-[#dde4e8] text-[#526066]")
+                  }
+                >
+                  {tab.count}
+                </span>
+              </button>
+            ))}
           </div>
-          <span className="text-[10px] text-[#6e797e] font-semibold">{claims.length} records</span>
+
+          <div className="relative w-full md:w-64">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+              search
+            </span>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ID, type, location..."
+              className="w-full bg-[#f8fafc] border border-[#d8e0e4] rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c]"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-xs">close</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="hidden md:grid grid-cols-5 gap-4 px-5 py-3 bg-[#f7f9fb] text-[9px] uppercase tracking-[.1em] font-semibold text-[#778187] border-b border-[#e0e3e5]">
@@ -71,16 +217,40 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
           <span>Assigned</span>
         </div>
 
-        {claims.length === 0 ? (
+        {filteredClaims.length === 0 ? (
           <div className="py-16 text-center">
-            <span className="material-symbols-outlined text-[#9aa5aa] text-4xl">inbox</span>
-            <h3 className="font-headline font-semibold mt-3">No claims in queue</h3>
-            <p className="text-xs text-[#6e797e] mt-1">
-              Verified claims will appear here after automatic assignment.
+            <span className="material-symbols-outlined text-[#9aa5aa] text-4xl">
+              {search ? "search_off" : filter === "approved" ? "verified" : "inbox"}
+            </span>
+            <h3 className="font-headline font-semibold mt-3 text-slate-800">
+              {search
+                ? "No matching claims found"
+                : filter === "approved"
+                ? "No approved claims yet"
+                : "No claims in this view"}
+            </h3>
+            <p className="text-xs text-[#6e797e] mt-1 max-w-sm mx-auto">
+              {search
+                ? `No claim tickets match "${search}". Try clearing search or selecting "All Claims".`
+                : filter === "approved"
+                ? "Approved claims will remain safely archived here for future reference and adjuster audit."
+                : "Claims will appear here once submitted or assigned."}
             </p>
+            {(search || filter !== "all") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilter("all");
+                  setSearch("");
+                }}
+                className="mt-3 text-xs text-[#00647c] font-semibold hover:underline cursor-pointer"
+              >
+                View all claims
+              </button>
+            )}
           </div>
         ) : (
-          claims.map((c) => (
+          filteredClaims.map((c) => (
             <div
               key={c.ticket_id}
               onClick={() => onOpenClaim(c.ticket_id, "file")}
@@ -99,18 +269,24 @@ export const ClaimsQueueView: React.FC<ClaimsQueueViewProps> = ({
               <div>
                 <span
                   className={
-                    "px-2.5 py-1 rounded-full text-[9px] uppercase font-bold " +
+                    "px-2.5 py-1 rounded-full text-[9px] uppercase font-bold inline-flex items-center gap-1 " +
                     (c.status === "pending_evidence"
-                      ? "bg-[#fff0d8] text-[#895900]"
+                      ? "bg-[#fff0d8] text-[#895900] border border-amber-200"
                       : c.status === "under_review"
-                      ? "bg-cyan-100 text-cyan-800"
-                      : c.status === "approved"
-                      ? "bg-emerald-100 text-emerald-800"
+                      ? "bg-cyan-100 text-cyan-800 border border-cyan-200"
+                      : c.status === "approved" || c.status === "partially_approved"
+                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
                       : c.status === "rejected"
-                      ? "bg-rose-100 text-rose-800"
-                      : "bg-[#dfeafc] text-[#345a72]")
+                      ? "bg-rose-100 text-rose-800 border border-rose-200"
+                      : "bg-[#dfeafc] text-[#345a72] border border-blue-200")
                   }
                 >
+                  {(c.status === "approved" || c.status === "partially_approved") && (
+                    <span className="material-symbols-outlined text-xs">check_circle</span>
+                  )}
+                  {c.status === "rejected" && (
+                    <span className="material-symbols-outlined text-xs">cancel</span>
+                  )}
                   {title(c.status)}
                 </span>
               </div>

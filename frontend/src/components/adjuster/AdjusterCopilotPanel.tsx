@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import { FileData, CopilotAnalysis } from "./types";
+import { MarkdownRenderer } from "../common/MarkdownRenderer";
 
 interface Props {
   file: FileData;
@@ -73,6 +74,7 @@ export const AdjusterCopilotPanel: React.FC<Props> = ({
   const report: CopilotAnalysis = file.copilot || {};
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<"analysis" | "evidence" | "risks" | "sources">("analysis");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -493,13 +495,36 @@ export const AdjusterCopilotPanel: React.FC<Props> = ({
                     <span>{isCopilot ? "Copilot" : "Adjuster"}</span>
                   </div>
                   <div
-                    className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs leading-relaxed ${
+                    className={`rounded-2xl px-4 py-3 text-xs leading-relaxed ${
                       isCopilot
-                        ? "bg-[#f1f5f9] text-slate-800 rounded-tl-xs border border-slate-200/60 shadow-2xs whitespace-pre-wrap"
-                        : "bg-[#00647c] text-white rounded-tr-xs shadow-xs whitespace-pre-wrap"
+                        ? "w-full max-w-[95%] bg-[#f8fafc] text-slate-800 rounded-tl-xs border border-slate-200/80 shadow-2xs"
+                        : "max-w-[85%] bg-[#00647c] text-white rounded-tr-xs shadow-xs whitespace-pre-wrap"
                     }`}
                   >
-                    {m.message}
+                    {isCopilot ? (
+                      <div>
+                        <MarkdownRenderer content={m.message} />
+                        <div className="mt-2.5 pt-2 border-t border-slate-200/70 flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(m.message);
+                              setCopiedIndex(i);
+                              setTimeout(() => setCopiedIndex(null), 2000);
+                            }}
+                            className="text-[10px] text-slate-500 hover:text-[#00647c] flex items-center gap-1 font-semibold transition cursor-pointer"
+                            title="Copy Copilot response"
+                          >
+                            <span className="material-symbols-outlined text-xs">
+                              {copiedIndex === i ? "check" : "content_copy"}
+                            </span>
+                            <span>{copiedIndex === i ? "Copied" : "Copy response"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      m.message
+                    )}
                   </div>
                 </div>
               );

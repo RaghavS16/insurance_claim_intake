@@ -311,16 +311,3 @@ class TestVerifyToken:
         payload = base64.urlsafe_b64encode(json.dumps({"sub": "hacker", "exp": 9999999999}).encode()).rstrip(b"=").decode()
         none_token = f"{header}.{payload}."
         assert verify_token(none_token) is None
-
-
-# ---------------------------------------------------------------------------
-# TokenError enum
-# ---------------------------------------------------------------------------
-class TestTokenErrorEnum:
-    def test_enum_values_exist(self):
-        from src.utils.auth import TokenError
-        assert TokenError.EXPIRED.value == "token_expired"
-        assert TokenError.INVALID.value == "token_invalid"
-        assert TokenError.MALFORMED.value == "token_malformed"
-        assert TokenError.REVOKED.value == "token_revoked"
-

@@ -7,7 +7,6 @@ Production hardening:
 - Password complexity validation delegated to validators module
 """
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from typing import Any, Dict, Optional
 import bcrypt
 import jwt
@@ -25,12 +24,6 @@ _revoked_tokens_lock = threading.Lock()
 _revoked_tokens: Dict[str, float] = {}  # jti or token_hash -> expiry_timestamp
 
 
-class TokenError(Enum):
-    """Structured token verification error types."""
-    EXPIRED = "token_expired"
-    INVALID = "token_invalid"
-    MALFORMED = "token_malformed"
-    REVOKED = "token_revoked"
 
 
 def get_password_hash(password: str) -> str:

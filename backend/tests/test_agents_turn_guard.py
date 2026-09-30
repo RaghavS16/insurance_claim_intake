@@ -1,10 +1,9 @@
-﻿"""
+"""
 Edge-case tests for src/agents/turn_guard.py
 
 Covers: _is_affirmative, _is_negative, _is_conversational_filler,
         _is_audio_check, _is_unrelated_question, _conversation_only_response,
-        _incident_description_from_text, _requested_correction_field,
-        _correction_prompt, conversation_turn_processor.
+        _incident_description_from_text, conversation_turn_processor.
 """
 import pytest
 from unittest.mock import MagicMock, patch
@@ -226,75 +225,6 @@ class TestConversationOnlyResponse:
         result = self._call("")
         assert result is None
 
-
-# ---------------------------------------------------------------------------
-# _requested_correction_field
-# ---------------------------------------------------------------------------
-class TestRequestedCorrectionField:
-    def _call(self, text, state=None):
-        from src.agents.turn_guard import _requested_correction_field
-        return _requested_correction_field(text, state or {})
-
-    def test_amount_keywords_map_to_amount(self):
-        assert self._call("the amount is wrong") == "estimated_claim_amount"
-
-    def test_policy_keyword_maps_to_policy_id(self):
-        assert self._call("my policy number is different") == "policy_id"
-
-    def test_location_keyword_maps_to_event_location(self):
-        assert self._call("the location is wrong") == "event_location"
-
-    def test_date_keyword_maps_to_event_date(self):
-        assert self._call("the date is wrong") == "event_date"
-
-    def test_insurance_type_keyword(self):
-        assert self._call("my insurance type is motor") == "insurance_type"
-
-    def test_incident_keyword_maps_to_description(self):
-        assert self._call("what happened is different") == "event_description"
-
-    def test_unrelated_text_falls_back_to_state(self):
-        state = {"next_question_field": "event_location"}
-        result = self._call("some unrecognized text", state)
-        assert result == "event_location"
-
-    def test_confirmation_field_excluded(self):
-        state = {"next_question_field": "confirmation"}
-        result = self._call("some unrecognized text", state)
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _correction_prompt
-# ---------------------------------------------------------------------------
-class TestCorrectionPrompt:
-    def _call(self, field):
-        from src.agents.turn_guard import _correction_prompt
-        return _correction_prompt(field)
-
-    def test_amount_field_prompt(self):
-        result = self._call("estimated_claim_amount")
-        assert "amount" in result.lower() or "loss" in result.lower()
-
-    def test_policy_field_prompt(self):
-        result = self._call("policy_id")
-        assert "policy" in result.lower()
-
-    def test_location_field_prompt(self):
-        result = self._call("event_location")
-        assert "location" in result.lower()
-
-    def test_date_field_prompt(self):
-        result = self._call("event_date")
-        assert "date" in result.lower()
-
-    def test_unknown_field_returns_generic(self):
-        result = self._call("some_unknown_field")
-        assert "correct" in result.lower() or "detail" in result.lower()
-
-    def test_none_field_returns_generic(self):
-        result = self._call(None)
-        assert isinstance(result, str) and len(result) > 0
 
 
 # ---------------------------------------------------------------------------
