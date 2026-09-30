@@ -264,7 +264,16 @@ async def process_claimant_turn(
             logger.warning("Invalid normalized event date: %r", event_date_str)
     flag_modified(claim, "pipeline_state")
 
+    # The claimant-facing answer is authoritative when the turn was a question.
+    # Otherwise preserve the normal intake planner response. For mixed messages the
+    # RAG answer takes precedence, while extraction/policy/evidence state continues.
     agent_text = result.get("next_question") or result.get("message", "")
+    chat_intent = result.get("chat_intent") or {}
+    if rag_reply.get("answer"):
+        agent_text = rag_reply["answer"]
+        result["next_question"] = agent_text
+        result["message"] = agent_text
+
     # Voice barge-in can invalidate a turn while the LLM is still running. Do not
     # persist an assistant response the claimant has already interrupted.
     if is_turn_current is not None and not is_turn_current():
