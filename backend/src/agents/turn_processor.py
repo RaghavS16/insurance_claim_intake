@@ -76,15 +76,36 @@ async def process_claimant_turn(
         **({"_workflow_event": workflow_event} if workflow_event else {}),
     }
 
-    # Retrieval-first claimant answer: every turn can be a question and/or claim input.
-    # Run RAG chat separately so a direct question is answered even while intake is incomplete.
+    # Fast-path intent first: classify only when the turn plausibly needs conversational
+    # RAG. Plain claim facts can go straight to the intake graph, avoiding an LLM call.
     rag_reply = {}
     if user_text and not workflow_event:
-        try:
-            from src.agents.rag_chat import build_claimant_response
-            rag_reply = await asyncio.to_thread(build_claimant_response, user_text, prior_state)
-        except Exception as exc:
-            logger.warning("Retrieval-first claimant response failed: %s", exc)
+        from src.agents.rag_chat import _heuristic_intent
+        fast_intent = _heuristic_intent(user_text)
+        likely_question = bool(
+            fast_intent.is_question
+            or fast_intent.wants_to_file
+            or fast_intent.wants_status
+            or fast_intent.wants_policy_explanation
+            or fast_intent.wants_human
+        )
+        if likely_question:
+            try:
+                from src.agents.rag_chat import classify_turn, build_claimant_response
+                rag_intent_obj = await asyncio.to_thread(
+                    classify_turn,
+                    user_text,
+                    prior_state.get("extracted_data") or {},
+                )
+                rag_reply = await asyncio.to_thread(
+                    build_claimant_response,
+                    user_text,
+                    prior_state,
+                    rag_intent_obj,
+                )
+            except Exception as exc:
+                # Preserve normal claim capture if conversational RAG is unavailable.
+                logger.warning("Claimant conversational RAG response failed: %s", exc)
 
     # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
     result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
