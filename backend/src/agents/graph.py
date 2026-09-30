@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 from src.agents import nodes
 from src.agents.state import ClaimState
 from src.agents.turn_guard import conversation_turn_processor
+from src.knowledge.retriever import KnowledgeRetriever
 from src.agents.dynamic_requirements import build_dynamic_context, extract_answers, missing_evidence, pending_evidence_review
 
 
