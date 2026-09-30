@@ -168,7 +168,6 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
     if state.get("_skip_all") or not _looks_like_question(state):
         return state
 
-    from src.knowledge.retriever import KnowledgeRetriever
     from datetime import date
 
     data = state.get("extracted_data") or {}
