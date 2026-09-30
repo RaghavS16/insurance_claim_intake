@@ -214,10 +214,21 @@ def answer_claimant_question(
     )
 
 
-def build_claimant_response(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    intent = classify_turn(text, state.get("extracted_data") or {})
+def build_claimant_response(
+    text: str,
+    state: Dict[str, Any],
+    intent: ChatIntent | None = None,
+) -> Dict[str, Any]:
+    # Reuse the fast-path classifier result when the caller already has it.
+    intent = intent or classify_turn(text, state.get("extracted_data") or {})
     retrieval = retrieve_for_chat(text, state)
-    needs_answer = intent.is_question or intent.wants_to_file or intent.wants_policy_explanation
+    needs_answer = bool(
+        intent.is_question
+        or intent.wants_to_file
+        or intent.wants_policy_explanation
+        or intent.wants_status
+        or intent.wants_human
+    )
     answer = answer_claimant_question(text, state, retrieval, intent) if needs_answer else ""
     return {
         "intent": intent.model_dump(),
