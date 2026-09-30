@@ -68,6 +68,8 @@ export default function AdjusterPage() {
       try {
         const data = (await api("/api/v1/adjuster/claims/" + id)) as FileData;
         setFile(data);
+        if (data.copilot_chat) setCopilotChat(data.copilot_chat);
+        else setCopilotChat([]);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to load claim file.");
       }
@@ -84,6 +86,7 @@ export default function AdjusterPage() {
         const d = (await api("/api/v1/adjuster/claims/" + id + "/copilot")) as {
           analysis?: CopilotAnalysis;
           sources?: KnowledgeItem[];
+          chat?: Array<{ speaker: string; message: string; created_at?: string }>;
         };
         setFile((prev) =>
           prev
@@ -94,6 +97,7 @@ export default function AdjusterPage() {
               }
             : prev
         );
+        if (d.chat) setCopilotChat(d.chat);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to load Copilot analysis.");
       } finally {
@@ -102,6 +106,12 @@ export default function AdjusterPage() {
     },
     [api, selected]
   );
+
+  useEffect(() => {
+    if (view === "copilot" && selected && file && (!file.copilot || (!file.copilot.executive_summary && !file.copilot.summary)) && !copilotLoading) {
+      void loadCopilot(selected);
+    }
+  }, [view, selected, file, copilotLoading, loadCopilot]);
 
   const openEvidence = async (e: EvidenceItem) => {
     if (!selected) return;
@@ -182,14 +192,31 @@ export default function AdjusterPage() {
     finally{setKnowledgeUploading(false);}
   },[apiFetch,knowledgeFile,knowledgeType,knowledgeInsurance,knowledgePolicy,searchKnowledge]);
 
-  const sendCopilotMessage = useCallback(async () => {
-    if(!selected || !copilotMessage.trim())return;
-    const message=copilotMessage.trim(); setCopilotMessage("");
-    try{
-      const d=await api("/api/v1/adjuster/claims/"+selected+"/copilot/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})}) as {chat?:Array<{speaker:string;message:string;created_at?:string}>};
-      setCopilotChat(d.chat||[]);
-    }catch(e:unknown){setError(e instanceof Error?e.message:"Copilot chat is unavailable.");}
-  },[api,selected,copilotMessage]);
+  const sendCopilotMessage = useCallback(
+    async (customText?: string) => {
+      const text = (typeof customText === "string" ? customText : copilotMessage).trim();
+      if (!selected || !text) return;
+      setCopilotMessage("");
+      setCopilotLoading(true);
+      setCopilotChat((prev) => [
+        ...prev,
+        { speaker: "adjuster", message: text, created_at: new Date().toISOString() },
+      ]);
+      try {
+        const d = (await api("/api/v1/adjuster/claims/" + selected + "/copilot/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text }),
+        })) as { chat?: Array<{ speaker: string; message: string; created_at?: string }> };
+        if (d.chat) setCopilotChat(d.chat);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Copilot chat is unavailable.");
+      } finally {
+        setCopilotLoading(false);
+      }
+    },
+    [api, selected, copilotMessage]
+  );
 
   const handleAddNote = async () => {
     if (!selected || !newNote.trim()) return;
@@ -230,8 +257,9 @@ export default function AdjusterPage() {
 
   useEffect(() => {
     let ignore = false;
-    if (view === "copilot" && selected && !file?.copilot?.summary) {
-      api<{ analysis?: CopilotAnalysis; sources?: KnowledgeItem[] }>("/api/v1/adjuster/claims/" + selected + "/copilot")
+    if (view === "copilot" && selected && !file?.copilot?.summary && !file?.copilot?.executive_summary) {
+      setCopilotLoading(true);
+      api<{ analysis?: CopilotAnalysis; sources?: KnowledgeItem[]; chat?: any[] }>("/api/v1/adjuster/claims/" + selected + "/copilot")
         .then((d) => {
           if (!ignore) {
             setFile((prev) =>
@@ -243,18 +271,22 @@ export default function AdjusterPage() {
                   }
                 : prev
             );
+            if (d.chat) setCopilotChat(d.chat);
           }
         })
         .catch((e: unknown) => {
           if (!ignore) {
             setError(e instanceof Error ? e.message : "Failed to load Copilot analysis.");
           }
+        })
+        .finally(() => {
+          if (!ignore) setCopilotLoading(false);
         });
     }
     return () => {
       ignore = true;
     };
-  }, [view, selected, api, file?.copilot?.summary]);
+  }, [view, selected, api, file?.copilot?.summary, file?.copilot?.executive_summary]);
 
   useEffect(() => {
     const t = getAuthToken();

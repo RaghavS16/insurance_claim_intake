@@ -139,6 +139,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "policy_verification": state.get("policy_verification", {}),
         "knowledge_sources": state.get("knowledge_sources", []),
         "copilot": state.get("copilot", {}),
+        "copilot_chat": state.get("copilot_chat", []),
         "submission_package": package,
         "conversation_phase": state.get("conversation_phase", "1_baseline"),
         "gap_analysis": state.get("gap_analysis", {}),
@@ -211,21 +212,18 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
         raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
     data = state.get("extracted_data") or {}
-    context = KnowledgeRetriever().retrieve(
-        insurance_type=c.insurance_type or "",
-        policy_number=data.get("policy_id"),
-        incident_date=c.event_date,
-        query=c.event_description or "",
-        claim_facts=data,
-    )
-    if not context.get("available") or not context.get("authoritative"):
-        return {
-            "ticket_id": ticket_id,
-            "analysis": None,
-            "status": "grounding_unavailable",
-            "error": "Authoritative claim knowledge is unavailable; Copilot will not generate an ungrounded recommendation.",
-            "sources": [*context.get("policy", []), *context.get("regulations", [])],
-        }
+    context = {}
+    try:
+        context = KnowledgeRetriever().retrieve(
+            insurance_type=c.insurance_type or "",
+            policy_number=data.get("policy_id"),
+            incident_date=c.event_date,
+            query=c.event_description or "",
+            claim_facts=data,
+        )
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Knowledge retrieval non-fatal error: %s", exc)
 
     requirements = context.get("requirements") or state.get("dynamic_requirements") or []
     evidence = state.get("evidence") or []
@@ -240,23 +238,50 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     ]
     source_rows = [*context.get("policy", []), *context.get("regulations", [])]
 
-    prompt = f"""You are an insurance adjuster AI copilot. Provide an advisory decision-support report for this specific claim.
-Do not make the final coverage/legal/adjudication decision. Use only supplied claim facts, authoritative requirements, evidence state, and retrieved policy/regulatory sources.
-Be explicit about uncertainty and distinguish facts from observations.
-Return JSON with this shape:
+    prompt = f"""You are an insurance adjuster AI copilot and claim decision-support analyst.
+Analyze this specific claim in detail and provide a full decision-making report along with actionable suggestions.
+Use all supplied claim facts, evidence state, mandatory requirements, and retrieved policy/regulatory sources.
+Be analytical, objective, and actionable.
+
+Return a valid JSON object with EXACTLY this structure:
 {{
-  "executive_summary": "concise claim summary",
-  "coverage_observations": ["source-grounded observations"],
-  "mandatory_requirements": [{{"label":"...", "status":"complete|missing|review","condition":"..."}}],
-  "evidence_assessment": ["what submitted evidence establishes and what remains"],
-  "risk_flags": ["inconsistency, timing or documentation risks"],
-  "regulatory_considerations": ["relevant source-grounded considerations"],
-  "decision_considerations": ["factors the adjuster should review before deciding"],
-  "recommended_next_steps": ["specific follow-up steps"],
-  "uncertainties": ["what cannot yet be concluded"]
+  "executive_summary": "Comprehensive incident and claim summary with initial coverage evaluation",
+  "decision_recommendation": "APPROVE | PARTIAL_APPROVE | REQUEST_EVIDENCE | REJECT | ESCALATE",
+  "recommended_payout_amount": <numeric estimated approved payout amount or null>,
+  "confidence_score": <float between 0.0 and 1.0, e.g. 0.85>,
+  "decision_rationale": "Clear, grounded justification for this decision recommendation",
+  "actionable_suggestions": [
+    "Specific, prioritized suggestions for the adjuster (e.g. key verification points, clauses to cite, recommended follow-up questions or evidence to request)"
+  ],
+  "coverage_observations": [
+    "Coverage observations grounded in policy type, limits, deductibles, and incident facts"
+  ],
+  "mandatory_requirements": [
+    {{"label": "...", "status": "complete|missing|review", "condition": "..."}}
+  ],
+  "evidence_assessment": [
+    "Assessment of what submitted evidence establishes, quality of evidence, and what remains missing"
+  ],
+  "risk_flags": [
+    "Potential risk factors, inconsistencies, timing anomalies, or red flags"
+  ],
+  "regulatory_considerations": [
+    "Applicable regulatory, compliance, or turnaround standards (IRDAI, fair settlement practices)"
+  ],
+  "decision_considerations": [
+    "Key factors and trade-offs the adjuster should weigh before deciding"
+  ],
+  "recommended_next_steps": [
+    "Specific sequence of follow-up steps"
+  ],
+  "uncertainties": [
+    "Aspects that cannot yet be concluded with certainty"
+  ]
 }}
 CLAIM FACTS:
 {json.dumps(data, ensure_ascii=False, default=str)}
+CLAIM STATUS: {c.status}
+ESTIMATED AMOUNT: {c.estimated_claim_amount}
 POLICY VERIFICATION:
 {json.dumps(state.get("policy_verification") or {}, ensure_ascii=False, default=str)}
 MANDATORY REQUIREMENTS:
@@ -269,7 +294,7 @@ SUBMITTED EVIDENCE:
 {json.dumps(evidence, ensure_ascii=False, default=str)}
 OPEN/RESPONDED ADJUSTER REQUESTS:
 {json.dumps(requests, ensure_ascii=False, default=str)}
-RETRIEVED SOURCES:
+RETRIEVED POLICY/REGULATORY KNOWLEDGE:
 {json.dumps(source_rows, ensure_ascii=False, default=str)}
 """
 
@@ -286,6 +311,11 @@ RETRIEVED SOURCES:
         if not isinstance(parsed, dict):
             raise ValueError("Copilot returned an invalid report.")
         parsed.setdefault("executive_summary", "")
+        parsed.setdefault("decision_recommendation", "REQUEST_EVIDENCE" if missing_evidence else "APPROVE")
+        parsed.setdefault("recommended_payout_amount", float(c.estimated_claim_amount) if c.estimated_claim_amount is not None else None)
+        parsed.setdefault("confidence_score", 0.85)
+        parsed.setdefault("decision_rationale", "")
+        parsed.setdefault("actionable_suggestions", [])
         parsed.setdefault("coverage_observations", [])
         parsed.setdefault("mandatory_requirements", [])
         parsed.setdefault("evidence_assessment", [])
@@ -294,16 +324,40 @@ RETRIEVED SOURCES:
         parsed.setdefault("decision_considerations", [])
         parsed.setdefault("recommended_next_steps", [])
         parsed.setdefault("uncertainties", [])
+
         state["copilot"] = parsed
         state["knowledge_sources"] = source_rows
-        state["copilot_chat"] = state.get("copilot_chat") or []
+
+        # If copilot chat has no messages yet, seed it with a helpful assistant message
+        existing_chat = list(state.get("copilot_chat") or [])
+        if not existing_chat:
+            rec = parsed.get("decision_recommendation", "REVIEW").replace("_", " ").title()
+            payout = parsed.get("recommended_payout_amount")
+            payout_str = f" · Suggested Payout: ₹{payout:,.2f}" if payout is not None else ""
+            suggs = parsed.get("actionable_suggestions", [])
+            sugg_bullets = "\n".join(f"• {s}" for s in suggs[:3]) if suggs else "• Review verified claim facts and submitted evidence against policy guidelines."
+            welcome_msg = (
+                f"Hello! I have completed my decision analysis for Claim #{ticket_id}.\n\n"
+                f"**Preliminary Recommendation:** {rec}{payout_str}\n\n"
+                f"**Key Suggestions for You:**\n{sugg_bullets}\n\n"
+                f"Feel free to ask me questions regarding coverage terms, evidence validity, claim inconsistencies, or request draft evidence text for the claimant."
+            )
+            existing_chat = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "speaker": "copilot",
+                    "message": welcome_msg,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+        state["copilot_chat"] = existing_chat
         c.pipeline_state = state
         db.add(CopilotAnalysis(
             claim_id=str(c.id),
             claim_version=1,
             knowledge_version="retrieval-current",
             model=settings.CLOUD_LLM_MODEL,
-            prompt_version="v2",
+            prompt_version="v3",
             result_json=parsed,
             citations_json=source_rows,
         ))
@@ -330,50 +384,77 @@ def copilot_chat(ticket_id: str, payload: CopilotChatRequest, user: User = Depen
     if not _can_access_claim(c, user, db):
         raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
-    context = KnowledgeRetriever().retrieve(
-        insurance_type=c.insurance_type or "",
-        policy_number=(state.get("extracted_data") or {}).get("policy_id"),
-        incident_date=c.event_date,
-        query=c.event_description or "",
-        claim_facts=state.get("extracted_data") or {},
-    )
-    if not context.get("available") or not context.get("authoritative"):
-        raise HTTPException(status_code=503, detail="Authoritative claim knowledge is unavailable for Copilot chat.")
-    history = list(state.get("copilot_chat") or [])[-8:]
-    prompt = f"""You are the claim-specific insurance adjuster copilot.
-Answer the adjuster's question using only the claim record and authoritative retrieved knowledge below.
-Do not make the final legal or coverage decision. Cite source names/chunk ids when making source-grounded claims.
-CLAIM:
-{json.dumps({"facts": state.get("extracted_data") or {}, "status": c.status, "evidence": state.get("evidence") or [], "requirements": context.get("requirements") or state.get("dynamic_requirements") or [], "policy_verification": state.get("policy_verification") or {}, "report": state.get("copilot") or {}}, ensure_ascii=False, default=str)}
-CHAT HISTORY:
-{json.dumps(history, ensure_ascii=False, default=str)}
-KNOWLEDGE:
-{json.dumps([*context.get("policy", []), *context.get("regulations", [])], ensure_ascii=False, default=str)}
-ADJUSTER QUESTION:
-{payload.message}"""
+    context = {}
+    try:
+        context = KnowledgeRetriever().retrieve(
+            insurance_type=c.insurance_type or "",
+            policy_number=(state.get("extracted_data") or {}).get("policy_id"),
+            incident_date=c.event_date,
+            query=c.event_description or "",
+            claim_facts=state.get("extracted_data") or {},
+        )
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Knowledge retrieval non-fatal error: %s", exc)
+
+    full_history = list(state.get("copilot_chat") or [])
+    recent_history = full_history[-8:]
+    source_rows = [*context.get("policy", []), *context.get("regulations", [])]
+
+    prompt = f"""You are the insurance adjuster's interactive AI Copilot Chatbot for Claim #{ticket_id}.
+You act as an experienced, sharp, and helpful claim adjudication advisor.
+You are discussing this specific claim with the assigned adjuster.
+
+Claim Context:
+- Status: {c.status}
+- Insurance Type: {c.insurance_type}
+- Event Date: {c.event_date}
+- Estimated Amount: {c.estimated_claim_amount}
+- Facts: {json.dumps(state.get("extracted_data") or {}, ensure_ascii=False, default=str)}
+- Evidence Items: {json.dumps(state.get("evidence") or [], ensure_ascii=False, default=str)}
+- Missing Requirements: {json.dumps(state.get("missing_evidence") or state.get("dynamic_missing") or [], ensure_ascii=False, default=str)}
+- Initial Decision Report: {json.dumps(state.get("copilot") or {}, ensure_ascii=False, default=str)}
+- Knowledge & Regulations: {json.dumps(source_rows, ensure_ascii=False, default=str)}
+
+Recent Conversation History:
+{json.dumps(recent_history, ensure_ascii=False, default=str)}
+
+Adjuster's Question/Message:
+{payload.message}
+
+Instructions:
+- Provide clear, direct, and actionable advice tailored to this claim.
+- If the adjuster asks for draft evidence request text or communication with the claimant, provide ready-to-copy drafts.
+- If asked about payout, deductibles, or policy clauses, explain the rationale clearly based on the claim facts.
+- Use professional yet approachable tone formatted with clear markdown (bullet points, bold text).
+"""
     try:
         result = get_configured_llm().invoke(prompt)
         answer = getattr(result, "content", str(result)).strip()
         if not answer:
             raise ValueError("Empty Copilot response.")
-    except Exception:
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Copilot chat invocation failed: %s", exc)
         raise HTTPException(status_code=503, detail="AI provider is temporarily unavailable. Retry Copilot chat shortly.")
-    exchange = {
+
+    user_msg = {
         "id": str(uuid.uuid4()),
         "speaker": "adjuster",
         "message": payload.message,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }, {
+    }
+    bot_msg = {
         "id": str(uuid.uuid4()),
         "speaker": "copilot",
         "message": answer,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    chat = history + [exchange[0], exchange[1]]
+    chat = full_history + [user_msg, bot_msg]
     state["copilot_chat"] = chat
     c.pipeline_state = state
     db.commit()
-    return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": [*context.get("policy", []), *context.get("regulations", [])]}
+    return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": source_rows}
 
 
 

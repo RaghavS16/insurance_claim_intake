@@ -15,6 +15,8 @@ export interface ClaimSummary {
   last_message?: string | null;
   last_message_speaker?: string | null;
   turn_count?: number;
+  open_request_count?: number;
+  evidence_requests?: Array<any>;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -31,13 +33,62 @@ interface ClaimantSidebarProps {
   onLogout: () => void;
 }
 
-const getStatusBadge = (status: string) => {
+const getStatusBadge = (status: string, openRequests = 0) => {
+  if (openRequests > 0 || status?.toLowerCase() === "pending_evidence") {
+    return {
+      bg: "bg-amber-100 text-amber-900 border-amber-300 font-bold",
+      label: "Action Needed",
+      icon: "warning",
+    };
+  }
   switch (status?.toLowerCase()) {
     case "submitted":
       return {
         bg: "bg-emerald-50 text-emerald-700 border-emerald-200",
         label: "Submitted",
         icon: "verified",
+      };
+    case "assigned":
+      return {
+        bg: "bg-sky-50 text-sky-700 border-sky-200",
+        label: "Assigned",
+        icon: "assignment_ind",
+      };
+    case "under_review":
+      return {
+        bg: "bg-indigo-50 text-indigo-700 border-indigo-200",
+        label: "Under Review",
+        icon: "rule",
+      };
+    case "approved":
+      return {
+        bg: "bg-emerald-100 text-emerald-800 border-emerald-300",
+        label: "Approved",
+        icon: "check_circle",
+      };
+    case "partially_approved":
+      return {
+        bg: "bg-teal-50 text-teal-800 border-teal-300",
+        label: "Partially Approved",
+        icon: "check",
+      };
+    case "rejected":
+      return {
+        bg: "bg-rose-50 text-rose-700 border-rose-200",
+        label: "Rejected",
+        icon: "cancel",
+      };
+    case "escalated":
+      return {
+        bg: "bg-orange-50 text-orange-700 border-orange-200",
+        label: "Escalated",
+        icon: "priority_high",
+      };
+    case "closed":
+      return {
+        bg: "bg-slate-100 text-slate-700 border-slate-300",
+        label: "Closed",
+        icon: "lock",
       };
     case "verified":
       return {
@@ -54,7 +105,7 @@ const getStatusBadge = (status: string) => {
     case "draft":
     default:
       return {
-        bg: "bg-amber-50 text-amber-700 border-amber-200",
+        bg: "bg-slate-100 text-slate-600 border-slate-200",
         label: "Draft",
         icon: "edit_note",
       };
@@ -111,18 +162,10 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
 
   const currentActiveRoute = activeRoute || (router.pathname.includes("link-policy") ? "link-policy" : router.pathname.includes("track-claim") ? "track-claim" : "claimant");
   const postSubmissionStatuses = new Set(["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]);
+  const submittedCount = claims.filter((c) => postSubmissionStatuses.has((c.status || "").toLowerCase())).length;
+  const allChatsList = claims;
 
-  const startedClaims = claims.filter((c) => {
-    if (postSubmissionStatuses.has((c.status || "").toLowerCase())) return false;
-    const hasInteraction =
-      (c.turn_count && c.turn_count > 0) ||
-      c.status === "submitted" ||
-      c.status === "verified" ||
-      Boolean(c.event_description);
-    return Boolean(hasInteraction);
-  });
-
-  const filteredClaims = startedClaims.filter((c) => {
+  const filteredClaims = allChatsList.filter((c) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -194,14 +237,14 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
             forum
           </span>
           <span className="flex-1">Claim Intake & Chat</span>
-          {startedClaims.length > 0 && (
+          {allChatsList.length > 0 && (
             <span
               className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${currentActiveRoute === "claimant"
                 ? "bg-[#00647c]/10 text-[#00647c]"
                 : "bg-slate-200/80 text-slate-600"
                 }`}
             >
-              {startedClaims.length}
+              {allChatsList.length}
             </span>
           )}
         </Link>
@@ -213,9 +256,11 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         >
           <span className="material-symbols-outlined text-[18px]">track_changes</span>
           <span className="flex-1">Track Claim</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200/80 text-slate-600">
-            {claims.filter((c) => postSubmissionStatuses.has((c.status || "").toLowerCase())).length}
-          </span>
+          {submittedCount > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200/80 text-slate-600">
+              {submittedCount}
+            </span>
+          )}
         </Link>
 
         <Link
@@ -236,7 +281,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
         </Link>
       </div>
 
-      {/* Chat History & Search Section - Only displayed on Claim Intake & Chat tab */}
+      {/* Chat History only on Claim Intake & Chat route */}
       {currentActiveRoute === "claimant" ? (
         <>
           {/* Search Input */}
@@ -249,7 +294,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search conversations..."
+                placeholder="Search chat history..."
                 className="w-full pl-8 pr-7 py-1.5 bg-white border border-[#e2e8f0] rounded-lg text-xs text-[#1e293b] placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-[#00647c] focus:border-[#00647c] transition-all"
               />
               {searchQuery && (
@@ -263,10 +308,10 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
             </div>
           </div>
 
-          {/* Chat History Section */}
-          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1 scrollbar-thin">
+          {/* Claims List Section */}
+          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5 scrollbar-thin">
             <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              <span>Recent Claims</span>
+              <span>Chat History</span>
               <span className="text-[10px] bg-slate-200/70 text-slate-600 px-1.5 py-0.2 rounded-full font-mono">
                 {filteredClaims.length}
               </span>
@@ -275,7 +320,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
             {loadingClaims && claims.length === 0 ? (
               <div className="p-4 text-center space-y-2">
                 <div className="w-5 h-5 border-2 border-[#00647c] border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-slate-400">Loading history...</p>
+                <p className="text-xs text-slate-400">Loading chat history...</p>
               </div>
             ) : filteredClaims.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs text-slate-400">
@@ -286,11 +331,12 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
               </div>
             ) : (
               filteredClaims.map((claim) => {
-                const isActive = claim.ticket_id === activeTicketId && currentActiveRoute === "claimant";
-                const badge = getStatusBadge(claim.status);
+                const isActive = claim.ticket_id === activeTicketId;
+                const badge = getStatusBadge(claim.status, claim.open_request_count || 0);
                 const icon = getInsuranceIcon(claim.insurance_type);
                 const timeAgo = formatTimeAgo(claim.updated_at || claim.created_at);
                 const canDelete = !postSubmissionStatuses.has((claim.status || "").toLowerCase());
+                const hasPendingRequest = (claim.open_request_count && claim.open_request_count > 0) || claim.status === "pending_evidence";
 
                 return (
                   <div
@@ -317,9 +363,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                           className={`text-xs font-semibold truncate ${isActive ? "text-[#00647c]" : "text-slate-800"
                             }`}
                         >
-                          {claim.insurance_type
-                            ? `${claim.insurance_type.toUpperCase()} Claim`
-                            : claim.ticket_id}
+                          {claim.ticket_id}
                         </span>
                       </div>
 
@@ -330,9 +374,17 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                       </span>
                     </div>
 
-                    {/* Second Row: Snippet of Last Message */}
+                    {/* Pending Adjuster Request Callout */}
+                    {hasPendingRequest && (
+                      <div className="flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 border border-amber-300 rounded text-[10px] text-amber-800 font-semibold animate-pulse">
+                        <span className="material-symbols-outlined text-xs">error</span>
+                        <span>Adjuster Request Pending</span>
+                      </div>
+                    )}
+
+                    {/* Second Row: Snippet / Description */}
                     <p className="text-[11px] text-slate-500 line-clamp-1 pl-5">
-                      {claim.last_message || claim.event_description || "Intake conversation..."}
+                      {claim.insurance_type ? `${claim.insurance_type.toUpperCase()} · ` : ""}{claim.event_description || claim.last_message || "Claim record"}
                     </p>
 
                     {/* Third Row: Time + Turns + Actions */}
@@ -344,7 +396,7 @@ export const ClaimantSidebar: React.FC<ClaimantSidebarProps> = ({
                         ) : null}
                       </div>
 
-                      {/* Delete Claim Button */}
+                      {/* Delete Claim Button (only drafts) */}
                       {canDelete && onDeleteClaim && (
                         <button
                           onClick={(e) => onDeleteClaim(claim.ticket_id, e)}

@@ -438,6 +438,8 @@ export default function ClaimantPage() {
     fetchClaimsList(authToken);
   }, [connectWebSocket, fetchClaimsList]);
 
+  const postSubmissionStatuses = React.useMemo(() => new Set(["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]), []);
+
   const loadClaimByTicket = useCallback(async (selectedTicketId: string, authToken: string) => {
     if (!authToken || !selectedTicketId) return;
     if (isRecordingRef.current) stopVoiceRecording();
@@ -524,8 +526,16 @@ export default function ClaimantPage() {
         const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
         fetchClaimsList(savedToken);
         fetchLinkedPolicies(savedToken);
-        if (initialTicket) void loadClaimByTicket(initialTicket, savedToken);
-        else initBlankChat();
+        if (initialTicket) {
+          void loadClaimByTicket(initialTicket, savedToken);
+        } else {
+          const storedTicket = typeof window !== "undefined" ? localStorage.getItem("active_claim_ticket_id") : null;
+          if (storedTicket) {
+            void loadClaimByTicket(storedTicket, savedToken);
+          } else {
+            initBlankChat();
+          }
+        }
       },
     });
   }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);

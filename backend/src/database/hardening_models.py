@@ -55,7 +55,7 @@ class ClaimEvidence(Base):
     verification_confidence: Mapped[Optional[float]]=mapped_column()
     detected_document_type: Mapped[Optional[str]]=mapped_column(String(150))
     requested_evidence_type: Mapped[Optional[str]]=mapped_column(String(150))
-    request_id: Mapped[Optional[str]]=_UUID(ForeignKey("claim_evidence_requests.id",ondelete="SET NULL"))
+    request_id: Mapped[Optional[str]]=mapped_column(String(36),ForeignKey("claim_evidence_requests.id",ondelete="SET NULL"),nullable=True)
     analysis_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now,onupdate=_now)

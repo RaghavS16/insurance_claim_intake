@@ -9,7 +9,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,9 +21,7 @@ from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
-from src.database.models import Adjuster
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest
-from datetime import datetime, timezone
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent
 from src.evidence.verifier import verify_evidence
 from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim
@@ -254,6 +252,7 @@ def track_claims(request: Request, db: Session = Depends(get_db)):
         rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
         payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
         payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
+        payload["conversation"] = _conversation_payload(db, claim)
         items.append(payload)
     return {"items": items, "total": len(items)}
 
@@ -463,31 +462,83 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
 
 @router.post("/{ticket_id}/requests/{request_id}/respond")
-async def respond_to_evidence_request(ticket_id: str, request_id: str, request: Request, response_note: Optional[str] = None, file: Optional[UploadFile] = File(None), db: Session = Depends(get_db)):
+async def respond_to_evidence_request(
+    ticket_id: str,
+    request_id: str,
+    request: Request,
+    response_note: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim: raise HTTPException(status_code=404, detail="Claim not found.")
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    row = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.id == request_id, ClaimEvidenceRequest.claim_id == claim.id, ClaimEvidenceRequest.status == "open").first()
-    if not row: raise HTTPException(status_code=404, detail="Evidence request is not open or does not belong to this claim.")
-    if not file and not (response_note or "").strip():
+    row = db.query(ClaimEvidenceRequest).filter(
+        ClaimEvidenceRequest.id == request_id,
+        ClaimEvidenceRequest.claim_id == claim.id,
+        ClaimEvidenceRequest.status == "open"
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Evidence request is not open or does not belong to this claim.")
+    note_clean = (response_note or "").strip()
+    if not file and not note_clean:
         raise HTTPException(status_code=400, detail="Attach the requested evidence or add a response note.")
     evidence = None
-    if file:
+    if file and file.filename:
         from pathlib import Path
-        ext = Path(file.filename or "").suffix.lower()
-        if ext not in {".pdf",".jpg",".jpeg",".png",".webp",".doc",".docx",".txt"}:
+        ext = Path(file.filename).suffix.lower()
+        if ext not in {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}:
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
         content = await file.read()
         if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Evidence file is too large.")
-        s3 = put_bytes(content, prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}", filename=file.filename or "evidence", content_type=file.content_type or "application/octet-stream")
-        evidence = ClaimEvidence(claim_id=str(claim.id), uploaded_by=str(current_user.id), request_id=str(row.id), object_key=s3["key"], original_filename=file.filename or "evidence", content_type=file.content_type or "application/octet-stream", size_bytes=len(content), status="uploaded", verification_status="REVIEW_REQUIRED", requested_evidence_type="adjuster_request", analysis_json={"request_text": row.request_text})
+        s3 = put_bytes(
+            content,
+            prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}",
+            filename=file.filename or "evidence",
+            content_type=file.content_type or "application/octet-stream"
+        )
+        evidence = ClaimEvidence(
+            claim_id=str(claim.id),
+            uploaded_by=str(current_user.id),
+            request_id=str(row.id),
+            object_key=s3["key"],
+            original_filename=file.filename or "evidence",
+            content_type=file.content_type or "application/octet-stream",
+            size_bytes=len(content),
+            status="uploaded",
+            verification_status="REVIEW_REQUIRED",
+            requested_evidence_type="adjuster_request",
+            analysis_json={"request_text": row.request_text, "response_note": note_clean}
+        )
         db.add(evidence)
     row.status = "responded"
-    row.response_note = (response_note or "").strip() or None
+    row.response_note = note_clean or None
     row.responded_at = datetime.now(timezone.utc)
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="evidence_request_responded", new_value_json={"request_id": str(row.id), "evidence_id": str(evidence.id) if evidence else None}))
+    
+    # Check if there are other remaining open requests for this claim
+    remaining_open = db.query(ClaimEvidenceRequest).filter(
+        ClaimEvidenceRequest.claim_id == claim.id,
+        ClaimEvidenceRequest.status == "open",
+        ClaimEvidenceRequest.id != row.id
+    ).count()
+    if remaining_open == 0 and claim.status == "pending_evidence":
+        transition_claim(db, claim, "under_review", str(current_user.id), "Claimant submitted response to requested evidence")
+
+    db.add(ClaimAuditEvent(
+        claim_id=str(claim.id),
+        actor_user_id=str(current_user.id),
+        event_type="evidence_request_responded",
+        new_value_json={
+            "request_id": str(row.id),
+            "evidence_id": str(evidence.id) if evidence else None,
+            "response_note": note_clean,
+            "remaining_open_requests": remaining_open,
+        },
+        reason=note_clean or "Submitted evidence for adjuster request",
+    ))
     db.commit()
     db.refresh(row)
     return {"request": _request_payload(row, db), "message": "Your response has been submitted to the adjuster."}

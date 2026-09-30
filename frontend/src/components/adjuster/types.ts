@@ -61,6 +61,11 @@ export interface RequirementItem {
 export interface CopilotAnalysis {
   executive_summary?: string;
   summary?: string;
+  decision_recommendation?: string;
+  recommended_payout_amount?: number | null;
+  confidence_score?: number;
+  decision_rationale?: string;
+  actionable_suggestions?: string[];
   coverage_observations?: string[];
   mandatory_requirements?: Array<{ label?: string; status?: string; condition?: string }>;
   evidence_assessment?: string[];
@@ -127,6 +132,7 @@ export interface FileData {
   policy_verification: Record<string, unknown>;
   knowledge_sources: KnowledgeItem[];
   copilot: CopilotAnalysis;
+  copilot_chat?: Array<{ speaker: string; message: string; created_at?: string }>;
   submission_package?: SubmissionPackage;
   conversation_phase?: string;
   gap_analysis?: Record<string, unknown>;
