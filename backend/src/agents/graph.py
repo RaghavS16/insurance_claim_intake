@@ -299,6 +299,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     # Policy verification remains a submission gate, not a conversation gate.
     if not state.get("confirmed"):
         state["conversation_phase"] = "1_baseline"
+
     data = state.get("extracted_data") or {}
     insurance_type = data.get("insurance_type")
     if not insurance_type:
