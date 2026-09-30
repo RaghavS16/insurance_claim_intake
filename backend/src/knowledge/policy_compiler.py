@@ -155,6 +155,7 @@ REQUIREMENT MANIFEST:
 {json.dumps(manifest, ensure_ascii=False, default=str)}"""
 
     llm_items: dict[str, dict[str, Any]] = {}
+    llm_failed = False
     try:
         result = invoke_with_retry(
             lambda: structured_output(llm, RequirementPlan).invoke(prompt),
@@ -167,11 +168,15 @@ REQUIREMENT MANIFEST:
             if req.key
         }
     except Exception:
+        # On resolver failure, preserve the complete authoritative manifest.
+        # Applicability pruning depends on successful claim-specific resolution;
+        # fallback mode must never silently drop source-backed requirements.
+        llm_failed = True
         llm_items = {}
 
     output = []
     for key, source in by_key.items():
-        if _condition_is_clearly_false(source.get("condition"), claim_facts):
+        if not llm_failed and _condition_is_clearly_false(source.get("condition"), claim_facts):
             continue
         enriched = dict(source)
         model_item = llm_items.get(key)

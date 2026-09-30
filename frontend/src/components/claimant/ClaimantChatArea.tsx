@@ -111,8 +111,8 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
               Start Your Insurance Claim Intake
             </h2>
             <p className="text-xs md:text-sm text-slate-500 mt-2 max-w-md mx-auto leading-relaxed">
-              Speak naturally or type your incident description. Our AI will automatically extract
-              the necessary details, verify policy coverage, and prepare your claim.
+              Ask insurance questions in your own words. Our AI answers from the available policy and
+              claims guidance while collecting claim details and documents in the background.
             </p>
           </div>
         </div>

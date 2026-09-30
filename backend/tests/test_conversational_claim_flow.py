@@ -27,16 +27,38 @@ def test_health_narrative_counts_as_incident_description():
     assert "fever" in description.lower()
 
 
-def test_claim_rag_waits_for_baseline_confirmation():
+def test_claim_rag_can_plan_before_baseline_confirmation():
     state = {
         "confirmed": False,
         "extracted_data": {"insurance_type": "health"},
         "dynamic_requirements": [],
     }
-    result = _dynamic_requirement_enrichment(state)
-    assert result["rag_status"] == "WAITING_FOR_BASELINE_CONFIRMATION"
-    assert result["dynamic_missing"] == []
-    assert result["missing_evidence"] == []
+
+    def fake_context(_state):
+        return {
+            "available": True,
+            "status": "OK",
+            "requirements": [
+                {
+                    "key": "medical_bill",
+                    "label": "Medical bill",
+                    "question_hint": "Please upload the medical bill.",
+                    "required": True,
+                    "evidence_type": "medical_bill",
+                }
+            ],
+            "policy": [],
+            "regulations": [],
+            "authoritative": True,
+        }
+
+    import src.agents.graph as graph
+    from unittest.mock import patch
+    with patch.object(graph, "build_dynamic_context", side_effect=fake_context):
+        result = _dynamic_requirement_enrichment(state)
+
+    assert result["rag_status"] == "OK"
+    assert result["dynamic_requirements"][0]["key"] == "medical_bill"
 
 
 def test_fragmented_incident_story_is_rewritten_into_one_meaningful_description(monkeypatch):

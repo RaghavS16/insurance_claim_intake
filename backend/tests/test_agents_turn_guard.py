@@ -210,10 +210,13 @@ class TestConversationOnlyResponse:
         assert result is not None
         assert "hear" in result.lower()
 
-    def test_unrelated_question_returns_redirect(self):
+    def test_unrelated_question_is_not_hard_stopped(self):
         result = self._call("What is the weather today?")
-        assert result is not None
-        assert "insurance claim" in result.lower()
+        assert result is None
+
+    def test_claimant_process_question_is_not_hard_stopped(self):
+        result = self._call("What is the procedure to file a health insurance claim?")
+        assert result is None
 
     def test_claim_text_returns_none(self):
         result = self._call("I want to file a claim for my stolen car")

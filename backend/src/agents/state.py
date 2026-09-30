@@ -41,6 +41,10 @@ class ClaimState(TypedDict, total=False):
     evidence: List[Dict[str, Any]]
     dynamic_extraction_error: Optional[str]
     dynamic_extraction_error_message: Optional[str]
+    rag_answer: str
+    rag_answer_sources: List[Dict[str, Any]]
+    rag_answer_grounded: bool
+    rag_answer_query: str
 
     _skip_all: bool
     _workflow_event: Optional[str]

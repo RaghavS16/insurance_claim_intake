@@ -42,10 +42,14 @@ def _is_unrelated_question(text: str) -> bool:
 
 
 def _conversation_only_response(raw: str) -> str | None:
+    """Handle only transport-level voice checks here.
+
+    Claimant questions must never be hard-stopped by the turn guard. They are
+    valid conversation turns and are routed into the RAG answer layer even when
+    baseline claim fields are still incomplete.
+    """
     if _is_audio_check(raw):
         return "Yes, I can hear you clearly. Go ahead."
-    if _is_unrelated_question(raw):
-        return "I’m here to help with your insurance claim. I don’t have enough context for that question, but you can continue whenever you’re ready."
     return None
 
 
