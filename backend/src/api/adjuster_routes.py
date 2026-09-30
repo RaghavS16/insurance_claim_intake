@@ -239,9 +239,11 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     source_rows = [*context.get("policy", []), *context.get("regulations", [])]
 
     prompt = f"""You are an insurance adjuster AI copilot and claim decision-support analyst.
-Analyze this specific claim in detail and provide a full decision-making report along with actionable suggestions.
+Analyze this specific claim in detail and provide a full decision-support report along with actionable suggestions.
 Use all supplied claim facts, evidence state, mandatory requirements, and retrieved policy/regulatory sources.
-Be analytical, objective, and actionable.
+Every policy, coverage, deadline, exclusion, regulatory, or required-evidence statement must be grounded in the supplied retrieved sources. Do not invent or infer unsupported policy terms.
+If mandatory evidence or authoritative policy verification is missing, do not treat that as an approval-ready condition; surface the missing basis and use REQUEST_EVIDENCE or ESCALATE as appropriate.
+Keep the final claim decision with the human adjuster. Your role is evidence-grounded analysis, consistency checking, uncertainty identification, and actionable support.
 
 Return a valid JSON object with EXACTLY this structure:
 {{
