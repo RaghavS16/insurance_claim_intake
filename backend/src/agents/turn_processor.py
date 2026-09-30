@@ -76,9 +76,25 @@ async def process_claimant_turn(
         **({"_workflow_event": workflow_event} if workflow_event else {}),
     }
 
+    # Retrieval-first claimant answer: every turn can be a question and/or claim input.
+    # Run RAG chat separately so a direct question is answered even while intake is incomplete.
+    rag_reply = {}
+    if user_text and not workflow_event:
+        try:
+            from src.agents.rag_chat import build_claimant_response
+            rag_reply = await asyncio.to_thread(build_claimant_response, user_text, prior_state)
+        except Exception as exc:
+            logger.warning("Retrieval-first claimant response failed: %s", exc)
+
     # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
     result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
     extracted = result.get("extracted_data", {}) or {}
+    if rag_reply:
+        result["chat_intent"] = rag_reply.get("intent") or {}
+        result["chat_retrieval"] = rag_reply.get("retrieval") or {}
+        if rag_reply.get("answer"):
+            result["next_question"] = rag_reply["answer"]
+            result["message"] = rag_reply["answer"]
 
     # Stage 2: Policy Verification Trigger upon Baseline Confirmation
     # Persist the just-confirmed graph state before policy verification. The policy
