@@ -13,7 +13,7 @@ def test_rag_question_responder_answers_question_before_intake(monkeypatch):
                 "status": "OK",
             }
 
-    monkeypatch.setattr(graph, "KnowledgeRetriever", FakeRetriever, raising=False)
+    monkeypatch.setattr(graph, "KnowledgeRetriever", lambda: FakeRetriever())
 
     state = {
         "last_user_utterance": "What is the procedure to file a health insurance claim?",
