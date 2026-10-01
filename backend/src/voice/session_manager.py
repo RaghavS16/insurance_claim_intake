@@ -1,4 +1,4 @@
-"""Server-side sideband orchestration for managed realtime voice sessions."""
+"""Lifecycle and concurrency manager for self-hosted Pipecat voice sessions."""
 from __future__ import annotations
 
 import asyncio
@@ -94,7 +94,7 @@ class VoiceEventStore:
 
 
 class VoiceSessionManager:
-    """Owns the authenticated sideband connection and claim application processing."""
+    """Owns authenticated Pipecat sessions and WebRTC workers."""
 
     def __init__(self) -> None:
         self.events = VoiceEventStore()
@@ -137,20 +137,20 @@ class VoiceSessionManager:
             ready = asyncio.Event()
             self._ready_events[call_id] = ready
             self._tasks[call_id] = asyncio.create_task(
-                self._run_sideband(
+                self._run_pipecat(
                     call_id=call_id,
                     ticket_id=ticket_id,
                     user_id=user_id,
                     model=model,
                 ),
-                name=f"voice-sideband-{call_id}",
+                name=f"pipecat-voice-{call_id}",
             )
 
         try:
             await asyncio.wait_for(ready.wait(), timeout=8.0)
             return self._ready_results.get(call_id, False)
         except asyncio.TimeoutError:
-            logger.warning("Realtime sideband readiness timed out for %s", ticket_id)
+            logger.warning("Pipecat voice readiness timed out for %s", ticket_id)
             await self.close(call_id)
             return False
 
@@ -159,13 +159,12 @@ class VoiceSessionManager:
         connection = self._connections.get(call_id)
         if connection is not None:
             try:
-                await connection.send(json.dumps({"type": "session.close"}))
             except Exception:
                 logger.debug("Failed to request realtime session close", exc_info=True)
         if task and not task.done():
             task.cancel()
 
-    async def _run_sideband(self, *, call_id: str, ticket_id: str, user_id: str, model: str) -> None:
+    async def _run_pipecat(self, *, call_id: str, ticket_id: str, user_id: str, model: str) -> None:
         db = SessionLocal()
         session_row: Optional[VoiceSession] = None
         final_status = "closed"
@@ -180,7 +179,7 @@ class VoiceSessionManager:
                 call_id=call_id,
                 claim_id=str(claim.id),
                 user_id=str(user_id),
-                provider="openai_realtime",
+                provider="pipecat_local",
                 model=model,
                 status="connecting",
                 started_at=datetime.now(timezone.utc),
@@ -266,7 +265,7 @@ class VoiceSessionManager:
                 ready.set()
             final_status = "failed"
             final_reason = type(exc).__name__
-            logger.exception("Realtime voice sideband failed for %s", ticket_id)
+            logger.exception("Pipecat voice session failed for %s", ticket_id)
             await self.events.publish(
                 ticket_id,
                 make_event(
@@ -311,125 +310,6 @@ class VoiceSessionManager:
                     reason=final_reason,
                 ),
             )
-
-    async def _handle_event(self, *, ws: Any, db, ticket_id: str, call_id: str, event: Dict[str, Any]) -> None:
-        event_type = str(event.get("type") or "")
-
-        if event_type == "input_audio_buffer.speech_started":
-            await self.events.publish(
-                ticket_id,
-                make_event("voice.state", ticket_id, call_id=call_id, state="listening"),
-            )
-            return
-
-        if event_type == "input_audio_buffer.speech_stopped":
-            await self.events.publish(
-                ticket_id,
-                make_event("voice.state", ticket_id, call_id=call_id, state="transcribing"),
-            )
-            return
-
-        if event_type == "response.created":
-            await self.events.publish(
-                ticket_id,
-                make_event("voice.state", ticket_id, call_id=call_id, state="speaking"),
-            )
-            return
-
-        if event_type in {"response.done", "response.cancelled"}:
-            await self.events.publish(
-                ticket_id,
-                make_event("voice.state", ticket_id, call_id=call_id, state="idle"),
-            )
-            return
-
-        if event_type != "conversation.item.input_audio_transcription.completed":
-            return
-
-        item_id = str(event.get("item_id") or "")
-        transcript = " ".join(str(event.get("transcript") or "").split()).strip()
-        if not item_id or not transcript:
-            return
-
-        marker = (call_id, item_id)
-        if marker in self._processed_items:
-            return
-        self._processed_items.add(marker)
-
-        await self.events.publish(
-            ticket_id,
-            make_event(
-                "voice.user.final",
-                ticket_id,
-                call_id=call_id,
-                item_id=item_id,
-                text=transcript,
-            ),
-        )
-        await self.events.publish(
-            ticket_id,
-            make_event("voice.state", ticket_id, call_id=call_id, state="thinking"),
-        )
-
-        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-        if not claim:
-            await self._speak_exact(
-                ws,
-                "I couldn't find that claim session. Please return to the claim page and try again.",
-            )
-            return
-
-        result = await process_claimant_turn(db, claim, transcript, "voice")
-
-        await self.events.publish(
-            ticket_id,
-            make_event(
-                "voice.claim.state",
-                ticket_id,
-                call_id=call_id,
-                extracted_data=result.get("extracted_data", {}) or {},
-                missing_fields=result.get("missing_fields", []) or [],
-                field_status=result.get("field_status", {}) or {},
-                awaiting_confirmation=bool(result.get("awaiting_confirmation")),
-                confirmed=bool(result.get("confirmed")),
-                status=result.get("status"),
-                conversation_status=result.get("conversation_status"),
-                conversation_phase=result.get("conversation_phase"),
-                missing_evidence=result.get("missing_evidence", []) or [],
-                evidence=result.get("evidence", []) or [],
-                submission_readiness=result.get("submission_readiness", {}) or {},
-            ),
-        )
-
-        response_text = str(result.get("next_question") or result.get("message") or "").strip()
-        if not response_text:
-            return
-
-        await self.events.publish(
-            ticket_id,
-            make_event("voice.agent.final", ticket_id, call_id=call_id, text=response_text),
-        )
-        await self._speak_exact(ws, response_text)
-
-    @staticmethod
-    async def _speak_exact(ws: Any, text: str) -> None:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "response.create",
-                    "response": {
-                        "input": [],
-                        "output_modalities": ["audio"],
-                        "instructions": (
-                            "Speak exactly the APPLICATION RESPONSE below. "
-                            "Do not add, remove, reinterpret, or invent information. "
-                            "Use a calm, concise customer-service delivery.\n\n"
-                            f"APPLICATION RESPONSE:\n{text}"
-                        ),
-                    },
-                }
-            )
-        )
 
     @staticmethod
     def _mark_session(db, session_row: Optional[VoiceSession], status: str, reason: str) -> None:
