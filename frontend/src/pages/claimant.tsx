@@ -312,6 +312,121 @@ export default function ClaimantPage() {
     [stopVoiceRecording],
   );
 
+  const ensureClaimSession = useCallback(async (authToken: string): Promise<string> => {
+    const data = await apiFetch<SessionPayload>("/api/v1/claims/voice-session", { token: authToken });
+    const tid = String(data.ticket_id || "");
+    if (!tid) throw new Error("Unable to create a claim session.");
+    setTicketId(tid);
+    setConversationPhase(String(data.conversation_phase || "1_baseline"));
+    setExtractedData(data.extracted_data || {});
+    setConfirmed(Boolean(data.confirmed));
+    setClaimSubmitted(String(data.status || "") === "submitted");
+    setMissingEvidence(data.missing_evidence || []);
+    setPendingEvidenceReview(data.pending_evidence_review || []);
+    setEvidenceItems(data.evidence || []);
+    const conversation = Array.isArray(data.conversation) ? data.conversation : [];
+    setHistory(conversation.map((item) => ({
+      turn: item.turn, speaker: item.speaker, text: item.text,
+      timestamp: item.created_at ? Date.parse(item.created_at) : Date.now(),
+      attachment: item.attachment || undefined,
+    })));
+    if (data.initial_message && conversation.length === 0) {
+      setHistory([{ turn: 1, speaker: "agent", text: data.initial_message, timestamp: Date.now() }]);
+    }
+    fetchClaimsList(authToken);
+    return tid;
+  }, [fetchClaimsList]);
+
+  const loadClaimByTicket = useCallback(async (tid: string, authToken: string) => {
+    setLoading(true);
+    setErrorBanner("");
+    try {
+      const data = await apiFetch<SessionPayload>(`/api/v1/claims/${encodeURIComponent(tid)}`, { token: authToken });
+      setTicketId(data.ticket_id);
+      setConversationPhase(String(data.conversation_phase || "1_baseline"));
+      setExtractedData(data.extracted_data || {});
+      setConfirmed(Boolean(data.confirmed));
+      setClaimSubmitted(String(data.status || "") === "submitted");
+      setMissingEvidence(data.missing_evidence || []);
+      setPendingEvidenceReview(data.pending_evidence_review || []);
+      setEvidenceItems(data.evidence || []);
+      setSubmissionReadiness(data.submission_readiness || {});
+      setGapAnalysis(data.gap_analysis || {});
+      const conversation = Array.isArray(data.conversation) ? data.conversation : [];
+      setHistory(conversation.map((item) => ({
+        turn: item.turn, speaker: item.speaker, text: item.text,
+        timestamp: item.created_at ? Date.parse(item.created_at) : Date.now(),
+        attachment: item.attachment || undefined,
+      })));
+      await router.replace({ pathname: "/claimant", query: { ticket_id: data.ticket_id } }, undefined, { shallow: true });
+    } catch (err: unknown) {
+      setErrorBanner(err instanceof Error ? err.message : "Could not load the claim.");
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
+
+  const initBlankChat = useCallback(async () => {
+    if (!token) return;
+    stopVoiceRecording();
+    setErrorBanner("");
+    setSubmittedMessage("");
+    setClaimSubmitted(false);
+    setConfirmed(false);
+    setExtractedData({});
+    setMissingEvidence([]);
+    setPendingEvidenceReview([]);
+    setEvidenceItems([]);
+    setSubmissionReadiness({});
+    setGapAnalysis({});
+    setConversationPhase("1_baseline");
+    setHistory([]);
+    try {
+      const data = await apiFetch<SessionPayload>("/api/v1/claims/new-session", {
+        method: "POST", token, headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      setTicketId(data.ticket_id);
+      if (data.initial_message) {
+        setHistory([{ turn: 1, speaker: "agent", text: data.initial_message, timestamp: Date.now() }]);
+      }
+      fetchClaimsList(token);
+    } catch (err: unknown) {
+      setErrorBanner(err instanceof Error ? err.message : "Could not start a new claim.");
+    }
+  }, [fetchClaimsList, stopVoiceRecording, token]);
+
+  const handleDeleteClaim = useCallback(async (tid: string) => {
+    if (!token) return;
+    try {
+      await apiFetch(`/api/v1/claims/${encodeURIComponent(tid)}`, { method: "DELETE", token });
+      if (ticketId === tid) {
+        setTicketId(""); setHistory([]); setExtractedData({}); setConfirmed(false);
+        setClaimSubmitted(false); setConversationPhase("1_baseline");
+      }
+      fetchClaimsList(token);
+    } catch (err: unknown) {
+      setErrorBanner(err instanceof Error ? err.message : "Could not delete the claim.");
+    }
+  }, [fetchClaimsList, ticketId, token]);
+
+  const handleExportTranscript = useCallback(async () => {
+    if (!ticketId || !token) return;
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${base}/api/v1/claims/${encodeURIComponent(ticketId)}/export`, {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!response.ok) throw new Error("Could not export transcript.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `${ticketId}-transcript.txt`;
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setErrorBanner(err instanceof Error ? err.message : "Could not export transcript.");
+    }
+  }, [ticketId, token]);
   const startVoiceRecording = async () => {
     if (!token) return;
     setErrorBanner("");
