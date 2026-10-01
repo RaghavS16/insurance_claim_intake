@@ -67,6 +67,18 @@ def _init_db_schema():
             return
         Base.metadata.create_all(bind=engine)
 
+        # Ensure Alembic version tracking stays synchronized with create_all in development
+        try:
+            import os
+            from alembic.config import Config
+            from alembic import command
+            alembic_cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "alembic.ini")
+            if os.path.exists(alembic_cfg_path):
+                alembic_cfg = Config(alembic_cfg_path)
+                command.stamp(alembic_cfg, "head")
+        except Exception as stamp_err:
+            logger.debug("Alembic sync notice: %s", stamp_err)
+
         # Safe auto-migration: dynamically add columns to claims and policies if missing
         from sqlalchemy import inspect, text
         inspector = inspect(engine)

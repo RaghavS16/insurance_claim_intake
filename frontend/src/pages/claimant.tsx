@@ -63,7 +63,7 @@ export interface LinkedPolicyItem {
 
 export default function ClaimantPage() {
   const router = useRouter();
-  const [token] = useState<string>(() => (typeof window !== "undefined" ? getAuthToken() || "" : ""));
+  const [token, setToken] = useState<string>(() => (typeof window !== "undefined" ? getAuthToken() || "" : ""));
   const [userName, setUserName] = useState("");
   const [ticketId, setTicketId] = useState("");
   const [, setConversationStatus] = useState("not_started");
@@ -313,7 +313,10 @@ export default function ClaimantPage() {
   );
 
   const ensureClaimSession = useCallback(async (authToken: string): Promise<string> => {
-    const data = await apiFetch<SessionPayload>("/api/v1/claims/voice-session", { token: authToken });
+    const data = await apiFetch<SessionPayload>("/api/v1/claims/voice-session", {
+      method: "POST",
+      token: authToken,
+    });
     const tid = String(data.ticket_id || "");
     if (!tid) throw new Error("Unable to create a claim session.");
     setTicketId(tid);
@@ -365,6 +368,36 @@ export default function ClaimantPage() {
       setLoading(false);
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    verifySessionOrRedirect(router, {
+      requiredRole: "CLAIMANT",
+      onSuccess: (userData) => {
+        const name = (userData.full_name as string) || (userData.email as string) || "Claimant";
+        setUserName(name);
+        const currentToken = getAuthToken() || "";
+        if (currentToken) {
+          setToken(currentToken);
+          fetchClaimsList(currentToken);
+          fetchLinkedPolicies(currentToken);
+
+          const qTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
+          if (qTicket) {
+            loadClaimByTicket(qTicket, currentToken);
+          }
+        }
+      },
+    });
+  }, [router.isReady, router, fetchClaimsList, fetchLinkedPolicies, loadClaimByTicket]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const qTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
+    if (qTicket && qTicket !== ticketId && token) {
+      loadClaimByTicket(qTicket, token);
+    }
+  }, [router.isReady, router.query.ticket, router.query.ticket_id, ticketId, token, loadClaimByTicket]);
 
   const initBlankChat = useCallback(async () => {
     if (!token) return;
