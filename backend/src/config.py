@@ -88,15 +88,19 @@ class Settings(BaseSettings):
     LLM_RETRY_ATTEMPTS: int = Field(3, ge=1, le=5)
     LLM_RETRY_BASE_DELAY_SECONDS: float = Field(1.0, ge=0.1, le=10.0)
 
-    STT_MODEL_SIZE: str = "small"
-    STT_LANGUAGE: str = "en"
-    STT_DEVICE: str = "cuda"
-    STT_COMPUTE_TYPE: str = "float16"
-    VAD_AGGRESSIVENESS: int = Field(1, ge=0, le=3)
-    PIPER_MODEL_PATH: str = "piper/en_US-ryan-medium.onnx"
-    PIPER_HTTP_URL: Optional[str] = "http://localhost:5000/synthesize"
-    PIPER_VOICE: Optional[str] = "en_US-lessac-medium"
-    MAX_VOICE_SESSION_SECONDS: int = Field(1800, ge=60, le=7200)
+    # Managed realtime voice channel.
+    VOICE_ENABLED: bool = True
+    VOICE_PROVIDER: str = "openai_realtime"
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_REALTIME_MODEL: str = "gpt-realtime-2.1"
+    OPENAI_REALTIME_VOICE: str = "marin"
+    OPENAI_REALTIME_TURN_DETECTION: str = "semantic_vad"
+    OPENAI_REALTIME_VAD_EAGERNESS: str = "low"
+    OPENAI_REALTIME_MAX_OUTPUT_TOKENS: int = Field(256, ge=16, le=4096)
+    OPENAI_REALTIME_CALLS_URL: str = "https://api.openai.com/v1/realtime/calls"
+    OPENAI_REALTIME_WS_URL: str = "wss://api.openai.com/v1/realtime"
+    MAX_VOICE_SDP_BYTES: int = Field(256 * 1024, ge=16 * 1024, le=2 * 1024 * 1024)
+    MAX_VOICE_SESSION_SECONDS: int = Field(1800, ge=60, le=3600)
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -172,6 +176,8 @@ class Settings(BaseSettings):
         )
         if self.ENVIRONMENT in ("production", "staging") and hf_needed and not self.HF_TOKEN:
             raise RuntimeError("HF_TOKEN is required when a production LLM profile uses Hugging Face Inference Providers.")
+        if self.ENVIRONMENT in ("production", "staging") and self.VOICE_ENABLED and self.VOICE_PROVIDER == "openai_realtime" and not self.OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is required when production/staging voice uses OpenAI Realtime.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")

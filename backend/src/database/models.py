@@ -134,6 +134,21 @@ class Claim(Base):
         passive_deletes=True,
     )
 
+class VoiceSession(Base):
+    """Durable metadata for managed realtime voice sessions."""
+    __tablename__ = "voice_sessions"
+    id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    call_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
+    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    provider: Mapped[str] = mapped_column(String(60), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="connecting", index=True)
+    close_reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
 class PasswordResetOTP(Base):
     __tablename__ = "password_reset_otps"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))

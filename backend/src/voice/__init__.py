@@ -1,1 +1,1 @@
-# voice package — Review 1 STT/TTS/VAD modules
+"""Voice channel adapters for the insurance claim conversation."""

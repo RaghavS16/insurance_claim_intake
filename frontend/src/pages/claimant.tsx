@@ -11,6 +11,7 @@ import { ConversationTurn } from "@/components/claimant/ChatTranscript";
 import { SUPPORTED_INSURANCE_TYPES } from "@/lib/constants";
 import { getAuthToken, clearAuthToken, verifySessionOrRedirect } from "@/lib/auth";
 import { apiFetch, normalizeList } from "@/lib/api";
+import { RealtimeVoiceSession, RealtimeVoiceState } from "@/lib/realtimeVoice";
 
 interface TranscriptSegment {
   segment_id: string;
@@ -95,20 +96,11 @@ export default function ClaimantPage() {
   const [gapAnalysis, setGapAnalysis] = useState<Record<string, unknown>>({});
   const [submissionReadiness, setSubmissionReadiness] = useState<SessionPayload["submission_readiness"]>({});
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chatContainerRef = useRef<HTMLDivElement | null>(null);
-  const playbackContextRef = useRef<AudioContext | null>(null);
-  const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const audioBlobQueueRef = useRef<Blob[]>([]);
-  const isPlayingRef = useRef(false);
+  const voiceSessionRef = useRef<RealtimeVoiceSession | null>(null);
   const isRecordingRef = useRef(false);
   const hasInitializedRef = useRef(false);
   const autoScrollEnabledRef = useRef(true);
-  const latestVoiceGenerationRef = useRef(0);
-  const bargeInSentRef = useRef(false);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const textTurnInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -148,52 +140,6 @@ export default function ClaimantPage() {
     scrollToBottom(false);
   }, [history.length, partialSegments.size, scrollToBottom]);
 
-  const getPlaybackContext = useCallback(() => {
-    if (!playbackContextRef.current || playbackContextRef.current.state === "closed") {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      playbackContextRef.current = new AudioCtx();
-    }
-    if (playbackContextRef.current.state === "suspended") {
-      playbackContextRef.current.resume().catch(() => {});
-    }
-    return playbackContextRef.current;
-  }, []);
-
-  const enqueueAudio = useCallback((blob: Blob) => {
-    audioBlobQueueRef.current.push(blob);
-    const playNext = async () => {
-      if (isPlayingRef.current || !audioBlobQueueRef.current.length) return;
-      const next = audioBlobQueueRef.current.shift();
-      if (!next) return;
-      isPlayingRef.current = true;
-      try {
-        const ctx = getPlaybackContext();
-        const buffer = await ctx.decodeAudioData(await next.arrayBuffer());
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        activeSourceRef.current = source;
-        setAgentState("speaking");
-        source.onended = () => {
-          isPlayingRef.current = false;
-          if (activeSourceRef.current === source) activeSourceRef.current = null;
-          if (!audioBlobQueueRef.current.length) {
-            setAgentState(isRecordingRef.current ? "listening" : "idle");
-          }
-          playNext();
-        };
-        source.start(0);
-      } catch {
-        isPlayingRef.current = false;
-        activeSourceRef.current = null;
-        playNext();
-      }
-    };
-    playNext();
-  }, [getPlaybackContext]);
-
   const fetchClaimsList = useCallback(async (authToken: string) => {
     if (!authToken) return;
     setLoadingClaims(true);
@@ -216,387 +162,176 @@ export default function ClaimantPage() {
     } catch {}
   }, []);
 
-  const handleWsMessage = useCallback((event: MessageEvent) => {
-    if (typeof event.data !== "string") {
-      if (event.data instanceof Blob) enqueueAudio(event.data);
-      else if (event.data instanceof ArrayBuffer) enqueueAudio(new Blob([event.data], { type: "audio/wav" }));
-      return;
-    }
-    let msg: {
-      type: string;
-      state?: string;
-      speaker?: string;
-      segment_id?: string;
-      text?: string;
-      is_final?: boolean;
-      sequence?: number;
-      global_seq?: number;
-      timestamp?: number;
-      generation?: number;
-      extracted_data?: ExtractedData;
-      confirmed?: boolean;
-      status?: string;
-      missing_evidence?: Array<Record<string, unknown>>;
-      evidence?: Array<Record<string, unknown>>;
-    };
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (msg.type === "barge_in") {
-      const generation = Number(msg.generation || 0);
-      if (generation >= latestVoiceGenerationRef.current) {
-        latestVoiceGenerationRef.current = generation;
-        try {
-          activeSourceRef.current?.stop();
-        } catch {}
-        activeSourceRef.current = null;
-        audioBlobQueueRef.current = [];
-        isPlayingRef.current = false;
-        setAgentState(isRecordingRef.current ? "listening" : "idle");
-        setPartialSegments(new Map());
-      }
-      return;
-    }
-    if (msg.type === "agent_state") {
-      if (typeof msg.generation === "number" && msg.generation < latestVoiceGenerationRef.current) return;
-      setAgentState(msg.state || "idle");
-      return;
-    }
-    if (msg.type === "transcript") {
-      const speaker = msg.speaker || "agent",
-        segmentId = msg.segment_id || "",
-        text = msg.text || "",
-        isFinal = Boolean(msg.is_final),
-        generation = Number(msg.generation || 0);
-      if (!text) return;
-      if (generation < latestVoiceGenerationRef.current) return;
-
-      if (speaker !== "agent" && !isFinal) {
-        if (!bargeInSentRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-          bargeInSentRef.current = true;
-          try {
-            wsRef.current.send(JSON.stringify({ type: "barge_in", source: "claimant_speech" }));
-          } catch {}
-        }
-        if (isPlayingRef.current || audioBlobQueueRef.current.length) {
-          try { activeSourceRef.current?.stop(); } catch {}
-          activeSourceRef.current = null;
-          audioBlobQueueRef.current = [];
-          isPlayingRef.current = false;
-        }
-        setAgentState("listening");
-      }
-      if (!isFinal) {
-        setPartialSegments((prev) => {
-          const next = new Map(prev);
-          next.set(segmentId, {
-            segment_id: segmentId,
-            sequence: msg.sequence || 0,
-            speaker: speaker === "agent" ? "agent" : "user",
-            text,
-            is_final: false,
-            global_seq: msg.global_seq,
-            timestamp: msg.timestamp,
-          });
-          return next;
-        });
-      } else {
-        setPartialSegments((prev) => {
-          const next = new Map(prev);
-          next.delete(segmentId);
-          return next;
-        });
-        setHistory((prev) => [
-          ...prev,
-          {
-            turn: prev.length + 1,
-            speaker: speaker === "agent" ? "agent" : "user",
-            text,
-            segment_id: segmentId,
-            global_seq: msg.global_seq,
-            timestamp: msg.timestamp || Date.now(),
-          },
-        ]);
-        if (speaker !== "agent") {
-          bargeInSentRef.current = false;
-        }
-      }
-      return;
-    }
-    if (msg.type === "state_update") {
-      setExtractedData(msg.extracted_data || {});
-      setConfirmed(Boolean(msg.confirmed));
-      if (msg.status) setClaimSubmitted(msg.status === "submitted");
-      if (msg.missing_evidence) setMissingEvidence(msg.missing_evidence);
-      if (msg.evidence) setEvidenceItems(msg.evidence);
-      return;
-    }
-  }, [enqueueAudio]);
-
   const stopVoiceRecording = useCallback(() => {
-    try {
-      workletNodeRef.current?.port.postMessage({ command: "stop" });
-      workletNodeRef.current?.disconnect();
-    } catch {}
-    workletNodeRef.current = null;
-    try {
-      audioContextRef.current?.close();
-    } catch {}
-    audioContextRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+    voiceSessionRef.current?.close();
+    voiceSessionRef.current = null;
+    isRecordingRef.current = false;
     setIsRecording(false);
     setAgentState("idle");
+    setPartialSegments(new Map());
   }, []);
 
   const stopAssistantAudio = useCallback(() => {
-    try {
-      activeSourceRef.current?.stop();
-    } catch {}
-    activeSourceRef.current = null;
-    audioBlobQueueRef.current = [];
-    isPlayingRef.current = false;
+    voiceSessionRef.current?.stopAssistant();
     setAgentState(isRecordingRef.current ? "listening" : "idle");
   }, []);
 
-  const connectWebSocket = useCallback((currentTicketId: string, currentToken: string) => {
-    latestVoiceGenerationRef.current = 0;
-    bargeInSentRef.current = false;
-    try {
-      wsRef.current?.close();
-    } catch {}
-    const wsBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/^http/, "ws");
-    const ws = new WebSocket(
-      `${wsBase}/api/v1/ws/voice/${currentTicketId}?token=${encodeURIComponent(currentToken)}`
-    );
-    ws.binaryType = "blob";
-    ws.onmessage = handleWsMessage;
-    ws.onclose = () => {
-      if (isRecordingRef.current) stopVoiceRecording();
-    };
-    wsRef.current = ws;
-  }, [handleWsMessage, stopVoiceRecording]);
+  const connectVoiceSession = useCallback(
+    async (activeTicketId: string, authToken: string) => {
+      const session = new RealtimeVoiceSession();
+      voiceSessionRef.current = session;
 
-  const initBlankChat = useCallback(() => {
-    if (isRecordingRef.current) stopVoiceRecording();
-    stopAssistantAudio();
-    try {
-      wsRef.current?.close();
-    } catch {}
-    wsRef.current = null;
-    setTicketId("");
-    localStorage.removeItem("active_claim_ticket_id");
-    setConversationStatus("not_started");
-    setExtractedData({});
-    setHistory([]);
-    setConfirmed(false);
-    setClaimSubmitted(false);
-    setSubmissionReadiness({});
-    setMissingEvidence([]);
-    setPendingEvidenceReview([]);
-    setEvidenceItems([]);
-    setSubmittedMessage("");
-    setPartialSegments(new Map());
-    setErrorBanner("");
-    if (router.query.ticket || router.query.ticket_id) {
-      router.replace({ pathname: "/claimant" }, undefined, { shallow: true });
-    }
-  }, [router, stopAssistantAudio, stopVoiceRecording]);
-
-  const applySession = useCallback((data: SessionPayload, authToken: string, fallbackMessage?: string) => {
-    setTicketId(data.ticket_id);
-    localStorage.setItem("active_claim_ticket_id", data.ticket_id);
-    setConversationStatus(data.conversation_status || data.status || "collecting");
-    setExtractedData(data.extracted_data || {});
-    setConfirmed(Boolean(data.confirmed));
-    setClaimSubmitted(Boolean(data.status === "submitted"));
-    setMissingEvidence(data.missing_evidence || []);
-    setPendingEvidenceReview(data.pending_evidence_review || []);
-    setEvidenceItems(data.evidence || []);
-    setConversationPhase(data.conversation_phase || "1_baseline");
-    setGapAnalysis(data.gap_analysis || {});
-    setSubmissionReadiness(data.submission_readiness || {});
-    setPartialSegments(new Map());
-    const saved = (data.conversation || []).map((t) => ({
-      turn: t.turn,
-      speaker: t.speaker,
-      text: t.text,
-      attachment: t.attachment || undefined,
-      timestamp: t.created_at ? Date.parse(t.created_at) : Date.now(),
-    }));
-    if (saved.length) {
-      setHistory(saved);
-    } else if (fallbackMessage || data.initial_message) {
-      setHistory([
-        {
-          turn: 1,
-          speaker: "agent",
-          text: data.initial_message || fallbackMessage || "Tell me what happened, in your own words. I'll collect the details as we go.",
-          timestamp: Date.now(),
+      await session.connect(activeTicketId, authToken, {
+        onState: (state: RealtimeVoiceState) => {
+          if (state !== "error") setAgentState(state);
         },
-      ]);
-    } else {
-      setHistory([]);
-    }
-    connectWebSocket(data.ticket_id, authToken);
-    fetchClaimsList(authToken);
-  }, [connectWebSocket, fetchClaimsList]);
-
-  const postSubmissionStatuses = React.useMemo(() => new Set(["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]), []);
-
-  const loadClaimByTicket = useCallback(async (selectedTicketId: string, authToken: string) => {
-    if (!authToken || !selectedTicketId) return;
-    if (isRecordingRef.current) stopVoiceRecording();
-    setLoading(true);
-    setErrorBanner("");
-    try {
-      const data = await apiFetch<SessionPayload>(
-        `/api/v1/claims/${selectedTicketId}`,
-        { token: authToken },
-      );
-      applySession(data, authToken);
-      router.replace({ pathname: "/claimant", query: { ticket: selectedTicketId } }, undefined, { shallow: true });
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Failed to load claim.");
-    } finally {
-      setLoading(false);
-    }
-  }, [applySession, router, stopVoiceRecording]);
-
-  const ensureClaimSession = useCallback(async (authToken: string, policyNum?: string): Promise<string> => {
-    if (ticketId) return ticketId;
-    const payload = policyNum ? { policy_number: policyNum.trim().toUpperCase() } : {};
-    const data = await apiFetch<{ ticket_id: string }>(
-      "/api/v1/claims/new-session",
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-    );
-    setTicketId(data.ticket_id);
-    localStorage.setItem("active_claim_ticket_id", data.ticket_id);
-    connectWebSocket(data.ticket_id, authToken);
-    router.replace({ pathname: "/claimant", query: { ticket: data.ticket_id } }, undefined, { shallow: true });
-    return data.ticket_id;
-  }, [connectWebSocket, router, ticketId]);
-
-  const handleDeleteClaim = useCallback(async (targetTicketId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!token || !targetTicketId) return;
-    if (!window.confirm(`Delete conversation for claim #${targetTicketId}?`)) return;
-    try {
-      await apiFetch(
-        `/api/v1/claims/${targetTicketId}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
-      );
-      fetchClaimsList(token);
-      if (targetTicketId === ticketId) initBlankChat();
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Could not delete claim.");
-    }
-  }, [fetchClaimsList, initBlankChat, ticketId, token]);
-
-  const handleExportTranscript = useCallback(async () => {
-    if (!ticketId || !token) return;
-    try {
-      const data = await apiFetch<{ formatted_text?: string }>(
-        `/api/v1/claims/${ticketId}/export`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      const textContent = data.formatted_text || JSON.stringify(data, null, 2);
-      const blob = new Blob([textContent], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `Claim_${ticketId}_Dossier.txt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (err: unknown) {
-      setErrorBanner(err instanceof Error ? err.message : "Failed to download export.");
-    }
-  }, [ticketId, token]);
-
-  useEffect(() => {
-    if (!router.isReady || hasInitializedRef.current) return;
-    hasInitializedRef.current = true;
-    verifySessionOrRedirect(router, {
-      requiredRole: "CLAIMANT",
-      onSuccess: (data) => {
-        const savedToken = getAuthToken()!;
-        setUserName((data.full_name as string) || "Claimant");
-        const initialTicket = (router.query.ticket || router.query.ticket_id) as string | undefined;
-        fetchClaimsList(savedToken);
-        fetchLinkedPolicies(savedToken);
-        if (initialTicket) {
-          void loadClaimByTicket(initialTicket, savedToken);
-        } else {
-          const storedTicket = typeof window !== "undefined" ? localStorage.getItem("active_claim_ticket_id") : null;
-          if (storedTicket) {
-            void loadClaimByTicket(storedTicket, savedToken);
-          } else {
-            initBlankChat();
+        onConnected: () => {
+          isRecordingRef.current = true;
+          setIsRecording(true);
+        },
+        onDisconnected: () => {
+          isRecordingRef.current = false;
+          setIsRecording(false);
+          setAgentState("idle");
+        },
+        onUserPartial: (text) => {
+          if (!text) {
+            setPartialSegments((prev) => {
+              const next = new Map(prev);
+              next.delete("realtime-user");
+              return next;
+            });
+            return;
           }
-        }
-      },
-    });
-  }, [router.isReady, router.query.ticket, router.query.ticket_id, loadClaimByTicket, initBlankChat, router, fetchClaimsList, fetchLinkedPolicies]);
+          setPartialSegments(
+            new Map([
+              [
+                "realtime-user",
+                {
+                  segment_id: "realtime-user",
+                  sequence: 0,
+                  speaker: "user",
+                  text,
+                  is_final: false,
+                  timestamp: Date.now(),
+                },
+              ],
+            ]),
+          );
+        },
+        onUserFinal: (text, itemId) => {
+          setPartialSegments((prev) => {
+            const next = new Map(prev);
+            next.delete("realtime-user");
+            return next;
+          });
+          setHistory((prev) => [
+            ...prev,
+            {
+              turn: prev.length + 1,
+              speaker: "user",
+              text,
+              segment_id: itemId || "voice-user-" + Date.now(),
+              timestamp: Date.now(),
+            },
+          ]);
+        },
+        onAgentPartial: (text) => {
+          setPartialSegments(
+            new Map([
+              [
+                "realtime-agent",
+                {
+                  segment_id: "realtime-agent",
+                  sequence: 0,
+                  speaker: "agent",
+                  text,
+                  is_final: false,
+                  timestamp: Date.now(),
+                },
+              ],
+            ]),
+          );
+        },
+        onAgentFinal: (text) => {
+          setPartialSegments((prev) => {
+            const next = new Map(prev);
+            next.delete("realtime-agent");
+            return next;
+          });
+          const normalized = text.trim();
+          if (!normalized) return;
+          setHistory((prev) => {
+            const alreadyPresent = prev.some(
+              (item) => item.speaker === "agent" && item.text === normalized,
+            );
+            return alreadyPresent
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    turn: prev.length + 1,
+                    speaker: "agent",
+                    text: normalized,
+                    segment_id: "voice-agent-" + Date.now(),
+                    timestamp: Date.now(),
+                  },
+                ];
+          });
+        },
+        onClaimState: (payload) => {
+          setExtractedData((payload.extracted_data as ExtractedData) || {});
+          setConfirmed(Boolean(payload.confirmed));
+          setClaimSubmitted(String(payload.status || "") === "submitted");
+          setMissingEvidence(
+            (payload.missing_evidence as Array<Record<string, unknown>>) || [],
+          );
+          setEvidenceItems(
+            (payload.evidence as Array<Record<string, unknown>>) || [],
+          );
+          if (payload.conversation_phase) {
+            setConversationPhase(String(payload.conversation_phase));
+          }
+          if (payload.submission_readiness) {
+            setSubmissionReadiness(
+              payload.submission_readiness as SessionPayload["submission_readiness"],
+            );
+          }
+        },
+        onError: (message) => {
+          setErrorBanner(message);
+          stopVoiceRecording();
+        },
+      });
 
-  useEffect(() => () => {
-    try {
-      wsRef.current?.close();
-    } catch {}
-    stopVoiceRecording();
-    stopAssistantAudio();
-  }, [stopVoiceRecording, stopAssistantAudio]);
+      isRecordingRef.current = true;
+      setIsRecording(true);
+      setAgentState("listening");
+    },
+    [stopVoiceRecording],
+  );
 
   const startVoiceRecording = async () => {
     if (!token) return;
+    setErrorBanner("");
+    setIsRecording(true);
+    isRecordingRef.current = true;
+    setAgentState("connecting");
     try {
-      let activeTid = ticketId;
-      if (!activeTid) activeTid = await ensureClaimSession(token);
-      // Starting the microphone is itself an explicit barge-in action.
-    stopAssistantAudio();
-    bargeInSentRef.current = false;
-    const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      streamRef.current = stream;
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const audioCtx = new AudioCtx({ sampleRate: 16000 });
-      audioContextRef.current = audioCtx;
-      await audioCtx.audioWorklet.addModule("/audio-processor.js");
-      const source = audioCtx.createMediaStreamSource(stream);
-      let worklet: AudioWorkletNode;
-      try {
-        worklet = new AudioWorkletNode(audioCtx, "audio-processor");
-      } catch {
-        worklet = new AudioWorkletNode(audioCtx, "pcm16-processor");
-      }
-      workletNodeRef.current = worklet;
-      worklet.port.onmessage = (event) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(event.data instanceof ArrayBuffer ? event.data : event.data?.buffer);
-        }
-      };
-      source.connect(worklet);
-      worklet.connect(audioCtx.destination);
-      setIsRecording(true);
-      setAgentState("listening");
+      const activeTid = ticketId || (await ensureClaimSession(token));
+      stopAssistantAudio();
+      await connectVoiceSession(activeTid, token);
     } catch (err: unknown) {
-      setErrorBanner(`Microphone access error: ${err instanceof Error ? err.message : "Unknown error"}`);
+      voiceSessionRef.current?.close();
+      voiceSessionRef.current = null;
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      setAgentState("idle");
+      setErrorBanner(
+        err instanceof Error
+          ? err.message + " You can continue by typing."
+          : "Voice service is unavailable. You can continue by typing.",
+      );
     }
   };
 
@@ -611,11 +346,7 @@ export default function ClaimantPage() {
     textTurnInFlightRef.current = true;
     if (isRecordingRef.current) stopVoiceRecording();
     stopAssistantAudio();
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({ type: "barge_in", source: "text_input" }));
-      } catch {}
-    }
+    voiceSessionRef.current?.stopAssistant();
     setTextInput("");
     setHistory((prev) => [...prev, { turn: prev.length + 1, speaker: "user", text, timestamp: Date.now() }]);
     setAgentState("thinking");

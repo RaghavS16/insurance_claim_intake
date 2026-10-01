@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal, dispose_engine
 from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP, RevokedToken
-from src.api.voice_ws import router as voice_router
+from src.api.realtime_voice import router as voice_router
 from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
 from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id

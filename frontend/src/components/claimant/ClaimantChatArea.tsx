@@ -49,7 +49,6 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
   pendingEvidenceName,
 }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Monitor scroll position to notify parent
@@ -70,22 +69,6 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
-  };
-
-  const handleSpeakText = (text: string, idx: number) => {
-    if (!("speechSynthesis" in window)) return;
-    if (speakingIndex === idx) {
-      window.speechSynthesis.cancel();
-      setSpeakingIndex(null);
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.onend = () => setSpeakingIndex(null);
-    utterance.onerror = () => setSpeakingIndex(null);
-    setSpeakingIndex(idx);
-    window.speechSynthesis.speak(utterance);
   };
 
   const isConversationEmpty = history.length === 0 && partialSegments.size === 0;
@@ -167,16 +150,6 @@ export const ClaimantChatArea: React.FC<ClaimantChatAreaProps> = ({
                     >
                       <span className="material-symbols-outlined text-[14px]">
                         {copiedIndex === idx ? "check" : "content_copy"}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => handleSpeakText(turn.text, idx)}
-                      title={speakingIndex === idx ? "Stop reading" : "Read aloud"}
-                      className={`p-1 rounded hover:bg-slate-50 transition-colors ${speakingIndex === idx ? "text-[#00647c] animate-pulse" : "text-slate-400 hover:text-[#00647c]"
-                        }`}
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {speakingIndex === idx ? "volume_off" : "volume_up"}
                       </span>
                     </button>
                   </div>
