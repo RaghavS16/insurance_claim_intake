@@ -1,3 +1,0 @@
--- Insurance Claim Intake System
--- Seed file cleared: Initial seed values removed as schema-only is configured.
--- Tables and schemas are managed via schema.sql and SQLAlchemy models.
