@@ -438,7 +438,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question_field"] = "submission"
         state["conversation_status"] = "ready_for_submission" if plan_ready else "waiting_for_knowledge"
         if not plan_ready:
-            state["next_question"] = "I have the claim details so far. I need the applicable policy requirements to finish checking what is needed before we can submit the claim."
+            state["next_question"] = "I have the claim details so far. I need the applicable policy requirements to finish checking what is needed before filing can be completed."
 
     if (
         not missing
