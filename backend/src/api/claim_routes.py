@@ -829,28 +829,31 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
         if value is not None:
             extracted[field] = value
 
-    # Any claimant-side edit invalidates confirmation, policy verification and the
-    # claim-specific requirement plan. The next conversation turn will re-verify and
-    # rebuild RAG requirements from the corrected facts.
+    # A correction invalidates dependent verification and requirement planning, but
+    # never creates a mandatory confirmation checkpoint. The next turn continues naturally.
     state["extracted_data"] = extracted
     state["confirmed"] = False
-    state["awaiting_confirmation"] = True
+    state["awaiting_confirmation"] = False
     state["awaiting_submission_confirmation"] = False
     state["final_submission_confirmed"] = False
+    state["submit_requested"] = False
     state["policy_valid"] = False
     state["policy_verification"] = {}
-    state["rag_status"] = "WAITING_FOR_BASELINE_CONFIRMATION"
+    state["submission_readiness"] = {}
+    state["rag_status"] = "CONTEXT_CHANGED"
     state["rag_context_key"] = None
     state["dynamic_requirements"] = []
     state["dynamic_missing"] = []
     state["missing_evidence"] = []
-    state["conversation_phase"] = "2_verification"
-    state["conversation_status"] = "reviewing"
-    state["next_question_field"] = "confirmation"
-    state["next_question"] = "I updated that detail. Please review the claim summary and confirm that the corrected information is accurate."
+    state["conversation_phase"] = "1_baseline"
+    state["conversation_status"] = "collecting"
+    state["next_question_field"] = None
+    state["next_question"] = "I updated that detail. I’ll re-check the claim requirements and coverage from the corrected information.";
     state["message"] = state["next_question"]
 
     claim.pipeline_state = state
+    if claim.status == "verified":
+        claim.status = "draft"
     claim.insurance_type = extracted.get("insurance_type")
     claim.event_description = extracted.get("event_description")
     claim.event_location = extracted.get("event_location")
