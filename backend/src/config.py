@@ -88,17 +88,20 @@ class Settings(BaseSettings):
     LLM_RETRY_ATTEMPTS: int = Field(3, ge=1, le=5)
     LLM_RETRY_BASE_DELAY_SECONDS: float = Field(1.0, ge=0.1, le=10.0)
 
-    # Managed realtime voice channel.
+    # Self-hosted Pipecat voice channel.
+    # No paid realtime/voice provider is required by this voice path.
     VOICE_ENABLED: bool = True
-    VOICE_PROVIDER: str = "openai_realtime"
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_REALTIME_MODEL: str = "gpt-realtime-2.1"
-    OPENAI_REALTIME_VOICE: str = "marin"
-    OPENAI_REALTIME_TURN_DETECTION: str = "semantic_vad"
-    OPENAI_REALTIME_VAD_EAGERNESS: str = "low"
-    OPENAI_REALTIME_MAX_OUTPUT_TOKENS: int = Field(256, ge=16, le=4096)
-    OPENAI_REALTIME_CALLS_URL: str = "https://api.openai.com/v1/realtime/calls"
-    OPENAI_REALTIME_WS_URL: str = "wss://api.openai.com/v1/realtime"
+    VOICE_PROVIDER: str = "pipecat_local"
+    VOICE_STT_MODEL: str = "Systran/faster-distil-whisper-medium.en"
+    VOICE_STT_DEVICE: str = "auto"
+    VOICE_STT_COMPUTE_TYPE: str = "int8"
+    VOICE_STT_LANGUAGE: str = "en"
+    VOICE_STT_NO_SPEECH_PROB: float = Field(0.4, ge=0.0, le=1.0)
+    VOICE_TTS_BASE_URL: str = "http://localhost:5001"
+    VOICE_TTS_VOICE_ID: str = "en_US-ryan-high"
+    VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS: int = Field(60, ge=10, le=300)
+    VOICE_PIPELINE_IDLE_TIMEOUT_SECONDS: int = Field(300, ge=30, le=3600)
+    VOICE_EVENT_STREAM_MAXLEN: int = Field(1000, ge=100, le=10000)
     MAX_VOICE_SDP_BYTES: int = Field(256 * 1024, ge=16 * 1024, le=2 * 1024 * 1024)
     MAX_VOICE_SESSION_SECONDS: int = Field(1800, ge=60, le=3600)
 
@@ -176,8 +179,9 @@ class Settings(BaseSettings):
         )
         if self.ENVIRONMENT in ("production", "staging") and hf_needed and not self.HF_TOKEN:
             raise RuntimeError("HF_TOKEN is required when a production LLM profile uses Hugging Face Inference Providers.")
-        if self.ENVIRONMENT in ("production", "staging") and self.VOICE_ENABLED and self.VOICE_PROVIDER == "openai_realtime" and not self.OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is required when production/staging voice uses OpenAI Realtime.")
+        if self.ENVIRONMENT in ("production", "staging") and self.VOICE_ENABLED and self.VOICE_PROVIDER == "pipecat_local":
+            if not self.VOICE_TTS_BASE_URL:
+                raise RuntimeError("VOICE_TTS_BASE_URL is required when production/staging voice uses Pipecat.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")
