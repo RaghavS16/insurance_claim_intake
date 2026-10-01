@@ -290,4 +290,6 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
           </p>
         </div>
       </div>
-
+    </div>
+  );
+};
