@@ -136,6 +136,7 @@ def ingest_document(
     policy_number: str | None = None,
     effective_from: str | None = None,
     effective_to: str | None = None,
+    policy_version: str | None = None,
     uploaded_by: str | None = None,
 ) -> dict:
     t0 = time.time()
@@ -169,6 +170,7 @@ def ingest_document(
                     "policy_number": policy_number or (existing.metadata_json or {}).get("policy_number"),
                     "effective_from": effective_from or (existing.metadata_json or {}).get("effective_from"),
                     "effective_to": effective_to or (existing.metadata_json or {}).get("effective_to"),
+                    "policy_version": policy_version or (existing.metadata_json or {}).get("policy_version"),
                     "uploaded_by": uploaded_by or (existing.metadata_json or {}).get("uploaded_by"),
                 }
                 db.commit()
@@ -236,6 +238,7 @@ def ingest_document(
                 "policy_number": policy_number,
                 "effective_from": effective_from,
                 "effective_to": effective_to,
+                "policy_version": policy_version,
                 "uploaded_by": uploaded_by,
             },
         )
@@ -299,6 +302,31 @@ def list_policy_documents(
         rows = db.execute(
             select(KnowledgeDocument).where(*conditions).order_by(KnowledgeDocument.created_at.desc())
         ).scalars().all()
+        # Resolve exactly one applicable wording version. Never merge requirements
+        # from multiple historical policy versions for the same claim.
+        if rows:
+            exact = [r for r in rows if policy_number and (r.metadata_json or {}).get("policy_number") == policy_number]
+            candidates = exact or rows
+            if incident_date:
+                event = incident_date.isoformat()
+                in_period = []
+                for row in candidates:
+                    meta = row.metadata_json or {}
+                    start = meta.get("effective_from")
+                    end = meta.get("effective_to")
+                    if (not start or start <= event) and (not end or end >= event):
+                        in_period.append(row)
+                candidates = in_period or candidates
+            candidates = sorted(
+                candidates,
+                key=lambda row: (
+                    1 if policy_number and (row.metadata_json or {}).get("policy_number") == policy_number else 0,
+                    str((row.metadata_json or {}).get("effective_from") or ""),
+                    str(row.created_at or ""),
+                ),
+                reverse=True,
+            )
+            rows = candidates[:1]
         return [
             {
                 "document_id": str(row.id),
@@ -306,6 +334,7 @@ def list_policy_documents(
                 "source_uri": row.source_uri,
                 "insurance_type": row.insurance_type,
                 "metadata": dict(row.metadata_json or {}),
+                "policy_version": (row.metadata_json or {}).get("policy_version"),
             }
             for row in rows
         ]
@@ -410,6 +439,9 @@ def search(
                 "source_uri": d.source_uri,
                 "document_type": d.document_type,
                 "insurance_type": d.insurance_type,
+                "policy_version": (d.metadata_json or {}).get("policy_version"),
+                "effective_from": (d.metadata_json or {}).get("effective_from"),
+                "effective_to": (d.metadata_json or {}).get("effective_to"),
                 "score": round(1 - float(dist), 6),
             }
             for c, d, dist in rows
