@@ -164,7 +164,7 @@ def ingest_document(
         existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
-            if any(value not in (None, "") for value in (policy_number, effective_from, effective_to)):
+            if any(value not in (None, "") for value in (policy_number, effective_from, effective_to, policy_version)):
                 existing.metadata_json = {
                     **(existing.metadata_json or {}),
                     "policy_number": policy_number or (existing.metadata_json or {}).get("policy_number"),
