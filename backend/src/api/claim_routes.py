@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from src.config import settings
 from src.database.session import get_db
@@ -21,7 +22,7 @@ from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
 from src.evidence.verifier import verify_evidence
 from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness
@@ -416,13 +417,31 @@ def verify_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
 
 @router.post("/{ticket_id}/confirm")
 async def confirm_claim(ticket_id: str, request: Request, payload: Optional[ClaimConfirmRequest] = None, db: Session = Depends(get_db)):
+    """Compatibility submission endpoint.
+
+    The endpoint name is retained for existing clients, but confirmation flags are
+    no longer authoritative. Submission always rechecks policy/readiness and is
+    protected by a durable unique submission record plus a row lock.
+    """
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
-    # Conversational confirmation expresses claimant intent, but backend readiness
-    # is authoritative for submission. Recompute verification and durable readiness.
+
+    if claim.status in {"submitted", "assigned", "under_review", "pending_evidence", "approved", "partially_approved", "rejected", "closed"}:
+        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id).first()
+        return {
+            **_claim_payload(claim),
+            "submission": {
+                "id": str(existing.id) if existing else None,
+                "status": existing.status if existing else "accepted",
+            },
+            "message": f"Claim #{ticket_id} has already been submitted. You can track its progress from Track Claim.",
+        }
+
+    state = dict(claim.pipeline_state or {})
+    extracted = dict(state.get("extracted_data") or {})
     verification = verify_policy_for_claim(
         policy_id=extracted.get("policy_id"),
         event_date_str=extracted.get("event_date"),
@@ -431,20 +450,12 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         db=db,
         claim_id=claim.id,
     )
-    if not verification.get("valid"):
-        state["policy_verification"] = verification
-        claim.pipeline_state = state
-        db.commit()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}",
-        )
-
-    readiness = build_submission_readiness(db, claim, verification)
     state["policy_verification"] = verification
+    readiness = build_submission_readiness(db, claim, verification)
     state["submission_readiness"] = readiness
+    claim.pipeline_state = state
+
     if not readiness.get("ready"):
-        claim.pipeline_state = state
         db.commit()
         blockers = [
             item.get("label") or item.get("key")
@@ -453,39 +464,63 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         if readiness.get("exceptions"):
             raise HTTPException(
                 status_code=409,
-                detail="Claim has blocking exceptions and requires review before submission.",
+                detail={"message": "Claim has blocking exceptions and requires review before submission.", "exceptions": readiness["exceptions"]},
             )
         if blockers:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "message": "Claim is not ready for submission.",
-                    "blocking_requirements": blockers,
-                },
+                detail={"message": "Claim is not ready for submission.", "blocking_requirements": blockers},
             )
         raise HTTPException(status_code=400, detail="Claim is not ready for submission.")
 
-    # Assignment is transactional and recorded as a durable work item.
-    state["policy_verification"] = verification
     try:
-        if claim.status != "verified":
-            transition_claim(db, claim, "verified", str(current_user.id), "claimant confirmation and policy verification")
-        assigned = assign_claim(db, claim, str(current_user.id))
-        transition_claim(db, claim, "submitted", str(current_user.id), "claimant submission")
-    except ValueError as exc:
+        locked = db.execute(
+            select(Claim).where(Claim.id == claim.id).with_for_update()
+        ).scalar_one()
+        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == locked.id).first()
+        if existing:
+            db.commit()
+            return {
+                **_claim_payload(locked),
+                "submission": {"id": str(existing.id), "status": existing.status},
+                "message": f"Claim #{ticket_id} has already been submitted.",
+            }
+
+        if locked.status != "verified":
+            transition_claim(db, locked, "verified", str(current_user.id), "deterministic policy verification")
+        assigned = assign_claim(db, locked, str(current_user.id))
+        transition_claim(db, locked, "submitted", str(current_user.id), "explicit claimant submission")
+        submission = ClaimSubmission(
+            claim_id=locked.id,
+            idempotency_key=f"claim:{locked.id}:submission:v1",
+            submitted_by=str(current_user.id),
+            result_json={"ticket_id": locked.ticket_id, "adjuster_id": str(assigned.id)},
+        )
+        db.add(submission)
+        locked.conversation_status = "submitted"
+        locked.pipeline_state = {
+            **dict(locked.pipeline_state or {}),
+            "submission_readiness": readiness,
+            "assigned_adjuster_id": str(assigned.id),
+            "assigned_adjuster_name": assigned.name,
+        }
+        db.commit()
+        db.refresh(locked)
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc))
-    state["assigned_adjuster_id"] = str(assigned.id)
-    state["assigned_adjuster_name"] = assigned.name
-    claim.conversation_status = "submitted"
-    claim.pipeline_state = state
-    db.commit()
-    return {**_claim_payload(claim), "policy_verification": verification,
-            "assigned_adjuster": {"id": str(assigned.id), "name": assigned.name, "specialization": assigned.specialization},
-            "message": f"Claim #{ticket_id} has been submitted successfully and assigned to {assigned.name}. You can track its status from Track Claim."}
+        logger.exception("Durable claim submission failed")
+        raise HTTPException(status_code=409, detail="The claim could not be submitted safely. No partial submission was accepted.")
 
-
-
+    return {
+        **_claim_payload(locked),
+        "submission": {"id": str(submission.id), "status": submission.status},
+        "assigned_adjuster": {
+            "id": str(assigned.id),
+            "name": assigned.name,
+            "specialization": assigned.specialization,
+        },
+        "message": f"Claim #{ticket_id} has been submitted successfully and assigned to {assigned.name}. You can track its status from Track Claim.",
+    }
 
 
 @router.post("/{ticket_id}/requests/{request_id}/respond")
