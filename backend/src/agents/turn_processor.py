@@ -169,6 +169,10 @@ async def process_claimant_turn(
         confidence=result.get("extraction_confidence"),
     )
 
+    # Keep the conversational JSON as a cache only; the normalized requirement sync below
+    # receives the same RAG authority marker used by the readiness engine.
+    claim.pipeline_state = dict(result)
+    flag_modified(claim, "pipeline_state")
     # Durable requirements are synchronized before readiness is evaluated.
     sync_claim_requirements(db, claim, result.get("dynamic_requirements") or [])
 
