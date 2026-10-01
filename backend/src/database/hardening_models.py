@@ -115,3 +115,61 @@ class CopilotAnalysis(Base):
     citations_json: Mapped[list[dict[str,Any]]]=mapped_column(JSON,nullable=False,default=list)
     stale: Mapped[bool]=mapped_column(Boolean,nullable=False,default=False,index=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+
+
+class ClaimFact(Base):
+    """Canonical claim fact with explicit provenance and lifecycle state."""
+    __tablename__ = "claim_facts"
+    __table_args__ = (
+        UniqueConstraint("claim_id", "fact_key", name="uq_claim_fact_key"),
+        Index("ix_claim_facts_claim", "claim_id"),
+        Index("ix_claim_facts_state", "state"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(150), nullable=False)
+    value_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    state: Mapped[str] = mapped_column(String(40), nullable=False, default="PROPOSED")
+    source_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    source_id: Mapped[Optional[str]] = mapped_column(String(150))
+    confidence: Mapped[Optional[float]] = mapped_column()
+    provenance_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+
+class ClaimException(Base):
+    """Durable exception/hold requiring human or deterministic resolution."""
+    __tablename__ = "claim_exceptions"
+    __table_args__ = (
+        Index("ix_claim_exceptions_claim", "claim_id", "blocking", "status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[str] = mapped_column(String(30), nullable=False, default="medium")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(60), nullable=False, default="SYSTEM_RULE")
+    source_id: Mapped[Optional[str]] = mapped_column(String(150))
+    blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open", index=True)
+    resolution_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class ClaimSubmission(Base):
+    """Exactly-once submission record for an accepted claim."""
+    __tablename__ = "claim_submissions"
+    __table_args__ = (
+        UniqueConstraint("claim_id", name="uq_claim_submission_claim"),
+        UniqueConstraint("idempotency_key", name="uq_claim_submission_idempotency"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="accepted")
+    submitted_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    result_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
