@@ -25,7 +25,7 @@ from src.agents.dynamic_requirements import missing_evidence, pending_evidence_r
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
 from src.evidence.verifier import verify_evidence, validate_evidence_file
 from src.storage.s3 import put_bytes
-from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness
+from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness, record_exception
 from src.api.deps import get_current_user, resolve_bearer_user
 
 logger = app_logger
@@ -768,6 +768,26 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         analysis_json=analysis,
     )
     db.add(db_evidence)
+    if verification_status == "REVIEW_REQUIRED":
+        record_exception(
+            db, claim,
+            event_type="evidence_review_required",
+            severity="medium",
+            reason=analysis.get("reason") or "Evidence requires human review.",
+            blocking=True,
+            source_type="UPLOADED_DOCUMENT",
+            source_id=item_id,
+        )
+    elif str(analysis.get("claim_consistency", "UNKNOWN")).upper() == "INCONSISTENT":
+        record_exception(
+            db, claim,
+            event_type="evidence_conflict",
+            severity="high",
+            reason="Uploaded evidence is inconsistent with the claim context.",
+            blocking=True,
+            source_type="UPLOADED_DOCUMENT",
+            source_id=item_id,
+        )
     try:
         db.commit()
     except Exception as exc:
