@@ -68,12 +68,12 @@ def synthesize_claims_package(
         "effective_date": policy_row.effective_date.isoformat() if policy_row and policy_row.effective_date else policy_verif.get("effective_date", "—"),
         "expiry_date": policy_row.expiry_date.isoformat() if policy_row and policy_row.expiry_date else policy_verif.get("expiry_date", "—"),
         "coverage_limit": float(policy_row.coverage_amount) if policy_row and policy_row.coverage_amount is not None else None,
-        "standard_deductible": 500.0 if insurance_type in {"motor", "home"} else 0.0,
+        "standard_deductible": float(policy_row.deductible) if policy_row and policy_row.deductible is not None else None,
         "verification_protocol": [
-            {"step": "Policyholder Identity Association", "status": "PASSED"},
+            {"step": "Policyholder Identity Association", "status": "PASSED" if policy_verif.get("identity_verified") is True else "UNVERIFIED"},
             {"step": "Policy In-Force Check", "status": "PASSED" if policy_verif.get("valid") else "PENDING"},
             {"step": "Incident Date Temporal Window", "status": "PASSED" if policy_verif.get("valid") else "PENDING"},
-            {"step": "Claim Type Eligibility", "status": "PASSED"},
+            {"step": "Claim Type Eligibility", "status": "PASSED" if policy_verif.get("valid") is True else "PENDING"},
         ],
     }
 
@@ -129,7 +129,7 @@ def synthesize_claims_package(
                 "label": ev.original_filename,
                 "document_type": ev.document_type or ev.detected_document_type or "Supporting Evidence",
                 "verification_status": ev.verification_status,
-                "confidence": ev.verification_confidence or 0.95,
+                "confidence": ev.verification_confidence,
                 "s3_key": ev.object_key,
                 "sha256": ev.sha256 or "—",
                 "size_bytes": ev.size_bytes,
@@ -141,8 +141,8 @@ def synthesize_claims_package(
                 "id": str(ev.get("id") or ev.get("evidence_id") or "—"),
                 "label": str(ev.get("original_filename") or ev.get("label") or "Document"),
                 "document_type": str(ev.get("document_type") or ev.get("evidence_type") or "Evidence"),
-                "verification_status": str(ev.get("verification_status") or "VERIFIED"),
-                "confidence": ev.get("verification_confidence") or 0.95,
+                "verification_status": str(ev.get("verification_status") or "REVIEW_REQUIRED"),
+                "confidence": ev.get("verification_confidence"),
                 "s3_key": str(ev.get("s3_key") or ev.get("object_key") or "—"),
                 "sha256": str(ev.get("sha256") or "—"),
                 "size_bytes": ev.get("size_bytes") or 0,
@@ -165,7 +165,7 @@ def synthesize_claims_package(
     if "third party" in event_desc.lower() or "another car" in event_desc.lower() or "other vehicle" in event_desc.lower():
         risk_flags.append("Multi-party incident detected — cross-check third-party liability and subrogation potential.")
 
-    risk_flags.append("Temporal consistency: incident intimation received in timely window.")
+    # Do not infer timeliness without an authoritative rule/check.\n    if policy_verif.get("timeliness_verified") is True:\n        risk_flags.append("Temporal consistency: verified against applicable reporting rule.")\n
 
     # 6. Recommended Next Steps for Adjuster
     next_steps: List[str] = []
@@ -204,14 +204,14 @@ def synthesize_claims_package(
         f"Claim #{ticket_id} submitted for {verified_policyholder_details['insurance_type']} coverage under "
         f"Policy {policy_id}. Incident occurred on {event_date} at {event_location}. "
         f"Claimant reports: \"{event_desc}\". Estimated loss is {est_amount:,.2f}. "
-        f"Identity and policy eligibility have been verified. {len(evidence_index)} evidence item(s) on file. "
+        f"Policy verification status: {verified_policyholder_details['policy_status']}. {len(evidence_index)} evidence item(s) on file. "
         f"Recommended Action: {next_steps[0] if next_steps else 'Proceed with standard adjuster assessment.'}"
     )
 
     package = {
         "ticket_id": ticket_id,
         "compiled_at": datetime.now(timezone.utc).isoformat(),
-        "status": "ADJUSTER_READY",
+        "status": "READY_FOR_ADJUSTER_REVIEW" if policy_verif.get("valid") is True else "REVIEW_REQUIRED",
         "executive_summary": executive_summary,
         "chronological_narrative": chronology,
         "verified_policyholder_details": verified_policyholder_details,
