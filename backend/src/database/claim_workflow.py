@@ -64,7 +64,24 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
     return chosen
 
 
-def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:\n    """Return a deterministic readiness decision from durable workflow records.\n\n    This is intentionally independent from LLM conversation flags.\n    """\n    from src.domain.readiness import build_readiness\n\n    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()\n    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()\n    return build_readiness(\n        requirements=requirements,\n        policy_verification=policy_verification,\n        evidence_rows=evidence,\n        exceptions=[],\n    )\n\n\ndef transition_claim_if_allowed(\n    db: Session,\n    claim: Claim,\n    new_status: str,\n    *,\n    actor_user_id: str | None = None,\n    reason: str | None = None,\n) -> Claim:\n    """Explicit named wrapper used by service code to make transitions auditable."""\n    return transition_claim(db, claim, new_status, actor_user_id, reason)\n
+def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:
+    """Return deterministic readiness from durable requirements, evidence and exceptions."""
+    from src.domain.readiness import build_readiness
+    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()
+    exceptions = db.query(ClaimException).filter(
+        ClaimException.claim_id == claim.id,
+        ClaimException.status == "open",
+    ).all()
+    return build_readiness(
+        requirements=requirements,
+        policy_verification=policy_verification,
+        evidence_rows=evidence,
+        exceptions=exceptions,
+    )
+
+
+def transition_claim_if_allowed(\n    db: Session,\n    claim: Claim,\n    new_status: str,\n    *,\n    actor_user_id: str | None = None,\n    reason: str | None = None,\n) -> Claim:\n    """Explicit named wrapper used by service code to make transitions auditable."""\n    return transition_claim(db, claim, new_status, actor_user_id, reason)\n
 
 def persist_canonical_facts(
     db: Session,
