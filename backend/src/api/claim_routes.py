@@ -24,7 +24,7 @@ from src.agents.dynamic_requirements import missing_evidence, pending_evidence_r
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent
 from src.evidence.verifier import verify_evidence
 from src.storage.s3 import put_bytes
-from src.database.claim_workflow import assign_claim, transition_claim
+from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness
 from src.api.deps import get_current_user, resolve_bearer_user
 
 logger = app_logger
@@ -418,28 +418,50 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     state = dict(claim.pipeline_state or {}); extracted = dict(state.get("extracted_data") or {})
-    if not state.get("confirmed"):
-        raise HTTPException(status_code=400, detail="Please confirm the claim details in the conversation before submitting.")
-    missing = state.get("missing_fields") or []
-    dynamic_missing = state.get("dynamic_missing") or []
-    # Submission must never bypass authoritative claim-specific requirement planning.
-    # Provisional planning keeps intake moving, but it is not sufficient to submit a
-    # claim because policy/regulatory requirements have not yet been validated.
-    if state.get("rag_status") != "OK" or not state.get("knowledge_context", {}).get("authoritative", False):
-        raise HTTPException(
-            status_code=503,
-            detail="Authoritative claim-specific requirements are not yet available. Please retry before submitting.",
-        )
-    if missing: raise HTTPException(status_code=400, detail=f"Cannot submit claim: missing mandatory fields {missing}.")
-    if dynamic_missing: raise HTTPException(status_code=400, detail="Cannot submit claim: claim-specific information is still incomplete.")
-    missing_evidence_items = missing_evidence(state)
-    pending_review_items = pending_evidence_review(state)
-    if missing_evidence_items: raise HTTPException(status_code=400, detail="Cannot submit claim: required evidence has not been uploaded.")
-    if pending_review_items: raise HTTPException(status_code=409, detail="Claim evidence is still awaiting review. You can continue intake, but submission will remain blocked until review is complete.")
-    verification = verify_policy_for_claim(policy_id=extracted.get("policy_id"), event_date_str=extracted.get("event_date"), claimant_user_id=str(current_user.id), insurance_type=extracted.get("insurance_type"), db=db, claim_id=claim.id)
+    # Conversational confirmation expresses claimant intent, but backend readiness
+    # is authoritative for submission. Recompute verification and durable readiness.
+    verification = verify_policy_for_claim(
+        policy_id=extracted.get("policy_id"),
+        event_date_str=extracted.get("event_date"),
+        claimant_user_id=str(current_user.id),
+        insurance_type=extracted.get("insurance_type"),
+        db=db,
+        claim_id=claim.id,
+    )
     if not verification.get("valid"):
-        state["policy_verification"] = verification; claim.pipeline_state = state; db.commit()
-        raise HTTPException(status_code=400, detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}")
+        state["policy_verification"] = verification
+        claim.pipeline_state = state
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Claim verification failed: {_verification_failure_message(verification.get('reason', ''))}",
+        )
+
+    readiness = build_submission_readiness(db, claim, verification)
+    state["policy_verification"] = verification
+    state["submission_readiness"] = readiness
+    if not readiness.get("ready"):
+        claim.pipeline_state = state
+        db.commit()
+        blockers = [
+            item.get("label") or item.get("key")
+            for item in readiness.get("blocking_requirements", [])
+        ]
+        if readiness.get("exceptions"):
+            raise HTTPException(
+                status_code=409,
+                detail="Claim has blocking exceptions and requires review before submission.",
+            )
+        if blockers:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Claim is not ready for submission.",
+                    "blocking_requirements": blockers,
+                },
+            )
+        raise HTTPException(status_code=400, detail="Claim is not ready for submission.")
+
     # Assignment is transactional and recorded as a durable work item.
     state["policy_verification"] = verification
     try:
