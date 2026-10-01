@@ -30,9 +30,15 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
     changed=False
     for c in claims:
         state=dict(c.pipeline_state or {})
-        if state.get("assigned_adjuster_id") or c.status not in {"submitted","pending_adjuster"}:
+        if c.status not in {"submitted","pending_adjuster"}:
             continue
-        if not (state.get("confirmed") and (state.get("policy_verification") or {}).get("valid") and not state.get("dynamic_missing")):
+        active = db.query(ClaimAssignment).filter(
+            ClaimAssignment.claim_id == c.id, ClaimAssignment.is_active.is_(True)
+        ).first()
+        if active:
+            continue
+        readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
+        if not readiness.get("ready"):
             continue
         spec=(c.insurance_type or "").lower()
         a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
@@ -40,9 +46,15 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
             a=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if a:
             a.claims_assigned=(a.claims_assigned or 0)+1
-            state["assigned_adjuster_id"]=str(a.id); state["assigned_adjuster_name"]=a.name
-            c.pipeline_state=state; c.status="pending_adjuster"; changed=True
-    if changed: db.commit()
+            db.add(ClaimAssignment(claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
+            state["assigned_adjuster_id"]=str(a.id)
+            state["assigned_adjuster_name"]=a.name
+            c.pipeline_state=state
+            if c.status == "submitted":
+                c.status="pending_adjuster"
+            changed=True
+    if changed:
+        db.commit()
 
 def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     if user.role == "ADMIN":
