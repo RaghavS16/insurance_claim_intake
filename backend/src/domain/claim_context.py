@@ -132,7 +132,10 @@ def calculate_readiness(
 
     blocking: list[dict[str, Any]] = []
     for req in requirements_list:
-        if _requirement_blocking(req):
+        provenance = getattr(req, "provenance_json", None) or {}
+        authoritative = provenance.get("authoritative", True)
+        blocked_by_knowledge = bool(getattr(req, "required", True)) and authoritative is False
+        if _requirement_blocking(req) or blocked_by_knowledge:
             blocking.append(
                 {
                     "id": str(getattr(req, "id", "")),
@@ -141,9 +144,9 @@ def calculate_readiness(
                     "type": (
                         "DOCUMENT"
                         if getattr(req, "evidence_type", None)
-                        else "FACT"
+                        else ("KNOWLEDGE" if blocked_by_knowledge else "FACT")
                     ),
-                    "status": str(getattr(req, "status", "unknown")),
+                    "status": "knowledge_pending" if blocked_by_knowledge else str(getattr(req, "status", "unknown")),
                     "required": bool(getattr(req, "required", True)),
                 }
             )
