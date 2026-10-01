@@ -300,6 +300,7 @@ export default function ClaimantPage() {
         },
         onError: (message) => {
           setErrorBanner(message);
+          setTextMode(true);
           stopVoiceRecording();
         },
       });

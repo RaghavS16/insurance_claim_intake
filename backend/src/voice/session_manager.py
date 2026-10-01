@@ -103,6 +103,7 @@ class VoiceSessionManager:
         self._active_call_by_ticket: dict[str, str] = {}
         self._processed_items: set[tuple[str, str]] = set()
         self._ready_events: dict[str, asyncio.Event] = {}
+        self._ready_results: dict[str, bool] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -147,7 +148,7 @@ class VoiceSessionManager:
 
         try:
             await asyncio.wait_for(ready.wait(), timeout=8.0)
-            return True
+            return self._ready_results.get(call_id, False)
         except asyncio.TimeoutError:
             logger.warning("Realtime sideband readiness timed out for %s", ticket_id)
             await self.close(call_id)
@@ -210,9 +211,14 @@ class VoiceSessionManager:
                 self._connections[call_id] = ws
                 session_row.status = "active"
                 db.commit()
+                self._ready_results[call_id] = True
                 ready = self._ready_events.get(call_id)
                 if ready:
                     ready.set()
+                await self.events.publish(
+                    ticket_id,
+                    make_event("voice.session.ready", ticket_id, call_id=call_id),
+                )
 
                 deadline = time.monotonic() + settings.MAX_VOICE_SESSION_SECONDS
                 while True:
@@ -254,6 +260,7 @@ class VoiceSessionManager:
             final_reason = "cancelled"
             raise
         except Exception as exc:
+            self._ready_results.setdefault(call_id, False)
             ready = self._ready_events.get(call_id)
             if ready:
                 ready.set()
@@ -270,6 +277,7 @@ class VoiceSessionManager:
                 ),
             )
         finally:
+            self._ready_results.setdefault(call_id, False)
             ready = self._ready_events.get(call_id)
             if ready:
                 ready.set()
@@ -287,6 +295,7 @@ class VoiceSessionManager:
                 except Exception:
                     logger.debug("Failed to release distributed voice lock for %s", ticket_id, exc_info=True)
             self._ready_events.pop(call_id, None)
+            self._ready_results.pop(call_id, None)
             async with self._lock:
                 if self._active_call_by_ticket.get(ticket_id) == call_id:
                     self._active_call_by_ticket.pop(ticket_id, None)
