@@ -17,6 +17,7 @@ interface CollectedDetailsPanelProps {
   ticketId: string;
   conversationPhase?: string;
   gapAnalysis?: Record<string, unknown>;
+  submissionReadiness?: { ready?: boolean; blocking_requirements?: Array<Record<string, unknown>>; exceptions?: Array<Record<string, unknown>> };
 }
 
 export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
@@ -27,6 +28,9 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   missingEvidence = [],
   pendingEvidenceReview = [],
   evidenceItems = [],
+  onSubmitClaim,
+  submittingClaim = false,
+  submissionReadiness = {},
 }) => {
   const pendingCount = [
     !extractedData.policy_id,
@@ -42,6 +46,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
   );
   const evidenceNeedsAction = missingEvidence.length > 0 || rejectedEvidenceItems.length > 0;
   const isBaselineComplete = pendingCount === 0;
+  const isSubmissionReady = Boolean(submissionReadiness.ready) && !submitted;
 
   return (
     <div className="w-full lg:w-[400px] xl:w-[460px] bg-[#f8fafc] flex flex-col h-full border-t lg:border-t-0 lg:border-l border-[#e2e8f0] shrink-0 overflow-hidden">
@@ -49,7 +54,7 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
       <div className="p-4 md:p-5 border-b border-[#e2e8f0] bg-white sticky top-0 z-10 flex justify-between items-center shadow-xs shrink-0">
         <div>
           <h2 className="font-headline text-base md:text-lg font-bold text-[#0f172a]">Claim Summary</h2>
-          <p className="font-label text-xs text-[#64748b]">5-Phase Conversational AI Intake</p>
+          <p className="font-label text-xs text-[#64748b]">Live claim progress</p>
         </div>
         <span
           className={`font-label text-[10px] font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider ${
@@ -64,68 +69,28 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
         </span>
       </div>
 
-      {/* 5-Step Conversational Progress Stepper */}
+      {/* Case-centric progress: facts, requirements, evidence, readiness, submission */}
       <div className="p-3 bg-white border-b border-[#e2e8f0] shrink-0">
         <div className="flex items-center justify-between text-[10px] font-medium text-[#475569]">
-          <div className="flex items-center gap-1">
-            <span
-              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                isBaselineComplete ? "bg-emerald-500 text-white" : "bg-[#00647c] text-white"
-              }`}
-            >
-              {isBaselineComplete ? "✓" : "1"}
-            </span>
-            <span className={isBaselineComplete ? "text-emerald-700 font-semibold" : "text-[#00647c] font-semibold"}>
-              Baseline
-            </span>
-          </div>
-          <span className="text-[#cbd5e1] text-[9px]">→</span>
-          <div className="flex items-center gap-1">
-            <span
-              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                confirmed ? "bg-emerald-500 text-white" : isBaselineComplete ? "bg-sky-500 text-white" : "bg-slate-200 text-slate-500"
-              }`}
-            >
-              {confirmed ? "✓" : "2"}
-            </span>
-            <span className={confirmed ? "text-emerald-700 font-semibold" : "text-slate-500"}>Verify</span>
-          </div>
-          <span className="text-[#cbd5e1] text-[9px]">→</span>
-          <div className="flex items-center gap-1">
-            <span
-              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                confirmed && !evidenceNeedsAction && pendingEvidenceReview.length === 0 ? "bg-emerald-500 text-white" : confirmed ? "bg-[#00647c] text-white" : "bg-slate-200 text-slate-500"
-              }`}
-            >
-              {confirmed && !evidenceNeedsAction && pendingEvidenceReview.length === 0 ? "✓" : "3"}
-            </span>
-            <span className={confirmed ? "text-[#00647c] font-semibold" : "text-slate-500"}>Evidence</span>
-          </div>
-          <span className="text-[#cbd5e1] text-[9px]">→</span>
-          <div className="flex items-center gap-1">
-            <span
-              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                submitted ? "bg-emerald-500 text-white" : confirmed ? "bg-sky-600 text-white" : "bg-slate-200 text-slate-500"
-              }`}
-            >
-              {submitted ? "✓" : "4"}
-            </span>
-            <span className={submitted ? "text-emerald-700 font-semibold" : "text-slate-500"}>Validation</span>
-          </div>
-          <span className="text-[#cbd5e1] text-[9px]">→</span>
-          <div className="flex items-center gap-1">
-            <span
-              className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${
-                submitted ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"
-              }`}
-            >
-              {submitted ? "✓" : "5"}
-            </span>
-            <span className={submitted ? "text-emerald-700 font-bold" : "text-slate-500"}>Package</span>
-          </div>
+          {[
+            { label: "Facts", done: isBaselineComplete },
+            { label: "Requirements", done: isBaselineComplete && missingEvidence.length === 0 && pendingEvidenceReview.length === 0 },
+            { label: "Evidence", done: evidenceNeedsAction === false && pendingEvidenceReview.length === 0 },
+            { label: "Ready", done: Boolean(submissionReadiness.ready) },
+            { label: "Submitted", done: submitted },
+          ].map((step, index) => (
+            <React.Fragment key={step.label}>
+              <div className="flex items-center gap-1">
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold ${step.done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500"}`}>
+                  {step.done ? "✓" : String(index + 1)}
+                </span>
+                <span className={step.done ? "text-emerald-700 font-semibold" : "text-slate-500"}>{step.label}</span>
+              </div>
+              {index < 4 && <span className="text-[#cbd5e1] text-[9px]">→</span>}
+            </React.Fragment>
+          ))}
         </div>
       </div>
-
 
       {/* Field Cards */}
       <div className="p-4 md:p-5 space-y-3.5 flex-1 overflow-y-auto">
@@ -301,18 +266,28 @@ export const CollectedDetailsPanel: React.FC<CollectedDetailsPanelProps> = ({
       </div>
 
       {/* Conversational Assistant Footer */}
-      <div className="p-4 border-t border-[#e2e8f0] bg-white shrink-0">
+      <div className="p-4 border-t border-[#e2e8f0] bg-white shrink-0 space-y-3">
+        {isSubmissionReady && onSubmitClaim && (
+          <button
+            type="button"
+            onClick={onSubmitClaim}
+            disabled={submittingClaim}
+            className="w-full rounded-xl bg-[#00647c] hover:bg-[#004e61] disabled:opacity-60 text-white py-3 text-sm font-semibold flex items-center justify-center gap-2"
+          >
+            {submittingClaim ? "Submitting…" : "Submit claim"}
+          </button>
+        )}
         <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
           <span className="material-symbols-outlined text-[#00647c] text-lg">forum</span>
           <p className="text-xs text-[#475569] leading-snug">
             {submitted
               ? "Your claim has been submitted to the adjuster. Updates will appear in your claim dashboard."
+              : isSubmissionReady
+              ? "Everything required is ready. You can submit here or simply say “submit” in the conversation."
               : isBaselineComplete
-              ? "All baseline details are recorded. Reply in chat to verify and complete specific requirements."
-              : "Continue speaking or typing naturally. The AI collects details and guides submission automatically."}
+              ? "The AI is continuing with the policy-specific requirements and evidence for this claim."
+              : "Continue speaking or typing naturally. The AI collects details as you describe the incident."}
           </p>
         </div>
       </div>
-    </div>
-  );
-};
+
