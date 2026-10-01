@@ -12,8 +12,11 @@ from datetime import datetime, timezone
 from src.api.deps import get_current_user, require_role, resolve_bearer_user, get_claim_or_404
 from src.config import settings
 from src.database.models import Claim, Adjuster, User, ConversationTurn
-from src.database.hardening_models import ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis, ClaimEvidenceRequest, ClaimEvidence
-from src.database.claim_workflow import transition_claim
+from src.database.hardening_models import (
+    ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis,
+    ClaimEvidenceRequest, ClaimEvidence, ClaimFact, ClaimRequirement, ClaimException,
+)
+from src.database.claim_workflow import transition_claim, build_submission_readiness
 from src.database.session import get_db
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.retriever import KnowledgeRetriever
@@ -94,21 +97,30 @@ class ClaimUpdate(BaseModel):
     priority: str|None=None
     note: str|None=Field(None,max_length=4000)
 
-def _item(c: Claim, adjuster: Adjuster|None=None)->dict[str,Any]:
+def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[str,Any]:
     state=dict(c.pipeline_state or {})
+    facts, requirements, evidence, exceptions, readiness = {}, [], [], [], {}
+    if db is not None:
+        facts = {str(row.fact_key): {"value": (row.value_json or {}).get("value"), "state": row.state, "source_type": row.source_type, "confidence": row.confidence, "version": row.version}
+                 for row in db.query(ClaimFact).filter(ClaimFact.claim_id == c.id).all()}
+        requirements = [{"key": row.requirement_key, "label": row.label, "status": row.status, "required": row.required, "evidence_type": row.evidence_type, "provenance": row.provenance_json or {}}
+                        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == c.id).all()]
+        evidence = [{"id": str(row.id), "name": row.original_filename, "status": row.status, "verification_status": row.verification_status, "verification_confidence": row.verification_confidence, "requirement_id": str(row.requirement_id) if row.requirement_id else None}
+                    for row in db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == c.id).all()]
+        exceptions = [{"id": str(row.id), "event_type": row.event_type, "severity": row.severity, "reason": row.reason, "blocking": row.blocking, "status": row.status}
+                     for row in db.query(ClaimException).filter(ClaimException.claim_id == c.id, ClaimException.status == "open").all()]
+        readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
     return {
-        "ticket_id":c.ticket_id,
-        "status":c.status,
-        "insurance_type":c.insurance_type,
-        "event_date":c.event_date.isoformat() if c.event_date else None,
-        "event_location":c.event_location,
+        "ticket_id":c.ticket_id, "status":c.status, "insurance_type":c.insurance_type,
+        "event_date":c.event_date.isoformat() if c.event_date else None, "event_location":c.event_location,
         "estimated_claim_amount":float(c.estimated_claim_amount) if c.estimated_claim_amount is not None else None,
-        "priority":state.get("priority","normal"),
-        "assigned_adjuster_id":state.get("assigned_adjuster_id"),
+        "priority":state.get("priority","normal"), "assigned_adjuster_id":state.get("assigned_adjuster_id"),
         "assigned_adjuster_name":adjuster.name if adjuster else state.get("assigned_adjuster_name"),
         "claimant_confirmed":bool(state.get("confirmed")),
         "policy_verified":bool((state.get("policy_verification") or {}).get("valid")),
         "dynamic_requirements_complete":not bool(state.get("dynamic_missing")),
+        "facts": facts, "requirements": requirements, "evidence": evidence,
+        "open_exceptions": exceptions, "submission_readiness": readiness,
         "updated_at":c.updated_at.isoformat() if c.updated_at else None,
     }
 
@@ -161,7 +173,7 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
             or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id")) in {str(adjuster.id), str(user.id)})
             or str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
         ]
-    return {"items": [_item(c) for c in claims], "total": len(claims)}
+    return {"items": [_item(c, db=db) for c in claims], "total": len(claims)}
 
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
@@ -174,7 +186,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         from src.agents.submission_synthesizer import synthesize_claims_package
         package = synthesize_claims_package(state, db, c)
     return {
-        "claim": _item(c),
+        "claim": _item(c, db=db),
         "extracted_data": state.get("extracted_data", {}),
         "conversation": [{"speaker": "Claimant" if t.speaker in {"user", "claimant"} else "Agent", "text": t.text, "turn": t.turn_number, "timestamp": t.created_at.isoformat() if t.created_at else None} for t in turns],
         "requirements": state.get("dynamic_requirements", []),
@@ -189,6 +201,22 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "conversation_phase": state.get("conversation_phase", "1_baseline"),
         "gap_analysis": state.get("gap_analysis", {}),
     }
+
+@router.post("/claims/{ticket_id}/exceptions/{exception_id}/resolve")
+def resolve_exception(ticket_id: str, exception_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    claim = get_claim_or_404(db, ticket_id)
+    current_user = _resolve_adjuster(request, db)
+    _ensure_assigned_adjuster(claim, current_user, db)
+    row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.status == "open").first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Open claim exception not found.")
+    row.status = "resolved"
+    row.resolved_at = datetime.now(timezone.utc)
+    row.resolution_json = {"resolved_by": str(current_user.id), "resolved_at": row.resolved_at.isoformat()}
+    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
+                           new_value_json={"exception_id": str(row.id)}, reason="Adjuster resolved blocking exception"))
+    db.commit()
+    return {"success": True, "exception_id": str(row.id), "status": row.status}
 
 @router.get("/claims/{ticket_id}/package")
 def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
