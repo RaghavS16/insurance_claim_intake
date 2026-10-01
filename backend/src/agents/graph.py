@@ -436,6 +436,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
     else:
         state["conversation_phase"] = "4_gap_analysis"
         state["next_question_field"] = "submission"
+        state["conversation_status"] = "ready_for_submission" if plan_ready else "waiting_for_knowledge"
 
     if (
         not missing
