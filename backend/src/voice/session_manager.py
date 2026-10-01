@@ -1,4 +1,5 @@
 """Lifecycle and concurrency manager for self-hosted Pipecat voice sessions."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,7 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import redis.asyncio as redis
 
@@ -20,7 +21,7 @@ logger = app_logger
 
 
 class VoiceEventStore:
-    """Application event fan-out with Redis Streams for shared deployments."""
+    """Redis-backed event stream with local fan-out for single-process mode."""
 
     def __init__(self) -> None:
         self.redis = None
@@ -36,24 +37,24 @@ class VoiceEventStore:
     def _key(ticket_id: str) -> str:
         return f"voice:events:{ticket_id}"
 
-    async def publish(self, ticket_id: str, event: Dict[str, Any]) -> None:
+    async def publish(self, ticket_id: str, event: dict[str, Any]) -> None:
         payload = json.dumps(event, default=str)
         if self.redis is not None:
             try:
                 await self.redis.xadd(
                     self._key(ticket_id),
                     {"payload": payload},
-                    maxlen=1000,
+                    maxlen=settings.VOICE_EVENT_STREAM_MAXLEN,
                     approximate=True,
                 )
             except Exception:
-                logger.exception("Voice Redis publish failed for %s; using local fan-out", ticket_id)
+                logger.exception("Failed to publish voice event to Redis.")
         async with self._local_lock:
             for queue in list(self._local_queues.get(ticket_id, [])):
                 try:
                     queue.put_nowait(payload)
                 except asyncio.QueueFull:
-                    pass
+                    logger.warning("Dropping local voice event for %s", ticket_id)
 
     async def subscribe(self, websocket, ticket_id: str, last_event_id: Optional[str] = None) -> None:
         if self.redis is not None:
@@ -68,9 +69,9 @@ class VoiceEventStore:
                     for _, messages in rows:
                         for stream_id, data in messages:
                             cursor = stream_id
-                            raw = data.get("payload")
-                            if raw:
-                                await websocket.send_text(raw)
+                            payload = data.get("payload")
+                            if payload:
+                                await websocket.send_text(payload)
             except Exception:
                 logger.debug("Redis voice subscriber ended for %s", ticket_id, exc_info=True)
             return
@@ -85,13 +86,13 @@ class VoiceEventStore:
             logger.debug("Local voice subscriber ended for %s", ticket_id, exc_info=True)
         finally:
             async with self._local_lock:
-                current = self._local_queues.get(ticket_id, [])
-                if queue in current:
-                    current.remove(queue)
+                listeners = self._local_queues.get(ticket_id, [])
+                if queue in listeners:
+                    listeners.remove(queue)
 
 
 class VoiceSessionManager:
-    """Owns authenticated Pipecat sessions and WebRTC workers."""
+    """Owns authenticated Pipecat workers and enforces one voice call per claim."""
 
     def __init__(self) -> None:
         self.events = VoiceEventStore()
@@ -102,9 +103,19 @@ class VoiceSessionManager:
 
     @staticmethod
     def safety_identifier(user_id: str) -> str:
+        # Retained for compatibility with earlier callers; the local pipeline
+        # does not transmit this value to any third-party provider.
         return hashlib.sha256(f"insureclaim:{user_id}".encode("utf-8")).hexdigest()
 
-    async def start(self, *, call_id: str, ticket_id: str, user_id: str, model: str) -> bool:
+    async def start(
+        self,
+        *,
+        call_id: str,
+        ticket_id: str,
+        user_id: str,
+        model: str,
+    ) -> bool:
+        """Reserve a claim-scoped voice session and persist its lifecycle row."""
         async with self._lock:
             active = self._active_call_by_ticket.get(ticket_id)
             if active and active != call_id:
@@ -123,134 +134,114 @@ class VoiceSessionManager:
                     if current != call_id:
                         return False
 
-            self._active_call_by_ticket[ticket_id] = call_id
-            existing = self._tasks.get(call_id)
-            if existing and not existing.done():
-                return True
+            db = SessionLocal()
+            try:
+                claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+                if not claim:
+                    await self._release_lock(ticket_id, call_id)
+                    return False
+                row = VoiceSession(
+                    call_id=call_id,
+                    claim_id=str(claim.id),
+                    user_id=str(user_id),
+                    provider="pipecat_local",
+                    model=model,
+                    status="connecting",
+                    started_at=datetime.now(timezone.utc),
+                )
+                db.add(row)
+                db.commit()
+            except Exception:
+                db.rollback()
+                await self._release_lock(ticket_id, call_id)
+                raise
+            finally:
+                db.close()
 
-                self._tasks[call_id] = asyncio.create_task(
-                self._run_pipecat(
+            self._active_call_by_ticket[ticket_id] = call_id
+
+        await self.events.publish(
+            ticket_id,
+            make_event(
+                "voice.session.started",
+                ticket_id,
+                call_id=call_id,
+                provider="pipecat_local",
+                model=model,
+            ),
+        )
+        return True
+
+    async def attach(
+        self,
+        *,
+        call_id: str,
+        ticket_id: str,
+        user_id: str,
+        connection: Any,
+    ) -> None:
+        """Attach a negotiated WebRTC connection to the reserved voice session."""
+        async with self._lock:
+            if self._active_call_by_ticket.get(ticket_id) != call_id:
+                raise RuntimeError("Voice session is not active.")
+            if call_id in self._tasks and not self._tasks[call_id].done():
+                raise RuntimeError("Voice session is already attached.")
+
+            self._connections[call_id] = connection
+            task = asyncio.create_task(
+                self._run(
                     call_id=call_id,
                     ticket_id=ticket_id,
                     user_id=user_id,
-                    model=model,
+                    connection=connection,
                 ),
                 name=f"pipecat-voice-{call_id}",
             )
+            self._tasks[call_id] = task
 
-        try:
+    async def _run(
+        self,
+        *,
+        call_id: str,
+        ticket_id: str,
+        user_id: str,
+        connection: Any,
+    ) -> None:
+        from src.voice.pipecat import run_voice_pipeline
 
-    async def close(self, call_id: str) -> None:
-        task = self._tasks.get(call_id)
-        connection = self._connections.get(call_id)
-        if connection is not None:
-            try:
-            except Exception:
-                logger.debug("Failed to request realtime session close", exc_info=True)
-        if task and not task.done():
-            task.cancel()
-
-    async def _run_pipecat(self, *, call_id: str, ticket_id: str, user_id: str, model: str) -> None:
         db = SessionLocal()
-        session_row: Optional[VoiceSession] = None
+        row: Optional[VoiceSession] = None
+        started_at = datetime.now(timezone.utc)
         final_status = "closed"
         final_reason = "session_ended"
 
         try:
-            claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-            if not claim:
-                raise RuntimeError("Claim not found")
-
-            session_row = VoiceSession(
-                call_id=call_id,
-                claim_id=str(claim.id),
-                user_id=str(user_id),
-                provider="pipecat_local",
-                model=model,
-                status="connecting",
-                started_at=datetime.now(timezone.utc),
-            )
-            db.add(session_row)
-            db.commit()
-
-            await self.events.publish(
-                ticket_id,
-                make_event(
-                    "voice.session.started",
-                    ticket_id,
-                    call_id=call_id,
-                    provider="openai_realtime",
-                    model=model,
-                ),
-            )
-
-            url = f"{settings.OPENAI_REALTIME_WS_URL}?call_id={call_id}"
-            async with websockets.connect(
-                url,
-                additional_headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
-                max_size=16 * 1024 * 1024,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=5,
-            ) as ws:
-                self._connections[call_id] = ws
-                session_row.status = "active"
+            row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id).first()
+            if row:
+                row.status = "active"
                 db.commit()
-                self._ready_results[call_id] = True
-                ready = self._ready_events.get(call_id)
-                if ready:
-                    ready.set()
-                await self.events.publish(
-                    ticket_id,
-                    make_event("voice.session.ready", ticket_id, call_id=call_id),
-                )
 
-                deadline = time.monotonic() + settings.MAX_VOICE_SESSION_SECONDS
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        final_status = "timeout"
-                        final_reason = "max_session_duration"
-                        try:
-                            await ws.send(json.dumps({"type": "session.close"}))
-                        except Exception:
-                            pass
-                        break
-
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                    except asyncio.TimeoutError:
-                        final_status = "timeout"
-                        final_reason = "max_session_duration"
-                        try:
-                            await ws.send(json.dumps({"type": "session.close"}))
-                        except Exception:
-                            pass
-                        break
-
-                    try:
-                        event = json.loads(raw)
-                    except (TypeError, json.JSONDecodeError):
-                        continue
-                    await self._handle_event(
-                        ws=ws,
-                        db=db,
-                        ticket_id=ticket_id,
-                        call_id=call_id,
-                        event=event,
-                    )
-
+            await asyncio.wait_for(
+                run_voice_pipeline(
+                    connection=connection,
+                    ticket_id=ticket_id,
+                    call_id=call_id,
+                    user_id=user_id,
+                    events=self.events,
+                ),
+                timeout=settings.MAX_VOICE_SESSION_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            final_status = "timeout"
+            final_reason = "max_session_duration"
+            logger.warning("Pipecat voice session timed out for %s", call_id)
         except asyncio.CancelledError:
-            final_status = "closed"
             final_reason = "cancelled"
             raise
         except Exception as exc:
-                ready = self._ready_events.get(call_id)
-            if ready:
-                ready.set()
             final_status = "failed"
             final_reason = type(exc).__name__
-            logger.exception("Pipecat voice session failed for %s", ticket_id)
+            logger.exception("Pipecat voice session failed for %s", call_id)
             await self.events.publish(
                 ticket_id,
                 make_event(
@@ -261,30 +252,33 @@ class VoiceSessionManager:
                 ),
             )
         finally:
-            self._ready_results.setdefault(call_id, False)
-            ready = self._ready_events.get(call_id)
-            if ready:
-                ready.set()
-            self._connections.pop(call_id, None)
-            self._mark_session(db, session_row, final_status, final_reason)
-            db.close()
-            if self.events.redis is not None:
+            if row is None:
                 try:
-                    await self.events.redis.eval(
-                        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-                        1,
-                        f"voice:lock:{ticket_id}",
-                        call_id,
-                    )
+                    row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id).first()
                 except Exception:
-                    logger.debug("Failed to release distributed voice lock for %s", ticket_id, exc_info=True)
-            self._ready_events.pop(call_id, None)
-            self._ready_results.pop(call_id, None)
-            async with self._lock:
-                if self._active_call_by_ticket.get(ticket_id) == call_id:
-                    self._active_call_by_ticket.pop(ticket_id, None)
-                self._tasks.pop(call_id, None)
+                    row = None
 
+            if row:
+                row.status = final_status
+                row.close_reason = final_reason
+                row.ended_at = datetime.now(timezone.utc)
+                row.duration_seconds = max(
+                    0,
+                    int((row.ended_at - started_at).total_seconds()),
+                )
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.exception("Failed to finalize voice session %s", call_id)
+
+            db.close()
+            self._connections.pop(call_id, None)
+            self._tasks.pop(call_id, None)
+            if self._active_call_by_ticket.get(ticket_id) == call_id:
+                self._active_call_by_ticket.pop(ticket_id, None)
+
+            await self._release_lock(ticket_id, call_id)
             await self.events.publish(
                 ticket_id,
                 make_event(
@@ -296,26 +290,30 @@ class VoiceSessionManager:
                 ),
             )
 
-    @staticmethod
-    def _mark_session(db, session_row: Optional[VoiceSession], status: str, reason: str) -> None:
-        if session_row is None:
+    async def close(self, call_id: str) -> None:
+        """Cancel the pipeline and tear down its WebRTC connection."""
+        task = self._tasks.get(call_id)
+        connection = self._connections.get(call_id)
+        if task and not task.done():
+            task.cancel()
+        if connection is not None:
+            try:
+                await connection.disconnect()
+            except Exception:
+                logger.debug("Failed to disconnect WebRTC connection.", exc_info=True)
+
+    async def _release_lock(self, ticket_id: str, call_id: str) -> None:
+        if self.events.redis is None:
             return
         try:
-            session_row.status = status
-            session_row.close_reason = reason
-            session_row.ended_at = datetime.now(timezone.utc)
-            if session_row.started_at:
-                started = session_row.started_at
-                if started.tzinfo is None:
-                    started = started.replace(tzinfo=timezone.utc)
-                session_row.duration_seconds = max(
-                    0,
-                    int((session_row.ended_at - started).total_seconds()),
-                )
-            db.commit()
+            await self.events.redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                f"voice:lock:{ticket_id}",
+                call_id,
+            )
         except Exception:
-            db.rollback()
-            logger.exception("Failed to finalize voice session %s", session_row.call_id)
+            logger.debug("Failed to release voice Redis lock.", exc_info=True)
 
 
 voice_session_manager = VoiceSessionManager()
