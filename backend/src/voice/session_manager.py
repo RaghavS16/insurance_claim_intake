@@ -4,15 +4,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import redis.asyncio as redis
-import websockets
 
-from src.agents.turn_processor import process_claimant_turn
 from src.config import settings
 from src.database.models import Claim, VoiceSession
 from src.database.session import SessionLocal
