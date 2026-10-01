@@ -391,6 +391,7 @@ export default function ClaimantPage() {
     setHistory([]);
     setConfirmed(false);
     setClaimSubmitted(false);
+    setSubmissionReadiness({});
     setMissingEvidence([]);
     setPendingEvidenceReview([]);
     setEvidenceItems([]);
@@ -414,6 +415,7 @@ export default function ClaimantPage() {
     setEvidenceItems(data.evidence || []);
     setConversationPhase(data.conversation_phase || "1_baseline");
     setGapAnalysis(data.gap_analysis || {});
+    setSubmissionReadiness(data.submission_readiness || {});
     setPartialSegments(new Map());
     const saved = (data.conversation || []).map((t) => ({
       turn: t.turn,
