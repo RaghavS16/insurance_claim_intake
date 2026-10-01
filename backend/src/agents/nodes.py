@@ -25,7 +25,7 @@ def _get_llm():
 T = TypeVar("T", bound=BaseModel)
 REQUIRED_FIELDS = list(COMMON_REQUIRED_FIELDS)
 UNKNOWN_SENTINEL = "UNKNOWN"
-IntentType = Literal["claim_detail", "correction", "confirmation", "rejection", "question", "repeat", "defer", "filler", "greeting", "gratitude", "closing", "escalation", "unclear"]
+IntentType = Literal["claim_detail", "correction", "confirmation", "rejection", "question", "repeat", "defer", "filler", "greeting", "gratitude", "closing", "escalation", "submit", "unclear"]
 
 class FieldChange(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -380,6 +380,7 @@ def _normalize_description(value: Any, raw: str) -> Optional[str]:
 
 def _fallback_intent(text: str, awaiting: bool) -> IntentType:
     low = " ".join(text.strip().lower().split()).strip(" .!?")
+    if re.search(r"\b(submit|file|file it|go ahead and submit|send the claim|lodge the claim)\b", low): return "submit"
     if low in {"thank you", "thanks", "thx"}: return "gratitude"
     if low in {"hi", "hello", "hey"}: return "greeting"
     if low in {"bye", "goodbye", "that's all", "that is all"}: return "closing"
@@ -690,7 +691,9 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     if patch.intent == "defer":
         target = state.get("next_question_field")
         if target: state.setdefault("unknown_fields", []); state["unknown_fields"].append(target) if target not in state["unknown_fields"] else None; state["extracted_data"][target] = UNKNOWN_SENTINEL; state["field_status"][target] = "deferred"
-    if patch.intent == "confirmation" and not state["recently_extracted_fields"]: state["_confirmation_pending"] = True
+    if patch.intent == "submit" and not state["recently_extracted_fields"]:
+        state["submit_requested"] = True
+        state["conversation_status"] = "submission_requested"
     if patch.intent == "rejection" and not state["recently_extracted_fields"]: state["_rejection_active"] = True
     return state
 
@@ -725,19 +728,17 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
         state["extraction_confidence"] = round(sum(confidences) / len(confidences), 2)
     else:
         state["extraction_confidence"] = 0.0
-    if state.get("confirmed"):
-        state["conversation_status"] = "pending_verification"
-        state["awaiting_confirmation"] = False
-    elif state.get("_rejection_active") and state.get("awaiting_confirmation"):
+    # Facts are accepted continuously. No mandatory confirmation checkpoint exists.
+    # Policy verification and submission readiness are deterministic backend decisions.
+    state["awaiting_confirmation"] = False
+    if state.get("_rejection_active"):
         state["conversation_status"] = "collecting"
-        state["awaiting_confirmation"] = False
         state["confirmed"] = False
     elif not missing:
-        state["conversation_status"] = "reviewing"
-        state["awaiting_confirmation"] = True
+        state["conversation_status"] = "pending_verification"
+        state["confirmed"] = True
     else:
         state["conversation_status"] = "collecting"
-        state["awaiting_confirmation"] = False
     return state
 
 def _confirmation_summary(data: Dict[str, Any]) -> str:
