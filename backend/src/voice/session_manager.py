@@ -98,9 +98,6 @@ class VoiceSessionManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._connections: dict[str, Any] = {}
         self._active_call_by_ticket: dict[str, str] = {}
-        self._processed_items: set[tuple[str, str]] = set()
-        self._ready_events: dict[str, asyncio.Event] = {}
-        self._ready_results: dict[str, bool] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -131,9 +128,7 @@ class VoiceSessionManager:
             if existing and not existing.done():
                 return True
 
-            ready = asyncio.Event()
-            self._ready_events[call_id] = ready
-            self._tasks[call_id] = asyncio.create_task(
+                self._tasks[call_id] = asyncio.create_task(
                 self._run_pipecat(
                     call_id=call_id,
                     ticket_id=ticket_id,
@@ -144,12 +139,6 @@ class VoiceSessionManager:
             )
 
         try:
-            await asyncio.wait_for(ready.wait(), timeout=8.0)
-            return self._ready_results.get(call_id, False)
-        except asyncio.TimeoutError:
-            logger.warning("Pipecat voice readiness timed out for %s", ticket_id)
-            await self.close(call_id)
-            return False
 
     async def close(self, call_id: str) -> None:
         task = self._tasks.get(call_id)
@@ -256,8 +245,7 @@ class VoiceSessionManager:
             final_reason = "cancelled"
             raise
         except Exception as exc:
-            self._ready_results.setdefault(call_id, False)
-            ready = self._ready_events.get(call_id)
+                ready = self._ready_events.get(call_id)
             if ready:
                 ready.set()
             final_status = "failed"
