@@ -25,7 +25,9 @@ interface TranscriptSegment {
 }
 
 interface SessionPayload {
+  [key: string]: unknown;
   ticket_id: string;
+  agent_message?: string;
   status?: string;
   conversation_status?: string;
   insurance_type?: string;
