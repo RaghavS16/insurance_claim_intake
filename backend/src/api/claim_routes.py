@@ -768,6 +768,16 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         analysis_json=analysis,
     )
     db.add(db_evidence)
+    if verification_status == "VERIFIED":
+        open_evidence_exceptions = db.query(ClaimException).filter(
+            ClaimException.claim_id == claim.id,
+            ClaimException.event_type.in_(["evidence_review_required", "evidence_conflict"]),
+            ClaimException.status == "open",
+        ).all()
+        for exception in open_evidence_exceptions:
+            exception.status = "resolved"
+            exception.resolved_at = datetime.now(timezone.utc)
+            exception.resolution_json = {"resolved_by": str(current_user.id), "resolution": "subsequent evidence verification passed"}
     if verification_status == "REVIEW_REQUIRED":
         record_exception(
             db, claim,
