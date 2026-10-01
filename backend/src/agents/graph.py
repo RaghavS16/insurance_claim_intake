@@ -382,7 +382,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("dynamic_missing") or state.get("missing_evidence"):
         state["conversation_phase"] = "3_rag_intake"
         state["conversation_status"] = "collecting_dynamic"
-    elif not dynamic_missing and not missing_evidence:
+    elif not state.get("dynamic_missing") and not state.get("missing_evidence"):
         state["conversation_phase"] = "4_gap_analysis"
         state["conversation_status"] = "ready_for_submission"
     return state
@@ -435,46 +435,25 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question"] = _dynamic_fallback(state)
     else:
         state["conversation_phase"] = "4_gap_analysis"
-        state["next_question_field"] = "final_confirmation"
+        state["next_question_field"] = "submission"
 
     if (
-        state.get("confirmed")
-        and not missing
+        not missing
         and plan_ready
         and state.get("rag_status") == "OK"
         and not dynamic_missing
         and not missing_evidence
         and not pending_review
     ):
-        if state.get("awaiting_submission_confirmation"):
-            if state.get("last_intent") == "confirmation":
-                state["final_submission_confirmed"] = True
-                state["awaiting_submission_confirmation"] = False
-                state["conversation_phase"] = "5_completed"
-                state["conversation_status"] = "submitting"
-                state["next_question"] = "Thanks. I'll compile your adjuster-ready submission package and submit the completed claim now."
-            elif state.get("last_intent") == "rejection":
-                state["final_submission_confirmed"] = False
-                state["awaiting_submission_confirmation"] = False
-                state["conversation_phase"] = "4_gap_analysis"
-                state["conversation_status"] = "final_review"
-                state["next_question"] = "No problem at all. Tell me what you'd like to adjust or add before I submit it."
-            else:
-                state["final_submission_confirmed"] = False
-                state["conversation_phase"] = "4_gap_analysis"
-                state["next_question"] = (
-                    "I've collected and verified all the required information and evidence for your claim. "
-                    "Would you like me to submit your complete dossier directly to the adjuster?"
-                )
-        else:
-            state["final_submission_confirmed"] = False
-            state["awaiting_submission_confirmation"] = True
-            state["conversation_phase"] = "4_gap_analysis"
-            state["conversation_status"] = "final_review"
-            state["next_question"] = (
-                "I've assembled all the required claim-specific details and evidence. "
-                "Would you like me to submit the claim package to the claims adjuster?"
-            )
+        state["final_submission_confirmed"] = False
+        state["awaiting_submission_confirmation"] = False
+        state["conversation_phase"] = "4_gap_analysis"
+        state["conversation_status"] = "ready_for_submission"
+        state["next_question_field"] = "submission"
+        state["next_question"] = (
+            "I have the required claim details and evidence. Your claim is ready to submit. "
+            "If you want me to file it now, just say submit."
+        )
         state["message"] = state["next_question"]
         return state
 
