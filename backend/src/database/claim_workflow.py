@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from src.database.models import Claim, Adjuster
-from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence
+from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmission
 
 ALLOWED_TRANSITIONS = {
     "draft": {"pending_confirmation", "pending_verification", "verified", "verification_failed", "escalated"},
@@ -65,3 +65,86 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
 
 
 def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:\n    """Return a deterministic readiness decision from durable workflow records.\n\n    This is intentionally independent from LLM conversation flags.\n    """\n    from src.domain.readiness import build_readiness\n\n    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()\n    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()\n    return build_readiness(\n        requirements=requirements,\n        policy_verification=policy_verification,\n        evidence_rows=evidence,\n        exceptions=[],\n    )\n\n\ndef transition_claim_if_allowed(\n    db: Session,\n    claim: Claim,\n    new_status: str,\n    *,\n    actor_user_id: str | None = None,\n    reason: str | None = None,\n) -> Claim:\n    """Explicit named wrapper used by service code to make transitions auditable."""\n    return transition_claim(db, claim, new_status, actor_user_id, reason)\n
+
+def persist_canonical_facts(
+    db: Session,
+    claim: Claim,
+    facts: dict,
+    *,
+    source_type: str = "CLAIMANT",
+    source_id: str | None = None,
+    confidence: float | None = None,
+) -> None:
+    """Upsert canonical facts while retaining provenance in the normalized store."""
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    rows = {
+        row.fact_key: row
+        for row in db.query(ClaimFact).filter(ClaimFact.claim_id == claim.id).all()
+    }
+    for key, value in (facts or {}).items():
+        if value in (None, "", "UNKNOWN"):
+            continue
+        row = rows.get(str(key))
+        if row is None:
+            row = ClaimFact(
+                claim_id=str(claim.id),
+                fact_key=str(key),
+                value_json={"value": value},
+                state="PROPOSED",
+                source_type=source_type,
+                source_id=source_id,
+                confidence=confidence,
+                provenance_json={"source_type": source_type, "source_id": source_id},
+            )
+            db.add(row)
+            rows[str(key)] = row
+        else:
+            old_value = (row.value_json or {}).get("value")
+            if old_value != value:
+                row.version = int(row.version or 1) + 1
+            row.value_json = {"value": value}
+            row.source_type = source_type
+            row.source_id = source_id
+            row.confidence = confidence
+            row.provenance_json = {
+                **(row.provenance_json or {}),
+                "source_type": source_type,
+                "source_id": source_id,
+                "updated_at": now.isoformat(),
+            }
+            row.updated_at = now
+        row.state = "ACCEPTED" if source_type == "POLICY_DB" else "PROPOSED"
+
+
+def record_exception(
+    db: Session,
+    claim: Claim,
+    *,
+    event_type: str,
+    reason: str,
+    severity: str = "medium",
+    blocking: bool = True,
+    source_type: str = "SYSTEM_RULE",
+    source_id: str | None = None,
+) -> ClaimException:
+    existing = db.query(ClaimException).filter(
+        ClaimException.claim_id == claim.id,
+        ClaimException.event_type == event_type,
+        ClaimException.status == "open",
+    ).first()
+    if existing:
+        existing.reason = reason
+        existing.severity = severity
+        existing.blocking = blocking
+        return existing
+    row = ClaimException(
+        claim_id=str(claim.id),
+        event_type=event_type,
+        reason=reason,
+        severity=severity,
+        blocking=blocking,
+        source_type=source_type,
+        source_id=source_id,
+    )
+    db.add(row)
+    return row
