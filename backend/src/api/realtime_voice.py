@@ -1,13 +1,11 @@
-"""Managed realtime voice channel: WebRTC media + authenticated application events."""
+"""Self-hosted Pipecat WebRTC signaling and authenticated voice events."""
+
 from __future__ import annotations
 
 import json
 import uuid
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.api.deps import get_current_user
@@ -17,14 +15,11 @@ from src.database.session import SessionLocal, get_db
 from src.utils.auth import verify_token
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
+from src.voice.pipecat import SmallWebRTCConnection
 from src.voice.session_manager import voice_session_manager
 
 router = APIRouter(prefix="/api/v1/voice", tags=["Voice"])
 logger = app_logger
-
-
-class VoiceAttachRequest(BaseModel):
-    call_id: str = Field(min_length=4, max_length=200)
 
 
 def _validate_claim_access(db: Session, ticket_id: str, user: User) -> Claim:
@@ -38,34 +33,6 @@ def _validate_claim_access(db: Session, ticket_id: str, user: User) -> Claim:
     return claim
 
 
-def _session_config() -> dict:
-    return {
-        "type": "realtime",
-        "model": settings.OPENAI_REALTIME_MODEL,
-        "output_modalities": ["audio"],
-        "max_output_tokens": settings.OPENAI_REALTIME_MAX_OUTPUT_TOKENS,
-        "instructions": (
-            "You are the voice transport for an insurance claim application. "
-            "Do not independently answer insurance coverage, claim status, document, or submission questions. "
-            "The application server processes completed claimant turns and sends the authoritative response to speak. "
-            "Do not invent claim facts or business outcomes."
-        ),
-        "audio": {
-            "input": {
-                "turn_detection": {
-                    "type": settings.OPENAI_REALTIME_TURN_DETECTION,
-                    "eagerness": settings.OPENAI_REALTIME_VAD_EAGERNESS,
-                    "create_response": False,
-                    "interrupt_response": True,
-                }
-            },
-            "output": {
-                "voice": settings.OPENAI_REALTIME_VOICE,
-            },
-        },
-    }
-
-
 @router.post("/realtime/session/{ticket_id}")
 async def create_realtime_session(
     ticket_id: str,
@@ -73,12 +40,42 @@ async def create_realtime_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Exchange browser SDP for a managed Realtime session using the server API key."""
+    """Reserve one claim-scoped self-hosted Pipecat voice session."""
     if not settings.VOICE_ENABLED or settings.VOICE_PROVIDER != "pipecat_local":
         raise HTTPException(status_code=503, detail="Voice channel is disabled.")
-    if not settings.OPENAI_API_KEY:
-        raise HTTPException(status_code=503, detail="Realtime voice is not configured.")
     _validate_claim_access(db, ticket_id, current_user)
+
+    call_id = f"CALL-{uuid.uuid4().hex}"
+    ok = await voice_session_manager.start(
+        call_id=call_id,
+        ticket_id=ticket_id,
+        user_id=str(current_user.id),
+        model=settings.VOICE_STT_MODEL,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="A voice session is already active for this claim.",
+        )
+
+    return {
+        "call_id": call_id,
+        "ticket_id": ticket_id,
+        "provider": "pipecat_local",
+        "transport": "small_webrtc",
+    }
+
+
+@router.post("/realtime/offer/{call_id}")
+async def create_realtime_offer(
+    call_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Negotiate one browser WebRTC offer into a Pipecat Small WebRTC answer."""
+    if not settings.VOICE_ENABLED or settings.VOICE_PROVIDER != "pipecat_local":
+        raise HTTPException(status_code=503, detail="Voice channel is disabled.")
 
     content_length = request.headers.get("content-length")
     if content_length:
@@ -88,70 +85,59 @@ async def create_realtime_session(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid voice session request.") from exc
 
-    offer_sdp = await request.body()
-    if not offer_sdp or len(offer_sdp) > settings.MAX_VOICE_SDP_BYTES:
+    body = await request.json()
+    ticket_id = str(body.get("ticket_id") or "").strip()
+    offer_sdp = str(body.get("sdp") or "")
+    offer_type = str(body.get("type") or "offer")
+
+    if not ticket_id or not offer_sdp or len(offer_sdp.encode("utf-8")) > settings.MAX_VOICE_SDP_BYTES:
         raise HTTPException(status_code=400, detail="Invalid WebRTC offer.")
+    if offer_type != "offer":
+        raise HTTPException(status_code=400, detail="Only WebRTC offer SDP is accepted.")
 
-    files = {
-        "sdp": ("offer.sdp", offer_sdp, "application/sdp"),
-        "session": (
-            None,
-            json.dumps(_session_config(), separators=(",", ":")),
-            "application/json",
-        ),
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-        "OpenAI-Safety-Identifier": voice_session_manager.safety_identifier(str(current_user.id)),
-        "X-Client-Request-Id": str(uuid.uuid4()),
-    }
+    _validate_claim_access(db, ticket_id, current_user)
+    active_call = voice_session_manager._active_call_by_ticket.get(ticket_id)
+    if active_call != call_id:
+        raise HTTPException(status_code=409, detail="Voice session is not active.")
 
+    connection = SmallWebRTCConnection(
+        connection_timeout_secs=settings.VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS,
+    )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
-            provider_response = await client.post(
-                settings.OPENAI_REALTIME_CALLS_URL,
-                files=files,
-                headers=headers,
-            )
-    except httpx.HTTPError as exc:
-        logger.exception("Realtime session request failed")
-        raise HTTPException(status_code=502, detail="Voice provider is temporarily unavailable.") from exc
+        await connection.initialize(sdp=offer_sdp, type=offer_type)
+        answer = connection.get_answer()
+        if not answer:
+            raise HTTPException(status_code=502, detail="Pipecat could not create a WebRTC answer.")
 
-    if provider_response.status_code >= 400:
-        logger.warning(
-            "Realtime session creation rejected: %s %s",
-            provider_response.status_code,
-            provider_response.text[:500],
+        await voice_session_manager.attach(
+            call_id=call_id,
+            ticket_id=ticket_id,
+            user_id=str(current_user.id),
+            connection=connection,
         )
-        raise HTTPException(status_code=502, detail="Voice provider could not create a session.")
-
-    location = provider_response.headers.get("Location", "")
-    call_id = location.rstrip("/").split("/")[-1]
-    if not call_id:
-        raise HTTPException(status_code=502, detail="Voice provider did not return a call identifier.")
-
-    started = await voice_session_manager.start(
-        call_id=call_id,
-        ticket_id=ticket_id,
-        user_id=str(current_user.id),
-        model=settings.OPENAI_REALTIME_MODEL,
-    )
-    if not started:
-        raise HTTPException(status_code=409, detail="A voice session is already active for this claim.")
-
-    return Response(
-        content=provider_response.text,
-        media_type="application/sdp",
-        headers={
-            "X-Voice-Call-Id": call_id,
-            "Cache-Control": "no-store",
-        },
-    )
+        return {
+            "sdp": answer["sdp"],
+            "type": answer["type"],
+            "pc_id": answer.get("pc_id"),
+            "provider": "pipecat_local",
+            "transport": "small_webrtc",
+        }
+    except HTTPException:
+        await connection.disconnect()
+        raise
+    except Exception as exc:
+        await connection.disconnect()
+        await voice_session_manager.close(call_id)
+        logger.exception("Pipecat WebRTC negotiation failed.")
+        raise HTTPException(
+            status_code=502,
+            detail="Voice connection could not be established.",
+        ) from exc
 
 
 @router.websocket("/events/{ticket_id}")
 async def voice_events(websocket: WebSocket, ticket_id: str):
-    """Authenticated application state stream; no audio is transported here."""
+    """Authenticated claim-scoped application event stream; media stays WebRTC-only."""
     await websocket.accept()
     try:
         raw = await websocket.receive_text()
@@ -179,7 +165,7 @@ async def voice_events(websocket: WebSocket, ticket_id: str):
         await websocket.send_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "event_id": "connection-ready",
                     "event_type": "voice.events.ready",
                     "ticket_id": ticket_id,
@@ -207,4 +193,4 @@ async def close_voice_session(
     active = voice_session_manager._active_call_by_ticket.get(ticket_id)
     if active:
         await voice_session_manager.close(active)
-    return JSONResponse({"status": "closed"})
+    return {"status": "closed"}
