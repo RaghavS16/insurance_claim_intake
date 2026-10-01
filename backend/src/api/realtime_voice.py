@@ -74,7 +74,7 @@ async def create_realtime_session(
     db: Session = Depends(get_db),
 ):
     """Exchange browser SDP for a managed Realtime session using the server API key."""
-    if not settings.VOICE_ENABLED or settings.VOICE_PROVIDER != "openai_realtime":
+    if not settings.VOICE_ENABLED or settings.VOICE_PROVIDER != "pipecat_local":
         raise HTTPException(status_code=503, detail="Voice channel is disabled.")
     if not settings.OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="Realtime voice is not configured.")
