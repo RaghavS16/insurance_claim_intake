@@ -243,7 +243,7 @@ def _model_response(state: ClaimState) -> str:
 
     prompt = (
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
-        f"Active Intake Phase: {phase}\n"
+        f"Conversation context: {phase}\n"
         f"Authoritative claim facts: {data}\n"
         f"Still-needed baseline information: {missing}\n"
         f"Still-needed claim-specific information: {dynamic_missing}\n"
@@ -297,8 +297,6 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
 
     # Requirement planning is available as soon as an insurance type is known.
     # Policy verification remains a submission gate, not a conversation gate.
-    if not state.get("confirmed"):
-        state["conversation_phase"] = "1_baseline"
 
     data = state.get("extracted_data") or {}
     insurance_type = data.get("insurance_type")
@@ -345,9 +343,7 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     ):
         extract_answers(state)
         state["pending_evidence_review"] = pending_evidence_review(state)
-        if state.get("confirmed") and (
-            state.get("dynamic_missing") or state.get("missing_evidence") or state.get("pending_evidence_review")
-        ):
+        if state.get("dynamic_missing") or state.get("missing_evidence") or state.get("pending_evidence_review"):
             state["conversation_phase"] = "3_rag_intake"
             state["conversation_status"] = "collecting_dynamic"
         return state
@@ -383,14 +379,12 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
 
     extract_answers(state)
     state["pending_evidence_review"] = pending_evidence_review(state)
-    if state.get("confirmed") and (
-        state.get("dynamic_missing") or state.get("missing_evidence")
-    ):
+    if state.get("dynamic_missing") or state.get("missing_evidence"):
         state["conversation_phase"] = "3_rag_intake"
         state["conversation_status"] = "collecting_dynamic"
-    elif state.get("confirmed"):
+    elif not dynamic_missing and not missing_evidence:
         state["conversation_phase"] = "4_gap_analysis"
-        state["conversation_status"] = "final_review"
+        state["conversation_status"] = "ready_for_submission"
     return state
 
 
@@ -419,51 +413,12 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question_field"] = "question"
         state["next_question"] = reply
         state["message"] = reply
-        if state.get("confirmed"):
-            state["conversation_phase"] = "3_rag_intake" if (dynamic_missing or missing_evidence) else "4_gap_analysis"
-        else:
-            state["conversation_phase"] = "1_baseline"
+        state["conversation_phase"] = "3_rag_intake" if (dynamic_missing or missing_evidence) else "4_gap_analysis"
         return state
 
-    if state.get("awaiting_confirmation") and not state.get("confirmed") and not missing:
-        state["conversation_phase"] = "2_verification"
-        state["next_question_field"] = "confirmation"
-        state["next_question"] = nodes._confirmation_summary(data) + " Is everything correct?"
-        state["conversation_status"] = "reviewing"
-        state["message"] = state["next_question"]
-        return state
-
-    if state.get("confirmed") and not missing and not plan_ready:
-        state["conversation_phase"] = "3_rag_intake"
-        state["conversation_status"] = "waiting_for_knowledge"
-        state["next_question_field"] = "knowledge"
-        status = state.get("rag_status")
-        if status == "LLM_CONFIGURATION_UNAVAILABLE":
-            state["next_question"] = (
-                "Thanks, the basic details are verified. The claim-specific guidance service is not configured yet. "
-                "I’ll keep your verified details safely saved so we can continue once that service is available."
-            )
-        elif status == "LLM_TEMPORARILY_UNAVAILABLE":
-            state["next_question"] = (
-                "Thanks, the basic details are verified. I’m continuing with the claim-specific details now."
-            )
-        elif status == "REQUIREMENT_PLAN_UNAVAILABLE":
-            state["next_question"] = (
-                "Thanks, the basic details are verified. I’ll continue with the claim-specific review as soon as the "
-                "applicable requirements are available."
-            )
-        elif status == "NO_RELEVANT_KNOWLEDGE":
-            state["next_question"] = (
-                "Thanks, the basic details are verified. I’ll continue with the claim-specific review using the "
-                "available claim guidance."
-            )
-        else:
-            state["next_question"] = (
-                "Thanks, the basic details are verified. Let’s continue with the claim-specific details."
-            )
-        state["message"] = state["next_question"]
-        return state
-
+    # Baseline facts are reviewed continuously; there is no mandatory confirmation phase.
+    # The claimant may correct any fact at any time, and the deterministic verifier/readiness
+    # service decides whether the case can advance.
     if missing:
         state["conversation_phase"] = "1_baseline"
         state["next_question_field"] = missing[0]
