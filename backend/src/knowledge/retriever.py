@@ -44,6 +44,10 @@ class KnowledgeRetriever:
         except Exception:
             manifest = []
 
+        selected_policy_version = None
+        if policy_docs:
+            selected_policy_version = (policy_docs[0].get("policy_version") or (policy_docs[0].get("metadata") or {}).get("policy_version"))
+
         if manifest:
             manifest = list({str(x.get("key")): x for x in manifest if x.get("key")}.values())
             try:
@@ -74,6 +78,7 @@ class KnowledgeRetriever:
                     ),
                     "authoritative": True,
                     "planning_model": "policy_manifest",
+                    "policy_version": selected_policy_version,
                 }
 
         # If an applicable policy wording exists, never replace a failed or unresolved
@@ -99,6 +104,7 @@ class KnowledgeRetriever:
                 "regulations": [],
                 "authoritative": False,
                 "planning_model": "policy_manifest_required",
+                "policy_version": selected_policy_version,
             }
 
         try:
