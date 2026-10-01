@@ -76,6 +76,7 @@ def _resolve_user(request: Request, db: Session) -> User:
 
 def _claim_payload(claim: Claim) -> Dict[str, Any]:
     state = dict(getattr(claim, "pipeline_state", None) or {})
+    readiness = dict(state.get("submission_readiness") or {})
     return {
         "id": str(claim.id) if claim.id else None,
         "ticket_id": claim.ticket_id,
@@ -101,6 +102,8 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "chat_retrieval": state.get("chat_retrieval") or {},
         "gap_analysis": state.get("gap_analysis") or {},
         "submission_package": state.get("submission_package") or {},
+        "requirements": state.get("requirements") or state.get("dynamic_requirements") or [],
+        "submission_readiness": readiness,
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
         "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }
