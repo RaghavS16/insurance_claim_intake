@@ -23,7 +23,7 @@ from src.utils.logger import app_logger
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
-from src.evidence.verifier import verify_evidence
+from src.evidence.verifier import verify_evidence, validate_evidence_file
 from src.storage.s3 import put_bytes
 from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness
 from src.api.deps import get_current_user, resolve_bearer_user
@@ -617,7 +617,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    if claim.status not in ("draft", "pending_confirmation", "verified"):
+    if claim.status not in ("draft", "pending_confirmation", "verified", "pending_evidence", "assigned", "under_review"):
         raise HTTPException(status_code=400, detail="Evidence can only be uploaded while intake is in progress.")
     if not file.filename:
         raise HTTPException(status_code=400, detail="A file is required.")
@@ -630,6 +630,9 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     content = await file.read()
     if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Evidence file is too large.")
+    valid_file, file_reason = validate_evidence_file(content, file.filename)
+    if not valid_file:
+        raise HTTPException(status_code=400, detail=file_reason)
 
     state = dict(claim.pipeline_state or {})
     evidence = list(state.get("evidence") or [])
