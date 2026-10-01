@@ -10,7 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
-from src.database.hardening_models import ClaimRequirement
+from src.database.hardening_models import ClaimRequirement, ClaimSubmission
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -27,7 +27,7 @@ async def process_claimant_turn(
 ) -> Dict[str, Any]:
     """Process one claimant turn without blocking the event loop during LLM work."""
     from src.agents.policy_check import verify_policy_for_claim
-    from src.database.claim_workflow import assign_claim, transition_claim
+    from src.database.claim_workflow import assign_claim, transition_claim, persist_canonical_facts, sync_claim_requirements, build_submission_readiness
 
     if claim.status in {"submitted", "assigned", "under_review", "closed"}:
         prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
@@ -60,7 +60,6 @@ async def process_claimant_turn(
                 "valid": True,
                 "reason": "Claim is already in the verified workflow state.",
             }
-        prior_state["confirmed"] = True
         prior_state["awaiting_confirmation"] = False
         if not user_text:
             workflow_event = "policy_verified"
@@ -117,95 +116,143 @@ async def process_claimant_turn(
             result["next_question"] = rag_reply["answer"]
             result["message"] = rag_reply["answer"]
 
-    # Stage 2: Policy Verification Trigger upon Baseline Confirmation
-    # Persist the just-confirmed graph state before policy verification. The policy
-    # checker intentionally reads the durable claim row, so verifying against the
-    # previous pre-confirmation snapshot would incorrectly return
-    # "claimant_confirmation_required".
-    if result.get("confirmed") and claim.status not in {"verified", "submitted", "assigned"}:
-        claim.pipeline_state = dict(result)
-        flag_modified(claim, "pipeline_state")
-        verification = verify_policy_for_claim(
-            policy_id=extracted.get("policy_id"),
-            event_date_str=extracted.get("event_date"),
-            claimant_user_id=str(claim.claimant_id),
-            insurance_type=extracted.get("insurance_type"),
-            db=db,
-            claim_id=claim.id,
-        )
-        result["policy_verification"] = verification
-        if verification.get("valid"):
-            result["policy_valid"] = True
-            try:
-                transition_claim(db, claim, "verified", str(claim.claimant_id), "policy verification successful")
-            except Exception:
-                claim.status = "verified"
-
-            # Continue the same workflow after policy verification without asking the
-            # claimant to send another message. The second graph pass is an internal
-            # workflow event: it runs RAG + claim-specific planning, but does not
-            # re-extract the claimant's last utterance.
-            result["_workflow_event"] = "policy_verified"
-            result = await asyncio.to_thread(build_conversation_graph().invoke, result)
-            result["policy_verification"] = verification
-            result["policy_valid"] = True
-            result["conversation_status"] = (
-                "collecting_dynamic"
-                if result.get("dynamic_missing") or result.get("missing_evidence")
-                else "final_review"
+    # Policy verification is triggered by complete baseline facts, not by a conversational
+    # confirmation flag. The claimant can correct facts at any time; verification is rerun
+    # after each correction before submission.
+    missing_baseline = list(result.get("missing_fields") or [])
+    if not missing_baseline and extracted.get("policy_id") and extracted.get("event_date") and extracted.get("insurance_type"):
+        try:
+            claim.pipeline_state = dict(result)
+            flag_modified(claim, "pipeline_state")
+            verification = verify_policy_for_claim(
+                policy_id=extracted.get("policy_id"),
+                event_date_str=extracted.get("event_date"),
+                claimant_user_id=str(claim.claimant_id),
+                insurance_type=extracted.get("insurance_type"),
+                db=db,
+                claim_id=claim.id,
             )
-        else:
+            result["policy_verification"] = verification
+            result["policy_valid"] = bool(verification.get("valid"))
+            if verification.get("valid"):
+                if claim.status != "verified":
+                    try:
+                        transition_claim(db, claim, "verified", str(claim.claimant_id), "deterministic policy verification")
+                    except ValueError:
+                        claim.status = "verified"
+                result["conversation_status"] = (
+                    "collecting_dynamic"
+                    if result.get("dynamic_missing") or result.get("missing_evidence")
+                    else "ready_for_submission"
+                )
+            else:
+                if claim.status != "verification_failed":
+                    try:
+                        transition_claim(db, claim, "verification_failed", str(claim.claimant_id), verification.get("reason", "policy verification failed"))
+                    except ValueError:
+                        claim.status = "verification_failed"
+                result["conversation_status"] = "verification_failed"
+        except Exception as exc:
+            logger.exception("Policy verification failed unexpectedly")
+            result["policy_verification"] = {
+                "valid": False,
+                "reason": "verification_service_error",
+                "error_type": type(exc).__name__,
+            }
             result["policy_valid"] = False
-            try:
-                transition_claim(db, claim, "verification_failed", str(claim.claimant_id), verification.get("reason", "policy verification failed"))
-            except Exception:
-                claim.status = "verification_failed"
-            result["conversation_status"] = "verification_failed"
 
-    # Stage 5: Final Submission to Adjuster upon Final Confirmation & Package Compilation
-    dynamic_rem = result.get("dynamic_missing") or []
-    missing_ev = result.get("missing_evidence") or []
-    pending_review = result.get("pending_evidence_review") or []
-    is_final_turn = (
-        claim.status == "verified"
-        and not dynamic_rem
-        and not missing_ev
-        and not pending_review
-        and result.get("confirmed")
-        and result.get("final_submission_confirmed")
+    # Persist canonical facts independently of the conversational JSON cache.
+    persist_canonical_facts(
+        db, claim, extracted,
+        source_type="CLAIMANT",
+        source_id=str(logical_turn),
+        confidence=result.get("extraction_confidence"),
     )
 
-    if is_final_turn and claim.status != "submitted":
-        try:
-            from src.agents.submission_synthesizer import synthesize_claims_package
-            assigned = assign_claim(db, claim, str(claim.claimant_id))
-            transition_claim(db, claim, "assigned", str(claim.claimant_id), "assigned to adjuster")
-            result["assigned_adjuster_id"] = assigned.id
-            result["assigned_adjuster_name"] = assigned.name
-            result["assigned_adjuster"] = {"id": assigned.id, "name": assigned.name, "specialization": assigned.specialization}
-            claim.status = "submitted"
-            result["conversation_status"] = "submitted"
-            result["status"] = "submitted"
-            result["conversation_phase"] = "5_completed"
-            
-            # Synthesize the standardized adjuster dossier
-            package = synthesize_claims_package(result, db, claim)
-            result["submission_package"] = package
+    # Durable requirements are synchronized before readiness is evaluated.
+    sync_claim_requirements(db, claim, result.get("dynamic_requirements") or [])
 
-            submission_msg = f"Your claim #{claim.ticket_id} has been submitted and assigned to adjuster {assigned.name}. Your standardized claims package has been compiled for review. You're all set! We will update you as it is processed."
-            result["next_question"] = submission_msg
-            result["message"] = submission_msg
-        except Exception as exc:
-            logger.warning("Assignment/package compilation failed during conversational final confirmation: %s", exc)
+    # Submission is an explicit claimant action ("submit"/"file"), never an implicit
+    # side effect of the LLM's conversational confirmation state. The backend recomputes
+    # readiness and uses a durable unique submission record for exactly-once semantics.
+    if result.get("submit_requested") and claim.status not in {"submitted", "assigned"}:
+        policy_verification = result.get("policy_verification") or {}
+        readiness = build_submission_readiness(db, claim, policy_verification)
+        result["submission_readiness"] = readiness
+        if readiness.get("ready"):
+            try:
+                locked = db.execute(
+                    __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
+                ).scalar_one()
+                existing_submission = db.query(ClaimSubmission).filter(
+                    ClaimSubmission.claim_id == claim.id
+                ).first()
+                if existing_submission:
+                    result["conversation_status"] = "submitted"
+                    result["next_question"] = (
+                        f"Your claim #{claim.ticket_id} has already been submitted. "
+                        "You can follow its progress from Track Claim."
+                    )
+                    result["message"] = result["next_question"]
+                else:
+                    assigned = assign_claim(db, locked, str(claim.claimant_id))
+                    transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
+                    idempotency_key = f"claim:{claim.id}:submission:v1"
+                    db.add(ClaimSubmission(
+                        claim_id=locked.id,
+                        idempotency_key=idempotency_key,
+                        submitted_by=str(claim.claimant_id),
+                        result_json={"ticket_id": locked.ticket_id, "adjuster_id": str(assigned.id)},
+                    ))
+                    claim.status = "submitted"
+                    result["assigned_adjuster_id"] = str(assigned.id)
+                    result["assigned_adjuster_name"] = assigned.name
+                    result["assigned_adjuster"] = {
+                        "id": str(assigned.id), "name": assigned.name,
+                        "specialization": assigned.specialization,
+                    }
+                    result["conversation_status"] = "submitted"
+                    result["status"] = "submitted"
+                    result["conversation_phase"] = "5_completed"
+                    try:
+                        from src.agents.submission_synthesizer import synthesize_claims_package
+                        result["submission_package"] = synthesize_claims_package(result, db, locked)
+                    except Exception as exc:
+                        logger.warning("Submission dossier synthesis failed after durable acceptance: %s", exc)
+                    result["next_question"] = (
+                        f"Your claim #{claim.ticket_id} has been submitted and assigned to "
+                        f"{assigned.name}. You can track its progress from Track Claim."
+                    )
+                    result["message"] = result["next_question"]
+            except Exception as exc:
+                db.rollback()
+                logger.exception("Exactly-once claim submission failed")
+                result["submission_error"] = type(exc).__name__
+                result["next_question"] = (
+                    "I couldn't complete the submission safely just now. Your claim details are saved; "
+                    "please try submitting again."
+                )
+                result["message"] = result["next_question"]
+        else:
+            result["next_question"] = (
+                "Your claim isn't ready to submit yet. "
+                + (", ".join(
+                    str(item.get("label") or item.get("key"))
+                    for item in readiness.get("blocking_requirements", [])
+                ) or "I still need a policy verification or review.")
+                + "."
+            )
+            result["message"] = result["next_question"]
+        result["submit_requested"] = False
 
-    # Continuous Gap & Validation Analysis and 5-phase tracking
+    # Continuous gap/consistency analysis. The phase field below is a legacy UI projection, not workflow authority.
     try:
         from src.agents.gap_analysis import analyze_claim_gaps
         result["gap_analysis"] = analyze_claim_gaps(result)
         if claim.status in {"submitted", "assigned", "under_review", "closed"} or result.get("conversation_status") == "submitted":
             result["conversation_phase"] = "5_completed"
-        elif not result.get("confirmed"):
-            result["conversation_phase"] = "2_verification" if result.get("awaiting_confirmation") else "1_baseline"
+        elif result.get("missing_fields"):
+            result["conversation_phase"] = "1_baseline"
         elif claim.status != "verified":
             result["conversation_phase"] = "2_verification"
         elif dynamic_rem or missing_ev or pending_review:
