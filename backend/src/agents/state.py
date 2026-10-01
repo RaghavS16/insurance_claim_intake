@@ -20,6 +20,7 @@ class ClaimState(TypedDict, total=False):
     confirmed: bool
     awaiting_submission_confirmation: bool
     final_submission_confirmed: bool
+    submit_requested: bool
     message: str
 
     conversation_status: str
