@@ -165,3 +165,59 @@ def record_exception(
     )
     db.add(row)
     return row
+
+
+def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict]) -> None:
+    """Synchronize the current policy-derived manifest into durable requirement rows."""
+    rows = {
+        row.requirement_key: row
+        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
+    }
+    active_keys = set()
+    outstanding_info = {
+        str(x.get("key")) for x in (claim.pipeline_state or {}).get("dynamic_missing", []) if x.get("key")
+    }
+    outstanding_evidence = {
+        str(x.get("key")) for x in (claim.pipeline_state or {}).get("missing_evidence", []) if x.get("key")
+    }
+    pending_review = {
+        str(x.get("key")) for x in (claim.pipeline_state or {}).get("pending_evidence_review", []) if x.get("key")
+    }
+    for req in requirements or []:
+        key = str(req.get("key") or "").strip()
+        if not key:
+            continue
+        active_keys.add(key)
+        row = rows.get(key)
+        if row is None:
+            row = ClaimRequirement(
+                claim_id=str(claim.id),
+                requirement_key=key,
+                label=str(req.get("label") or key),
+                question_hint=req.get("question_hint"),
+                required=bool(req.get("required", True)),
+                evidence_type=req.get("evidence_type"),
+                condition_json={"condition": req.get("condition")},
+                provenance_json=req.get("provenance") or {},
+            )
+            db.add(row)
+            rows[key] = row
+        else:
+            row.label = str(req.get("label") or row.label)
+            row.question_hint = req.get("question_hint") or row.question_hint
+            row.required = bool(req.get("required", row.required))
+            row.evidence_type = req.get("evidence_type") or row.evidence_type
+            row.condition_json = {"condition": req.get("condition")}
+            row.provenance_json = req.get("provenance") or row.provenance_json
+        if key in outstanding_evidence:
+            row.status = "evidence_required"
+        elif key in pending_review:
+            row.status = "review_required"
+        elif key in outstanding_info:
+            row.status = "information_required"
+        else:
+            row.status = "satisfied"
+    if requirements:
+        for key, row in rows.items():
+            if key not in active_keys:
+                row.status = "superseded"
