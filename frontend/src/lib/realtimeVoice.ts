@@ -140,10 +140,6 @@ export class RealtimeVoiceSession {
     }
 
     const answerSdp = await response.text();
-    if (!response.headers.get("X-Voice-Call-Id")) {
-      throw new Error("Voice service did not return a call identifier.");
-    }
-
     await this.pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
   }
 

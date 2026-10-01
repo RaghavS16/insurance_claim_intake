@@ -102,6 +102,7 @@ class VoiceSessionManager:
         self._connections: dict[str, Any] = {}
         self._active_call_by_ticket: dict[str, str] = {}
         self._processed_items: set[tuple[str, str]] = set()
+        self._ready_events: dict[str, asyncio.Event] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -113,10 +114,27 @@ class VoiceSessionManager:
             active = self._active_call_by_ticket.get(ticket_id)
             if active and active != call_id:
                 return False
+
+            if self.events.redis is not None:
+                lock_key = f"voice:lock:{ticket_id}"
+                acquired = await self.events.redis.set(
+                    lock_key,
+                    call_id,
+                    nx=True,
+                    ex=settings.MAX_VOICE_SESSION_SECONDS + 60,
+                )
+                if not acquired:
+                    current = await self.events.redis.get(lock_key)
+                    if current != call_id:
+                        return False
+
             self._active_call_by_ticket[ticket_id] = call_id
             existing = self._tasks.get(call_id)
             if existing and not existing.done():
                 return True
+
+            ready = asyncio.Event()
+            self._ready_events[call_id] = ready
             self._tasks[call_id] = asyncio.create_task(
                 self._run_sideband(
                     call_id=call_id,
@@ -126,7 +144,14 @@ class VoiceSessionManager:
                 ),
                 name=f"voice-sideband-{call_id}",
             )
+
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=8.0)
             return True
+        except asyncio.TimeoutError:
+            logger.warning("Realtime sideband readiness timed out for %s", ticket_id)
+            await self.close(call_id)
+            return False
 
     async def close(self, call_id: str) -> None:
         task = self._tasks.get(call_id)
@@ -185,10 +210,14 @@ class VoiceSessionManager:
                 self._connections[call_id] = ws
                 session_row.status = "active"
                 db.commit()
+                ready = self._ready_events.get(call_id)
+                if ready:
+                    ready.set()
 
                 deadline = time.monotonic() + settings.MAX_VOICE_SESSION_SECONDS
-                async for raw in ws:
-                    if time.monotonic() >= deadline:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         final_status = "timeout"
                         final_reason = "max_session_duration"
                         try:
@@ -196,6 +225,18 @@ class VoiceSessionManager:
                         except Exception:
                             pass
                         break
+
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        final_status = "timeout"
+                        final_reason = "max_session_duration"
+                        try:
+                            await ws.send(json.dumps({"type": "session.close"}))
+                        except Exception:
+                            pass
+                        break
+
                     try:
                         event = json.loads(raw)
                     except (TypeError, json.JSONDecodeError):
@@ -213,6 +254,9 @@ class VoiceSessionManager:
             final_reason = "cancelled"
             raise
         except Exception as exc:
+            ready = self._ready_events.get(call_id)
+            if ready:
+                ready.set()
             final_status = "failed"
             final_reason = type(exc).__name__
             logger.exception("Realtime voice sideband failed for %s", ticket_id)
@@ -226,9 +270,23 @@ class VoiceSessionManager:
                 ),
             )
         finally:
+            ready = self._ready_events.get(call_id)
+            if ready:
+                ready.set()
             self._connections.pop(call_id, None)
             self._mark_session(db, session_row, final_status, final_reason)
             db.close()
+            if self.events.redis is not None:
+                try:
+                    await self.events.redis.eval(
+                        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                        1,
+                        f"voice:lock:{ticket_id}",
+                        call_id,
+                    )
+                except Exception:
+                    logger.debug("Failed to release distributed voice lock for %s", ticket_id, exc_info=True)
+            self._ready_events.pop(call_id, None)
             async with self._lock:
                 if self._active_call_by_ticket.get(ticket_id) == call_id:
                     self._active_call_by_ticket.pop(ticket_id, None)

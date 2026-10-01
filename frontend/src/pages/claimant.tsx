@@ -465,8 +465,8 @@ export default function ClaimantPage() {
       setConfirmed(true);
       setClaimSubmitted(true);
       fetchClaimsList(token);
-      try { wsRef.current?.close(); } catch {}
-      wsRef.current = null;
+      voiceSessionRef.current?.close();
+      voiceSessionRef.current = null;
       await router.push("/claimant/track-claim");
 
     } catch (err: unknown) {
@@ -516,7 +516,7 @@ export default function ClaimantPage() {
     if (isRecording) stopVoiceRecording();
     stopAssistantAudio();
     try {
-      wsRef.current?.close();
+      voiceSessionRef.current?.close();
     } catch {}
     clearAuthToken();
     router.push("/login");
