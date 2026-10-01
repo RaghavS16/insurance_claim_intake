@@ -165,7 +165,10 @@ def synthesize_claims_package(
     if "third party" in event_desc.lower() or "another car" in event_desc.lower() or "other vehicle" in event_desc.lower():
         risk_flags.append("Multi-party incident detected — cross-check third-party liability and subrogation potential.")
 
-    # Do not infer timeliness without an authoritative rule/check.\n    if policy_verif.get("timeliness_verified") is True:\n        risk_flags.append("Temporal consistency: verified against applicable reporting rule.")\n
+    # Do not infer timeliness without an authoritative rule/check.
+    if policy_verif.get("timeliness_verified") is True:
+        risk_flags.append("Temporal consistency: verified against applicable reporting rule.")
+
 
     # 6. Recommended Next Steps for Adjuster
     next_steps: List[str] = []
