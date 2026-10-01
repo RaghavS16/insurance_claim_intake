@@ -45,6 +45,7 @@ interface SessionPayload {
   confirmed?: boolean;
   conversation_phase?: string;
   gap_analysis?: Record<string, unknown>;
+  submission_readiness?: { ready?: boolean; blocking_requirements?: Array<Record<string, unknown>>; exceptions?: Array<Record<string, unknown>>; verification?: Record<string, unknown> };
   conversation?: Array<{ turn: number; speaker: "user" | "agent"; text: string; attachment?: { name: string; size?: number; type?: string } | null; created_at?: string | null }>;
   initial_message?: string;
   resumed?: boolean;
@@ -90,6 +91,7 @@ export default function ClaimantPage() {
   const [mobileTab, setMobileTab] = useState<"chat" | "details">("chat");
   const [conversationPhase, setConversationPhase] = useState("1_baseline");
   const [gapAnalysis, setGapAnalysis] = useState<Record<string, unknown>>({});
+  const [submissionReadiness, setSubmissionReadiness] = useState<SessionPayload["submission_readiness"]>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -632,6 +634,7 @@ export default function ClaimantPage() {
       setExtractedData(data.extracted_data || {});
       setConfirmed(Boolean(data.confirmed));
       setClaimSubmitted(Boolean(data.status === "submitted"));
+      setSubmissionReadiness(data.submission_readiness || {});
       setMissingEvidence(data.missing_evidence || []);
       setEvidenceItems(data.evidence || []);
       if ((data as Record<string, unknown>).conversation_phase) {
@@ -897,6 +900,7 @@ export default function ClaimantPage() {
               ticketId={ticketId}
               conversationPhase={conversationPhase}
               gapAnalysis={gapAnalysis}
+              submissionReadiness={submissionReadiness}
             />
           </div>
         </div>
