@@ -174,6 +174,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
         for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
     }
     active_keys = set()
+    authoritative = str((claim.pipeline_state or {}).get("rag_status") or "") == "OK"
     outstanding_info = {
         str(x.get("key")) for x in (claim.pipeline_state or {}).get("dynamic_missing", []) if x.get("key")
     }
@@ -198,7 +199,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
                 required=bool(req.get("required", True)),
                 evidence_type=req.get("evidence_type"),
                 condition_json={"condition": req.get("condition")},
-                provenance_json=req.get("provenance") or {},
+                provenance_json={**(req.get("provenance") or {}), "authoritative": authoritative},
             )
             db.add(row)
             rows[key] = row
@@ -208,7 +209,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
             row.required = bool(req.get("required", row.required))
             row.evidence_type = req.get("evidence_type") or row.evidence_type
             row.condition_json = {"condition": req.get("condition")}
-            row.provenance_json = req.get("provenance") or row.provenance_json
+            row.provenance_json = {**(req.get("provenance") or row.provenance_json or {}), "authoritative": authoritative}
         if key in outstanding_evidence:
             row.status = "evidence_required"
         elif key in pending_review:
