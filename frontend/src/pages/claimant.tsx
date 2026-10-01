@@ -619,7 +619,7 @@ export default function ClaimantPage() {
     setAgentState("thinking");
     try {
       const activeTid = ticketId || await ensureClaimSession(token);
-      const data = await apiFetch<{ agent_message?: string; extracted_data?: ExtractedData; confirmed?: boolean; status?: string; missing_evidence?: Array<Record<string, unknown>>; evidence?: Array<Record<string, unknown>> }>(
+      const data = await apiFetch<SessionPayload>(
         `/api/v1/claims/${activeTid}/text-turn`,
         {
           method: "POST",
