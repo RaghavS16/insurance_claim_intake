@@ -87,4 +87,8 @@ class ClaimState(TypedDict, total=False):
     chat_intent: Dict[str, Any]
     chat_retrieval: Dict[str, Any]
 
+    # Canonical workflow projections. These are read-only mirrors for the agent/UI;
+    # authoritative persistence lives in Claim/ClaimRequirement/ClaimEvidence and audit tables.
+    requirements: List[Dict[str, Any]]
+    submission_readiness: Dict[str, Any]
     audit_log: List[str]
