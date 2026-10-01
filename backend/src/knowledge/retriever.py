@@ -25,6 +25,7 @@ class KnowledgeRetriever:
         policy = []
         guidance = []
         manifest = []
+        policy_docs = []
         policy_docs_found = False
         # Document-level compilation is authoritative when available, but a DB/cache
         # outage must not disable the existing retrieval path.
