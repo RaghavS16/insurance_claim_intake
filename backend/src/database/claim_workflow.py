@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from src.database.models import Claim, Adjuster
-from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent
+from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence
 
 ALLOWED_TRANSITIONS = {
     "draft": {"pending_confirmation", "pending_verification", "verified", "verification_failed", "escalated"},
@@ -62,3 +62,4 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         new_value_json={"adjuster_id": chosen.id, "reason": "specialization_then_load"},
     ))
     return chosen
+\n\ndef build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:\n    """Return a deterministic readiness decision from durable workflow records.\n\n    This is intentionally independent from LLM conversation flags.\n    """\n    from src.domain.readiness import build_readiness\n\n    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()\n    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()\n    return build_readiness(\n        requirements=requirements,\n        policy_verification=policy_verification,\n        evidence_rows=evidence,\n        exceptions=[],\n    )\n\n\ndef transition_claim_if_allowed(\n    db: Session,\n    claim: Claim,\n    new_status: str,\n    *,\n    actor_user_id: str | None = None,\n    reason: str | None = None,\n) -> Claim:\n    """Explicit named wrapper used by service code to make transitions auditable."""\n    return transition_claim(db, claim, new_status, actor_user_id, reason)\n
