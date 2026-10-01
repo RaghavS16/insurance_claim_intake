@@ -81,8 +81,16 @@ def build_submission_readiness(db: Session, claim: Claim, policy_verification: d
     )
 
 
-def transition_claim_if_allowed(\n    db: Session,\n    claim: Claim,\n    new_status: str,\n    *,\n    actor_user_id: str | None = None,\n    reason: str | None = None,\n) -> Claim:\n    """Explicit named wrapper used by service code to make transitions auditable."""\n    return transition_claim(db, claim, new_status, actor_user_id, reason)\n
-
+def transition_claim_if_allowed(
+    db: Session,
+    claim: Claim,
+    new_status: str,
+    *,
+    actor_user_id: str | None = None,
+    reason: str | None = None,
+) -> Claim:
+    """Explicit named wrapper used by service code to make transitions auditable."""
+    return transition_claim(db, claim, new_status, actor_user_id, reason)
 def persist_canonical_facts(
     db: Session,
     claim: Claim,
