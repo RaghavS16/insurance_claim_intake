@@ -10,7 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
-from src.database.hardening_models import ClaimRequirement, ClaimSubmission
+from src.database.hardening_models import ClaimSubmission
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -270,72 +270,7 @@ async def process_claimant_turn(
 
     result.pop("_workflow_event", None)
 
-    # Persist the RAG-generated requirement plan as durable claim state. The JSON
-    # pipeline_state remains a cache for conversation speed, but requirements are
-    # independently auditable and survive graph/state refactors.
-    requirements = result.get("dynamic_requirements") or []
-    if requirements:
-        existing_rows = {
-            row.requirement_key: row
-            for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
-        }
-        outstanding_dynamic = {str(x.get("key")) for x in (result.get("dynamic_missing") or []) if x.get("key")}
-        outstanding_evidence = {str(x.get("key")) for x in (result.get("missing_evidence") or []) if x.get("key")}
-        pending_review_evidence = {str(x.get("key")) for x in (result.get("pending_evidence_review") or []) if x.get("key")}
-        seen_keys = set()
-        for req in requirements:
-            seen_keys.add(str(req.get("key") or "").strip())
-            key = str(req.get("key") or "").strip()
-            if not key:
-                continue
-            row = existing_rows.get(key)
-            if row is None:
-                row = ClaimRequirement(claim_id=str(claim.id), requirement_key=key,
-                    label=str(req.get("label") or key), question_hint=req.get("question_hint"),
-                    required=bool(req.get("required", True)), evidence_type=req.get("evidence_type"),
-                    condition_json={"condition": req.get("condition")},
-                    provenance_json=req.get("provenance") or {})
-                db.add(row)
-                existing_rows[key] = row
-            else:
-                row.label = str(req.get("label") or row.label)
-                row.question_hint = req.get("question_hint") or row.question_hint
-                row.required = bool(req.get("required", row.required))
-                row.evidence_type = req.get("evidence_type") or row.evidence_type
-                row.condition_json = {"condition": req.get("condition")}
-                row.provenance_json = req.get("provenance") or row.provenance_json
-            if key in outstanding_evidence:
-                row.status = "evidence_required"
-            elif key in pending_review_evidence:
-                row.status = "review_required"
-            elif key in outstanding_dynamic:
-                row.status = "information_required"
-            else:
-                row.status = "satisfied"
-        # If the RAG planner intentionally changed the requirement set (for example
-        # after a corrected insurance type), retain history but stop treating removed
-        # requirements as active blockers.
-        if result.get("rag_status") == "OK":
-            for key, row in existing_rows.items():
-                if key not in seen_keys:
-                    row.status = "superseded"
-    claim.pipeline_state = dict(result)
-    claim.insurance_type = extracted.get("insurance_type")
-    claim.event_description = extracted.get("event_description")
-    claim.event_location = extracted.get("event_location")
-    claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
-    claim.conversation_status = result.get("conversation_status", "collecting")
-    if result.get("extraction_confidence") is not None:
-        claim.extraction_confidence = float(result["extraction_confidence"])
-
-    event_date_str = extracted.get("event_date")
-    if event_date_str:
-        try:
-            claim.event_date = datetime.strptime(str(event_date_str), "%Y-%m-%d").date()
-        except ValueError:
-            logger.warning("Invalid normalized event date: %r", event_date_str)
-    flag_modified(claim, "pipeline_state")
-
+    # Durable requirements were synchronized before submission/readiness evaluation.
     # The claimant-facing answer is authoritative when the turn was a question.
     # Otherwise preserve the normal intake planner response. For mixed messages the
     # RAG answer takes precedence, while extraction/policy/evidence state continues.
