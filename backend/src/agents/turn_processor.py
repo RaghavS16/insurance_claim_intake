@@ -188,7 +188,16 @@ async def process_claimant_turn(
         policy_verification = result.get("policy_verification") or {}
         readiness = build_submission_readiness(db, claim, policy_verification)
         result["submission_readiness"] = readiness
-        if readiness.get("ready"):
+        if readiness.get("ready") and not result.get("final_submission_confirmed"):
+            result["awaiting_submission_confirmation"] = True
+            result["final_submission_confirmed"] = False
+            result["conversation_status"] = "awaiting_submission_confirmation"
+            result["next_question"] = (
+                "I have the required claim information and verified evidence. "
+                "Please review the summary, then say “confirm and submit” when everything is correct."
+            )
+            result["message"] = result["next_question"]
+        elif readiness.get("ready"):
             try:
                 locked = db.execute(
                     __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
@@ -209,6 +218,7 @@ async def process_claimant_turn(
                     idempotency_key = f"claim:{claim.id}:submission:v1"
                     db.add(ClaimSubmission(
                         claim_id=locked.id,
+                        tenant_id=str(locked.tenant_id or ""),
                         idempotency_key=idempotency_key,
                         submitted_by=str(claim.claimant_id),
                         result_json={"ticket_id": locked.ticket_id, "adjuster_id": str(assigned.id)},
