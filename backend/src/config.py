@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     OTP_MAX_ATTEMPTS: int = Field(5, ge=1, le=20)
     OTP_RESEND_COOLDOWN_SECONDS: int = Field(60, ge=0)
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = Field(10, ge=1, le=60)
+    MFA_CHALLENGE_EXPIRE_SECONDS: int = Field(120, ge=30, le=600)
+    MFA_MAX_ATTEMPTS: int = Field(5, ge=1, le=10)
+    MFA_ISSUER: str = "InsureClaim AI"
+    MFA_ENCRYPTION_KEY: Optional[str] = None
+    MFA_RECOVERY_CODE_COUNT: int = Field(10, ge=5, le=20)
 
     DATABASE_URL: str = Field("postgresql://postgres:DBpassword@localhost:5433/insurance_claims")
     DB_POOL_SIZE: int = Field(5, ge=1, le=50)
