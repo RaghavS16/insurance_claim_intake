@@ -52,6 +52,7 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.setdefault("sv", 1)
     to_encode.update({
         "jti": str(uuid.uuid4()),
         "exp": int(expire.timestamp()),
