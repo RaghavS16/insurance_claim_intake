@@ -58,7 +58,10 @@ jobs:
           os.environ["SECRET_KEY"]="test-secret-key-at-least-32-characters-long"
           os.environ["DATABASE_URL"]="postgresql://postgres:test@localhost:5432/insurance_claims"
           from src.database.models import Base
-          required = {"claims", "claim_assignments", "claim_requirements", "claim_evidence", "claim_submissions", "voice_sessions", "webauthn_credentials"}
+          required = {
+              "claims", "claim_assignments", "claim_requirements", "claim_evidence",
+              "claim_submissions", "voice_sessions", "webauthn_credentials"
+          }
           actual = set(Base.metadata.tables)
           missing = required - actual
           assert not missing, missing
@@ -108,9 +111,85 @@ jobs:
       - name: Terraform validate
         run: terraform validate
 
+  supply-chain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build --pull -t insurance-claim-intake:${{ github.sha }} ./backend
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: insurance-claim-intake:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: insurance-claim-intake:${{ github.sha }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.cdx.json
+
+  dr-restore:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: insurance_claims
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d insurance_claims"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      ENVIRONMENT: test
+      DEBUG: "true"
+      SECRET_KEY: test-secret-key-at-least-32-characters-long
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/insurance_claims
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+      - name: Apply schema
+        run: alembic upgrade head
+      - name: Execute restore drill
+        run: python scripts/restore_drill.py
+      - name: Upload DR report
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-dr-report-${{ github.sha }}
+          path: /tmp/insurance_claims_dr_report.json
+
   production-release-gate:
     runs-on: ubuntu-latest
-    needs: [static-and-unit, infrastructure-validation, voice-webrtc]
+    needs: [static-and-unit, voice-webrtc, infrastructure-validation, supply-chain, dr-restore]
     steps:
-      - name: Backend and infrastructure gates passed
-        run: echo "Backend production gates and infrastructure validation passed; frontend is intentionally deferred."
+      - name: Production release gate
+        run: |
+          echo "Backend, voice, infrastructure, supply-chain, and DR gates passed."
+          echo "Frontend is intentionally deferred per the current hardening scope."
