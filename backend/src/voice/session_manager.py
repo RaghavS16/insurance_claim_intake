@@ -180,6 +180,7 @@ class VoiceSessionManager:
                 call_id=call_id,
                 provider="pipecat_local",
                 model=model,
+                worker_id=worker_id,
             ),
         )
         return True
@@ -256,6 +257,8 @@ class VoiceSessionManager:
             row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id).first()
             if row:
                 row.status = "active"
+                row.worker_id = settings.VOICE_WORKER_ID
+                row.lease_expires_at = datetime.now(timezone.utc)
                 db.commit()
 
             await asyncio.wait_for(
@@ -345,6 +348,20 @@ class VoiceSessionManager:
         if int(result or 0) != 1:
             return False
         await self.events.redis.set(f"voice:active:{ticket_id}", call_id, ex=settings.MAX_VOICE_SESSION_SECONDS + 60)
+        db = SessionLocal()
+        try:
+            row = db.query(VoiceSession).filter(
+                VoiceSession.call_id == call_id,
+                VoiceSession.tenant_id.is_not(None),
+            ).first()
+            if row:
+                row.lease_expires_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:
+            db.rollback()
+            logger.debug("Failed to persist voice lease heartbeat.", exc_info=True)
+        finally:
+            db.close()
         return True
 
     async def close(self, call_id: str) -> None:
