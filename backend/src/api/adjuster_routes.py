@@ -46,7 +46,7 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
             a=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if a:
             a.claims_assigned=(a.claims_assigned or 0)+1
-            db.add(ClaimAssignment(claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
+            db.add(ClaimAssignment(tenant_id=str(c.tenant_id), claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
             state["assigned_adjuster_id"]=str(a.id)
             state["assigned_adjuster_name"]=a.name
             c.pipeline_state=state
@@ -225,7 +225,7 @@ def resolve_exception(ticket_id: str, exception_id: str, request: Request, user:
     row.status = "resolved"
     row.resolved_at = datetime.now(timezone.utc)
     row.resolution_json = {"resolved_by": str(current_user.id), "resolved_at": row.resolved_at.isoformat()}
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
+    db.add(ClaimAuditEvent(tenant_id=str(claim.tenant_id), claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
                            new_value_json={"exception_id": str(row.id)}, reason="Adjuster resolved blocking exception"))
     db.commit()
     return {"success": True, "exception_id": str(row.id), "status": row.status}
@@ -251,14 +251,14 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
             raise HTTPException(status_code=400, detail="Invalid priority.")
         state["priority"]=payload.priority
     if payload.note:
-        db.add(ClaimNote(claim_id=str(c.id), author_user_id=str(user.id), note=payload.note, visibility="internal"))
+        db.add(ClaimNote(tenant_id=str(c.tenant_id), claim_id=str(c.id), author_user_id=str(user.id), note=payload.note, visibility="internal"))
     if payload.status:
         try:
             transition_claim(db, c, payload.status, str(user.id), "adjuster workflow update")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
     c.pipeline_state=state
-    db.add(ClaimAuditEvent(claim_id=str(c.id), actor_user_id=str(user.id), event_type="claim_updated",
+    db.add(ClaimAuditEvent(tenant_id=str(c.tenant_id), claim_id=str(c.id), actor_user_id=str(user.id), event_type="claim_updated",
                            new_value_json={"priority":state.get("priority"),"status":c.status}))
     db.commit(); db.refresh(c)
     return _item(c)
@@ -572,7 +572,7 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
     adjuster = _ensure_assigned_adjuster(c, user, db)
     if c.status in {"approved", "partially_approved", "rejected", "closed"}:
         raise HTTPException(status_code=409, detail="Evidence cannot be requested after a final claim outcome.")
-    row = ClaimEvidenceRequest(claim_id=str(c.id), adjuster_id=str(adjuster.id), request_text=payload.request_text.strip(), status="open")
+    row = ClaimEvidenceRequest(tenant_id=str(c.tenant_id), claim_id=str(c.id), adjuster_id=str(adjuster.id), request_text=payload.request_text.strip(), status="open")
     db.add(row)
     if c.status in {"submitted", "assigned", "under_review"}:
         transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
@@ -628,6 +628,7 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     row = ClaimDecision(
+        tenant_id=str(c.tenant_id),
         claim_id=str(claim.id), adjuster_id=str(adjuster.id), decision=payload.decision,
         rationale=payload.rationale, approved_amount=payload.approved_amount,
         ai_recommendation_json=(claim.pipeline_state or {}).get("copilot") or {},
@@ -647,10 +648,10 @@ def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: S
     current_user = _resolve_adjuster(request, db)
     claim = get_claim_or_404(db, ticket_id)
     _ensure_assigned_adjuster(claim, current_user, db)
-    note = ClaimNote(claim_id=str(claim.id), author_user_id=str(current_user.id),
+    note = ClaimNote(tenant_id=str(claim.tenant_id), claim_id=str(claim.id), author_user_id=str(current_user.id),
                      note=payload.note, visibility=payload.visibility)
     db.add(note)
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id),
+    db.add(ClaimAuditEvent(tenant_id=str(claim.tenant_id), claim_id=str(claim.id), actor_user_id=str(current_user.id),
                            event_type="note_added", new_value_json={"note_id": note.id}))
     db.commit()
     return {"id": note.id, "created_at": note.created_at.isoformat(), "visibility": note.visibility}
