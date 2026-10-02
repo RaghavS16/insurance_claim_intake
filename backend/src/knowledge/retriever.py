@@ -5,12 +5,16 @@ from .requirements import get_requirements_from_context, get_provisional_require
 from .store import search, list_policy_documents, get_document_chunks, get_cached_requirement_manifest, save_requirement_manifest
 from .reranker import rerank
 from .policy_compiler import compile_policy_requirements, resolve_requirement_manifest
+from src.services.ai_governance import assert_model_allowed
 
 class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
     def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None) -> dict:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise KnowledgeRetrievalError("tenant_id is required for knowledge retrieval.")
         facts = dict(claim_facts or {})
         incident_description = str(query or facts.get("event_description") or "").strip()
         searchable_facts = " ".join(
