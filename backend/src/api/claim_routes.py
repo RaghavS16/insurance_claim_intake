@@ -173,6 +173,7 @@ def create_new_claim_session(request: Request, payload: Optional[VoiceSessionReq
         init_extracted["policy_id"] = payload.policy_number.strip().upper()
     claim = Claim(
         ticket_id=ticket_id,
+        tenant_id=str(current_user.tenant_id),
         claimant_id=current_user.id,
         customer_id=str(current_user.id),
         input_mode="text",
