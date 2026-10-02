@@ -190,6 +190,8 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
             policy_number=data.get("policy_id"),
             incident_date=incident_date,
             claim_facts=data,
+            tenant_id=state.get("tenant_id"),
+            jurisdiction=state.get("jurisdiction"),
         )
         state["rag_answer"] = str(result.get("answer") or "").strip()
         state["rag_answer_sources"] = list(result.get("sources") or [])
