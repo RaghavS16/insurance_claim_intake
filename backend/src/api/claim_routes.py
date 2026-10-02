@@ -22,6 +22,7 @@ from src.agents.turn_processor import ClaimTurnConflict
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.utils.upload_limits import read_limited
+from src.utils.clamav import scan_bytes
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
@@ -564,6 +565,9 @@ async def respond_to_evidence_request(
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
         try:
             content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+            clean, scan_reason = scan_bytes(content)
+            if not clean:
+                raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
         except ValueError as exc:
             raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
         s3 = put_bytes(
@@ -639,6 +643,9 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         raise HTTPException(status_code=400, detail="Unsupported evidence format.")
     try:
         content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+        clean, scan_reason = scan_bytes(content)
+        if not clean:
+            raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
     except ValueError as exc:
         raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
     valid_file, file_reason = validate_evidence_file(content, file.filename)
