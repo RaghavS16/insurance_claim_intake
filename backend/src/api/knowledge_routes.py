@@ -133,5 +133,6 @@ def publish_document(
     from datetime import datetime, timezone
     meta["published_at"] = datetime.now(timezone.utc).isoformat()
     doc.metadata_json = meta
+    db.add(SystemAuditEvent(tenant_id=str(user.tenant_id), actor_user_id=str(user.id), event_type="knowledge.document_published", resource_type="knowledge_document", resource_id=str(doc.id), action="publish", metadata_json={"source_name": doc.source_name, "policy_version": meta.get("policy_version")}))
     db.commit()
     return {"document_id": str(doc.id), "publication_status": "published"}
