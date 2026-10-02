@@ -330,19 +330,14 @@ def logout(request: Request, db: Session = Depends(get_db)):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        revoke_token(token)
-        # Optionally persist revoked token to DB if valid payload exists
         try:
-            payload = verify_token(token)
-            jti = payload.get("jti") if payload else token
-            exp_ts = payload.get("exp") if payload else None
+            import jwt as _jwt
+            payload = _jwt.decode(token, options={"verify_signature": False})
+            revoke_token(token)
+            jti = payload.get("jti") or token
+            exp_ts = payload.get("exp")
             exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
-            revoked = RevokedToken(
-                token_jti=jti or token,
-                user_id=payload.get("sub") if payload else None,
-                expires_at=exp_dt,
-            )
-            db.add(revoked)
+            db.add(RevokedToken(token_jti=jti, user_id=payload.get("sub"), expires_at=exp_dt))
             db.commit()
         except Exception:
             db.rollback()
