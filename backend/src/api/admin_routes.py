@@ -548,7 +548,7 @@ def delete_adjuster(
             detail=f"Cannot delete adjuster with {adjuster.claims_assigned} active assigned claims. Deactivate the adjuster account instead.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
 
     db.delete(adjuster)
     if user:
