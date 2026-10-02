@@ -40,6 +40,11 @@ def authenticate_token(token: str, db: Session) -> User:
     current_version = int(getattr(user, "session_version", 1) or 1)
     if token_version != current_version:
         raise HTTPException(status_code=401, detail="Session is no longer valid.")
+    token_tenant = str(payload.get("tenant_id") or "")
+    if token_tenant and token_tenant != str(user.tenant_id or ""):
+        raise HTTPException(status_code=401, detail="Session tenant context is no longer valid.")
+    if not getattr(user, "tenant_id", None):
+        raise HTTPException(status_code=403, detail="Tenant membership is required.")
     return user
 
 def token_payload(token: str) -> Optional[dict]:
