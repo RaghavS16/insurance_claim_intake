@@ -33,6 +33,7 @@ jobs:
       SECRET_KEY: test-secret-key-at-least-32-characters-long
       DATABASE_URL: postgresql://postgres:test@localhost:5432/insurance_claims
       REDIS_URL: redis://localhost:6379/0
+      REQUIRE_MIGRATIONS_IN_PRODUCTION: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,11 +41,53 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Compile
-        run: python -m compileall src
+      - name: Compile application and tests
+        run: python -m compileall src tests scripts
+      - name: Validate AI evaluation manifest
+        run: python scripts/validate_ai_eval_manifest.py
       - name: Migration upgrade from empty database
         run: alembic upgrade head
       - name: Migration idempotency
         run: alembic upgrade head
+      - name: ORM metadata check
+        run: python - <<'PY'
+import os
+os.environ["ENVIRONMENT"]="test"
+os.environ["DEBUG"]="true"
+os.environ["SECRET_KEY"]="test-secret-key-at-least-32-characters-long"
+os.environ["DATABASE_URL"]="postgresql://postgres:test@localhost:5432/insurance_claims"
+from src.database.models import Base
+required = {"claims", "claim_assignments", "claim_requirements", "claim_evidence", "claim_submissions", "voice_sessions", "webauthn_credentials"}
+actual = set(Base.metadata.tables)
+missing = required - actual
+assert not missing, missing
+print("ORM metadata validation passed")
+PY
       - name: Tests
         run: pytest -q
+      - name: Backend smoke import
+        run: python -c "from src.api.main import app; assert app.title"
+
+  infrastructure-validation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+      - name: Terraform init
+        run: terraform init -backend=false
+      - name: Terraform validate
+        run: terraform validate
+
+  production-release-gate:
+    runs-on: ubuntu-latest
+    needs: [static-and-unit, infrastructure-validation]
+    steps:
+      - name: Backend and infrastructure gates passed
+        run: echo "Backend production gates and infrastructure validation passed; frontend is intentionally deferred."
