@@ -196,12 +196,15 @@ def resolve_bearer_user(
     return user
 
 
-def get_claim_or_404(db: Session, ticket_id: str) -> Claim:
+def get_claim_or_404(db: Session, ticket_id: str, tenant_id: str | None = None) -> Claim:
     """Fetch a Claim by ticket_id and raise HTTP 404 if not found.
 
     Replaces the repeated pattern::
 
-        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+        query = db.query(Claim).filter(Claim.ticket_id == ticket_id)
+    if tenant_id:
+        query = query.filter(Claim.tenant_id == tenant_id)
+    claim = query.first()
         if not claim:
             raise HTTPException(status_code=404, detail="Claim not found.")
     """
@@ -211,12 +214,15 @@ def get_claim_or_404(db: Session, ticket_id: str) -> Claim:
     return claim
 
 
-def get_adjuster_or_404(db: Session, adjuster_id: str) -> Adjuster:
+def get_adjuster_or_404(db: Session, adjuster_id: str, tenant_id: str | None = None) -> Adjuster:
     """Fetch an Adjuster by id and raise HTTP 404 if not found.
 
     Replaces the repeated pattern::
 
-        adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+        query = db.query(Adjuster).filter(Adjuster.id == adjuster_id)
+    if tenant_id:
+        query = query.filter(Adjuster.tenant_id == tenant_id)
+    adjuster = query.first()
         if not adjuster:
             raise HTTPException(status_code=404, detail="Adjuster not found.")
     """
