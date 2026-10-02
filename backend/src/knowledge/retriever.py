@@ -358,6 +358,8 @@ class KnowledgeRetriever:
                     question,
                     document_types=document_types,
                     limit=max(top_k * 2, 8),
+                    tenant_id=tenant_id,
+                    jurisdiction=jurisdiction,
                 )
             except Exception:
                 rows = []
