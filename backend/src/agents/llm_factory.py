@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from src.config import settings
 from src.utils.logger import app_logger
+from src.services.ai_governance import assert_model_allowed
 
 logger = app_logger
 
@@ -210,6 +211,9 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
 def _build_ollama(model_name: str | None = None) -> BaseChatModel:
     requested = model_name or settings.OLLAMA_MODEL or "qwen2.5:7b-instruct"
     resolved = _resolve_ollama_model(settings.OLLAMA_BASE_URL, requested)
+    if settings.ENVIRONMENT in {"production", "staging"} and not settings.AI_ALLOW_LOCAL_FALLBACK:
+        raise RuntimeError("Local Ollama fallback is disabled by AI governance.")
+    assert_model_allowed(resolved)
     return ChatOllama(
         base_url=settings.OLLAMA_BASE_URL,
         model=resolved,
@@ -229,8 +233,10 @@ def _get_google_api_key() -> str:
 
 def _build_gemini(model_name: str | None = None) -> BaseChatModel:
     """Build a direct Google Gemini client wrapped with automatic Ollama fallback."""
+    resolved_model = model_name or settings.GEMINI_MODEL
+    assert_model_allowed(resolved_model)
     gemini_client = ChatGoogleGenerativeAI(
-        model=model_name or settings.GEMINI_MODEL,
+        model=resolved_model,
         google_api_key=_get_google_api_key(),
         max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
@@ -249,6 +255,7 @@ def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatMo
     if "openrouter.ai" in base_url.lower():
         raise RuntimeError("OpenRouter is not supported by the production LLM routing path.")
     model = model_name.strip()
+    assert_model_allowed(model)
     if ":" not in model:
         raise RuntimeError("Hugging Face routing requires a provider-qualified model such as openai/gpt-oss-20b:groq.")
     primary = ChatOpenAI(
@@ -265,8 +272,10 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
         raise RuntimeError("OpenRouter is not supported by the production routing path.")
     if not settings.CLOUD_LLM_API_KEY:
         raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
+    resolved_model = model_name or settings.CLOUD_LLM_MODEL
+    assert_model_allowed(resolved_model)
     primary = ChatOpenAI(
-        model=model_name or settings.CLOUD_LLM_MODEL,
+        model=resolved_model,
         api_key=settings.CLOUD_LLM_API_KEY, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
     )
@@ -276,6 +285,7 @@ def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
     """Optional emergency direct-Groq path; HF is the production default."""
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
+    assert_model_allowed(model_name)
     primary = ChatOpenAI(
         model=model_name, api_key=settings.GROQ_API_KEY,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
