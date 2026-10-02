@@ -27,6 +27,8 @@ class Base(DeclarativeBase):
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
     id: Mapped[str] = _UUID(primary_key=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    jurisdiction: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     source_name: Mapped[str] = mapped_column(String, nullable=False)
     source_uri: Mapped[str] = mapped_column(String, nullable=False)
     document_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
@@ -89,6 +91,7 @@ class Policy(Base):
 class RevokedToken(Base):
     __tablename__ = "revoked_tokens"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     token_jti: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     user_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -97,6 +100,7 @@ class RevokedToken(Base):
 class PolicyLinkAudit(Base):
     __tablename__ = "policy_link_audit"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False, index=True)
     policy_number: Mapped[str] = mapped_column(String, nullable=False, index=True)
     outcome: Mapped[str] = mapped_column(String, nullable=False)
@@ -117,6 +121,8 @@ class Adjuster(Base):
 class Claim(Base):
     __tablename__ = "claims"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    final_submission_confirmation_digest: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    final_submission_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     ticket_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     claimant_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True, default=None, index=True)
@@ -164,6 +170,7 @@ class VoiceSession(Base):
 class PasswordResetOTP(Base):
     __tablename__ = "password_reset_otps"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False)
     otp_hash: Mapped[str] = mapped_column(String, nullable=False)
     purpose: Mapped[str] = mapped_column(String(40), nullable=False, default="password_reset")
@@ -176,6 +183,7 @@ class PasswordResetOTP(Base):
 class ConversationTurn(Base):
     __tablename__ = "conversation_turns"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, default=None, index=True)
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
     event_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
