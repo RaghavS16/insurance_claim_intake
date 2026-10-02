@@ -91,6 +91,8 @@ def downgrade() -> None:
             op.drop_column("conversation_turns", "event_id")
     if "claims" in inspector.get_table_names() and "state_version" in {c["name"] for c in inspector.get_columns("claims")}:
         op.drop_column("claims", "state_version")
+    if "password_reset_otps" in inspector.get_table_names() and "purpose" in {c["name"] for c in inspector.get_columns("password_reset_otps")}:
+        op.drop_column("password_reset_otps", "purpose")
     if "users" in inspector.get_table_names():
         for name in ("mfa_required", "last_login_at", "session_version", "email_verified_at"):
             if name in {c["name"] for c in inspector.get_columns("users")}:
