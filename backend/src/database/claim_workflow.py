@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from src.database.models import Claim, Adjuster
 from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmission
+from src.services.outbox import enqueue
 
 ALLOWED_TRANSITIONS = {
     "draft": {"pending_confirmation", "pending_verification", "verified", "verification_failed", "escalated"},
@@ -34,6 +35,14 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
         claim_id=claim.id, actor_user_id=actor_user_id, event_type="status_changed",
         old_value_json={"status": old}, new_value_json={"status": new_status}, reason=reason,
     ))
+    enqueue(
+        db,
+        event_type="claim.status_changed",
+        aggregate_type="claim",
+        aggregate_id=str(claim.id),
+        payload={"old_status": old, "new_status": new_status, "actor_user_id": actor_user_id, "reason": reason},
+        idempotency_key=f"claim:{claim.id}:status:{claim.state_version}:{new_status}",
+    )
     return claim
 
 def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) -> Adjuster:
@@ -61,6 +70,14 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         claim_id=claim.id, actor_user_id=actor_user_id, event_type="assigned",
         new_value_json={"adjuster_id": chosen.id, "reason": "specialization_then_load"},
     ))
+    enqueue(
+        db,
+        event_type="claim.assigned",
+        aggregate_type="claim",
+        aggregate_id=str(claim.id),
+        payload={"adjuster_id": str(chosen.id), "actor_user_id": actor_user_id},
+        idempotency_key=f"claim:{claim.id}:assignment:{chosen.id}",
+    )
     return chosen
 
 
