@@ -203,7 +203,7 @@ def start_voice_session(request: Request, payload: Optional[VoiceSessionRequest]
     current_user = _resolve_user(request, db)
     resumable = (
         db.query(Claim)
-        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id)
         .filter(Claim.status.in_(["draft", "pending_confirmation"]))
         .order_by(Claim.updated_at.desc())
         .first()
@@ -440,6 +440,17 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
+
+    if payload is not None and payload.confirmed is False:
+        state = dict(claim.pipeline_state or {})
+        state["confirmed"] = False
+        state["awaiting_confirmation"] = True
+        state["awaiting_submission_confirmation"] = True
+        state["conversation_status"] = "pending_confirmation"
+        claim.conversation_status = "pending_confirmation"
+        claim.pipeline_state = state
+        db.commit()
+        return {**_claim_payload(claim), "message": "No problem. Tell me what you would like to correct, and I will update it."}
 
     if claim.status in {"submitted", "assigned", "under_review", "pending_evidence", "approved", "partially_approved", "rejected", "closed"}:
         existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id, ClaimSubmission.tenant_id == claim.tenant_id).first()
