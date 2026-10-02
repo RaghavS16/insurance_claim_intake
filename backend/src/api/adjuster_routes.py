@@ -99,7 +99,7 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
     adj = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
     if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
         return adj
-    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.adjuster_id == adj.id).first():
+    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
         return adj
     if str(assigned_id) == str(user.id):
         a = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
@@ -173,13 +173,14 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
 
     claims = q.order_by(Claim.updated_at.desc()).all()
     if user.role == "ADJUSTER":
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == user.tenant_id).first()
         assigned_ids = set()
         if adjuster:
             assigned_ids = {
                 str(x.claim_id)
                 for x in db.query(ClaimAssignment).filter(
-                    ClaimAssignment.adjuster_id == adjuster.id
+                    ClaimAssignment.adjuster_id == adjuster.id,
+                    ClaimAssignment.tenant_id == user.tenant_id,
                 ).all()
             }
         claims = [
