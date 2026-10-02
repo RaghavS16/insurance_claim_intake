@@ -11,6 +11,7 @@ def _uuid(): return str(uuid.uuid4())
 
 class ClaimAssignment(Base):
     __tablename__="claim_assignments"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     __table_args__=(Index("ix_claim_assignments_active","claim_id","is_active"),Index("ix_claim_assignments_adjuster","adjuster_id","is_active"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
@@ -23,6 +24,7 @@ class ClaimAssignment(Base):
 
 class ClaimRequirement(Base):
     __tablename__="claim_requirements"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     __table_args__=(UniqueConstraint("claim_id","requirement_key",name="uq_claim_requirement_key"),)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
@@ -39,6 +41,7 @@ class ClaimRequirement(Base):
 
 class ClaimEvidence(Base):
     __tablename__="claim_evidence"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     __table_args__=(Index("ix_claim_evidence_claim","claim_id"),Index("ix_claim_evidence_status","status"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
@@ -62,6 +65,7 @@ class ClaimEvidence(Base):
 
 class ClaimEvidenceRequest(Base):
     __tablename__="claim_evidence_requests"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     __table_args__=(Index("ix_claim_evidence_requests_claim","claim_id"), Index("ix_claim_evidence_requests_status","status"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
@@ -74,6 +78,7 @@ class ClaimEvidenceRequest(Base):
 
 class ClaimDecision(Base):
     __tablename__="claim_decisions"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     adjuster_id: Mapped[str]=mapped_column(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
@@ -85,6 +90,7 @@ class ClaimDecision(Base):
 
 class ClaimNote(Base):
     __tablename__="claim_notes"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     author_user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="RESTRICT"),nullable=False)
@@ -94,6 +100,7 @@ class ClaimNote(Base):
 
 class ClaimAuditEvent(Base):
     __tablename__="claim_audit_events"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     actor_user_id: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
@@ -105,6 +112,7 @@ class ClaimAuditEvent(Base):
 
 class CopilotAnalysis(Base):
     __tablename__="copilot_analyses"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     claim_version: Mapped[int]=mapped_column(Integer,nullable=False,default=1)
@@ -116,135 +124,146 @@ class CopilotAnalysis(Base):
     stale: Mapped[bool]=mapped_column(Boolean,nullable=False,default=False,index=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
 
-
 class ClaimFact(Base):
-    """Canonical claim fact with explicit provenance and lifecycle state."""
-    __tablename__ = "claim_facts"
-    __table_args__ = (
-        UniqueConstraint("claim_id", "fact_key", name="uq_claim_fact_key"),
-        Index("ix_claim_facts_claim", "claim_id"),
-        Index("ix_claim_facts_state", "state"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
-    fact_key: Mapped[str] = mapped_column(String(150), nullable=False)
-    value_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    state: Mapped[str] = mapped_column(String(40), nullable=False, default="PROPOSED")
-    source_type: Mapped[str] = mapped_column(String(60), nullable=False)
-    source_id: Mapped[Optional[str]] = mapped_column(String(150))
-    confidence: Mapped[Optional[float]] = mapped_column()
-    provenance_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
-
+    __tablename__="claim_facts"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(UniqueConstraint("claim_id","fact_key",name="uq_claim_fact_key"),Index("ix_claim_facts_claim","claim_id"),Index("ix_claim_facts_state","state"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
+    fact_key: Mapped[str]=mapped_column(String(150),nullable=False)
+    value_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
+    state: Mapped[str]=mapped_column(String(40),nullable=False,default="PROPOSED")
+    source_type: Mapped[str]=mapped_column(String(60),nullable=False)
+    source_id: Mapped[Optional[str]]=mapped_column(String(150))
+    confidence: Mapped[Optional[float]]=mapped_column()
+    provenance_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
+    version: Mapped[int]=mapped_column(Integer,nullable=False,default=1)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now,onupdate=_now)
 
 class ClaimException(Base):
-    """Durable exception/hold requiring human or deterministic resolution."""
-    __tablename__ = "claim_exceptions"
-    __table_args__ = (
-        Index("ix_claim_exceptions_claim", "claim_id", "blocking", "status"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
-    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    severity: Mapped[str] = mapped_column(String(30), nullable=False, default="medium")
-    reason: Mapped[str] = mapped_column(Text, nullable=False)
-    source_type: Mapped[str] = mapped_column(String(60), nullable=False, default="SYSTEM_RULE")
-    source_id: Mapped[Optional[str]] = mapped_column(String(150))
-    blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open")
-    resolution_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
+    __tablename__="claim_exceptions"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(Index("ix_claim_exceptions_claim","claim_id","blocking","status"),)
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
+    event_type: Mapped[str]=mapped_column(String(100),nullable=False)
+    severity: Mapped[str]=mapped_column(String(30),nullable=False,default="medium")
+    reason: Mapped[str]=mapped_column(Text,nullable=False)
+    source_type: Mapped[str]=mapped_column(String(60),nullable=False,default="SYSTEM_RULE")
+    source_id: Mapped[Optional[str]]=mapped_column(String(150))
+    blocking: Mapped[bool]=mapped_column(Boolean,nullable=False,default=True)
+    status: Mapped[str]=mapped_column(String(30),nullable=False,default="open")
+    resolution_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    resolved_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
 
 class ClaimSubmission(Base):
-    """Exactly-once submission record for an accepted claim."""
-    __tablename__ = "claim_submissions"
-    __table_args__ = (
-        UniqueConstraint("claim_id", name="uq_claim_submission_claim"),
-        UniqueConstraint("idempotency_key", name="uq_claim_submission_idempotency"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
-    status: Mapped[str] = mapped_column(String(40), nullable=False, default="accepted")
-    submitted_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"))
-    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-    result_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-
+    __tablename__="claim_submissions"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(UniqueConstraint("claim_id",name="uq_claim_submission_claim"),UniqueConstraint("idempotency_key",name="uq_claim_submission_idempotency"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
+    idempotency_key: Mapped[str]=mapped_column(String(200),nullable=False)
+    status: Mapped[str]=mapped_column(String(40),nullable=False,default="accepted")
+    submitted_by: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
+    submitted_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    result_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
 
 class OutboxEvent(Base):
-    """Durable transactional event for work that must survive process restarts."""
-    __tablename__ = "outbox_events"
-    __table_args__ = (
-        Index("ix_outbox_events_dispatch", "status", "next_attempt_at"),
-        UniqueConstraint("idempotency_key", name="uq_outbox_events_idempotency"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    event_type: Mapped[str] = mapped_column(String(150), nullable=False)
-    aggregate_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    aggregate_id: Mapped[str] = mapped_column(String(150), nullable=False)
-    payload_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
-    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_error: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-
+    __tablename__="outbox_events"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(Index("ix_outbox_events_dispatch","status","next_attempt_at"),UniqueConstraint("idempotency_key",name="uq_outbox_events_idempotency"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    event_type: Mapped[str]=mapped_column(String(150),nullable=False)
+    aggregate_type: Mapped[str]=mapped_column(String(100),nullable=False)
+    aggregate_id: Mapped[str]=mapped_column(String(150),nullable=False)
+    payload_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
+    idempotency_key: Mapped[str]=mapped_column(String(200),nullable=False)
+    status: Mapped[str]=mapped_column(String(30),nullable=False,default="pending",index=True)
+    attempts: Mapped[int]=mapped_column(Integer,nullable=False,default=0)
+    next_attempt_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now,index=True)
+    locked_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]]=mapped_column(Text)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    last_error: Mapped[Optional[str]]=mapped_column(Text)
 
 class MFAChallenge(Base):
-    """Short-lived server-side MFA challenge issued after password verification."""
-    __tablename__ = "mfa_challenges"
-    __table_args__ = (
-        UniqueConstraint("challenge_token_hash", name="uq_mfa_challenge_token_hash"),
-        Index("ix_mfa_challenges_user_expires", "user_id", "expires_at"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    challenge_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-
+    __tablename__="mfa_challenges"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(UniqueConstraint("challenge_token_hash",name="uq_mfa_challenge_token_hash"),Index("ix_mfa_challenges_user_expires","user_id","expires_at"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    user_id: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="CASCADE"),nullable=False)
+    challenge_token_hash: Mapped[str]=mapped_column(String(128),nullable=False)
+    expires_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False)
+    attempts: Mapped[int]=mapped_column(Integer,nullable=False,default=0)
+    consumed: Mapped[bool]=mapped_column(Boolean,nullable=False,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
 
 class MFARecoveryCode(Base):
-    """One-time recovery code stored only as a hash."""
-    __tablename__ = "mfa_recovery_codes"
-    __table_args__ = (
-        UniqueConstraint("user_id", "code_hash", name="uq_mfa_recovery_user_code"),
-        Index("ix_mfa_recovery_user", "user_id", "consumed"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    __tablename__="mfa_recovery_codes"
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    __table_args__=(UniqueConstraint("user_id","code_hash",name="uq_mfa_recovery_user_code"),Index("ix_mfa_recovery_user","user_id","consumed"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    user_id: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="CASCADE"),nullable=False)
+    code_hash: Mapped[str]=mapped_column(String(128),nullable=False)
+    consumed: Mapped[bool]=mapped_column(Boolean,nullable=False,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
 
+class RefreshToken(Base):
+    __tablename__="refresh_tokens"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    user_id: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="CASCADE"),nullable=False,index=True)
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,index=True)
+    token_hash: Mapped[str]=mapped_column(String(64),nullable=False,unique=True,index=True)
+    family_id: Mapped[str]=mapped_column(String(36),nullable=False,index=True)
+    expires_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,index=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+    used_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
+    replaced_by: Mapped[Optional[str]]=mapped_column(String(36))
+
+class ClaimSubmissionConfirmation(Base):
+    __tablename__="claim_submission_confirmations"
+    __table_args__=(UniqueConstraint("claim_id",name="uq_claim_submission_confirmation"),)
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,index=True)
+    confirmed_by: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="RESTRICT"),nullable=False)
+    claim_state_version: Mapped[int]=mapped_column(Integer,nullable=False)
+    summary_sha256: Mapped[str]=mapped_column(String(64),nullable=False)
+    confirmed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+
+class SystemAuditEvent(Base):
+    __tablename__="system_audit_events"
+    __table_args__=(UniqueConstraint("tenant_id","sequence_no",name="uq_system_audit_sequence"),Index("ix_system_audit_tenant_created","tenant_id","created_at"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,index=True)
+    actor_user_id: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
+    event_type: Mapped[str]=mapped_column(String(120),nullable=False,index=True)
+    resource_type: Mapped[str]=mapped_column(String(80),nullable=False)
+    resource_id: Mapped[Optional[str]]=mapped_column(String(150))
+    action: Mapped[str]=mapped_column(String(80),nullable=False)
+    payload_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
+    sequence_no: Mapped[int]=mapped_column(Integer,nullable=False)
+    previous_hash: Mapped[Optional[str]]=mapped_column(String(64))
+    event_hash: Mapped[str]=mapped_column(String(64),nullable=False,unique=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
 
 class Tenant(Base):
-    """Tenant boundary for all claimant/adjuster data."""
-    __tablename__ = "tenants"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
-
+    __tablename__="tenants"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    name: Mapped[str]=mapped_column(String(200),nullable=False)
+    status: Mapped[str]=mapped_column(String(30),nullable=False,default="active")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
 
 class TenantMembership(Base):
-    __tablename__ = "tenant_memberships"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "user_id", name="uq_tenant_membership"),
-        Index("ix_tenant_membership_user", "user_id"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    role: Mapped[str] = mapped_column(String(40), nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    __tablename__="tenant_memberships"
+    __table_args__=(UniqueConstraint("tenant_id","user_id",name="uq_tenant_membership"),Index("ix_tenant_membership_user","user_id"))
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,index=True)
+    user_id: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="CASCADE"),nullable=False)
+    role: Mapped[str]=mapped_column(String(40),nullable=False)
+    status: Mapped[str]=mapped_column(String(30),nullable=False,default="active")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
