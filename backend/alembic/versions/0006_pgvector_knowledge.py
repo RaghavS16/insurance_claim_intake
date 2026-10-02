@@ -9,6 +9,12 @@ branch_labels=None
 depends_on=None
 
 def upgrade():
+    # The 0000 baseline creates the canonical ORM schema on fresh databases.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        baseline = bind.execute(sa.text("SELECT to_regclass('public.schema_baseline')")).scalar()
+        if baseline:
+            return
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.create_table(
         "knowledge_documents",
