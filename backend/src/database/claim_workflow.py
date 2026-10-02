@@ -32,6 +32,7 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
         raise ValueError(f"Invalid claim transition: {old} -> {new_status}")
     claim.status = new_status
     db.add(ClaimAuditEvent(
+        tenant_id=claim.tenant_id,
         claim_id=claim.id, actor_user_id=actor_user_id, event_type="status_changed",
         old_value_json={"status": old}, new_value_json={"status": new_status}, reason=reason,
     ))
@@ -47,7 +48,7 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
 
 def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) -> Adjuster:
     active = db.execute(select(ClaimAssignment).where(
-        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
+        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True), ClaimAssignment.tenant_id == claim.tenant_id
     )).scalar_one_or_none()
     if active:
         raise ValueError("Claim already has an active assignment")
@@ -63,6 +64,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         claims_assigned=Adjuster.claims_assigned + 1
     ))
     db.add(ClaimAssignment(
+        tenant_id=claim.tenant_id,
         claim_id=claim.id, adjuster_id=chosen.id, assigned_by=actor_user_id,
         reason="specialization_then_load",
     ))
@@ -84,10 +86,11 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
 def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:
     """Return deterministic readiness from durable requirements, evidence and exceptions."""
     from src.domain.readiness import build_readiness
-    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()
+    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id, ClaimRequirement.tenant_id == claim.tenant_id).all()
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id, ClaimEvidence.tenant_id == claim.tenant_id).all()
     exceptions = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
+        ClaimException.tenant_id == claim.tenant_id,
         ClaimException.status == "open",
     ).all()
     return build_readiness(
@@ -129,6 +132,7 @@ def persist_canonical_facts(
         row = rows.get(str(key))
         if row is None:
             row = ClaimFact(
+                tenant_id=claim.tenant_id,
                 claim_id=str(claim.id),
                 fact_key=str(key),
                 value_json={"value": value},
@@ -171,6 +175,7 @@ def record_exception(
 ) -> ClaimException:
     existing = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
+        ClaimException.tenant_id == claim.tenant_id,
         ClaimException.event_type == event_type,
         ClaimException.status == "open",
     ).first()
@@ -180,6 +185,7 @@ def record_exception(
         existing.blocking = blocking
         return existing
     row = ClaimException(
+        tenant_id=claim.tenant_id,
         claim_id=str(claim.id),
         event_type=event_type,
         reason=reason,
@@ -217,6 +223,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
         row = rows.get(key)
         if row is None:
             row = ClaimRequirement(
+                tenant_id=claim.tenant_id,
                 claim_id=str(claim.id),
                 requirement_key=key,
                 label=str(req.get("label") or key),
