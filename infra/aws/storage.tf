@@ -1,8 +1,8 @@
 resource "aws_kms_key" "data" {
-  description         = "Encryption for claim evidence and database"
+  description             = "Encryption for claim evidence and database"
   deletion_window_in_days = 30
-  enable_key_rotation = true
-  tags                = local.tags
+  enable_key_rotation     = true
+  tags                    = local.tags
 }
 
 resource "aws_kms_alias" "data" {
@@ -16,10 +16,10 @@ resource "aws_s3_bucket" "evidence" {
 }
 
 resource "aws_s3_bucket_public_access_block" "evidence" {
-  bucket                 = aws_s3_bucket.evidence.id
-  block_public_acls      = true
-  block_public_policy    = true
-  ignore_public_acls     = true
+  bucket                  = aws_s3_bucket.evidence.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
@@ -102,31 +102,31 @@ resource "aws_s3_bucket_ownership_controls" "evidence" {
 resource "aws_s3_bucket_policy" "evidence" {
   bucket = aws_s3_bucket.evidence.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
+  policy    = jsonencode({
+    Version   = "2012-10-17"
     Statement = [
       {
         Sid       = "DenyInsecureTransport"
         Effect    = "Deny"
         Principal = "*"
         Action    = "s3:*"
-        Resource = [
+        Resource  = [
           aws_s3_bucket.evidence.arn,
           "${aws_s3_bucket.evidence.arn}/*"
         ]
         Condition = {
-          Bool = {
+          Bool      = {
             "aws:SecureTransport" = "false"
           }
         }
       },
       {
-        Sid       = "DenyUnencryptedObjectUploads"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.evidence.arn}/*"
-        Condition = {
+        Sid             = "DenyUnencryptedObjectUploads"
+        Effect          = "Deny"
+        Principal       = "*"
+        Action          = "s3:PutObject"
+        Resource        = "${aws_s3_bucket.evidence.arn}/*"
+        Condition       = {
           StringNotEquals = {
             "s3:x-amz-server-side-encryption" = "aws:kms"
           }
