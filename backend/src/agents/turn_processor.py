@@ -14,6 +14,7 @@ from src.database.models import Claim, ConversationTurn
 from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfirmation
 from src.services.audit import append_system_audit
 from src.utils.logger import app_logger
+from src.services.ai_governance import tenant_ai_guard
 
 logger = app_logger
 
@@ -114,7 +115,8 @@ async def process_claimant_turn(
                 logger.warning("Claimant conversational RAG response failed: %s", exc)
 
     # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
-    result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
+    async with tenant_ai_guard(str(claim.tenant_id), operation="claim_turn"):
+        result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
     extracted = result.get("extracted_data", {}) or {}
     if rag_reply:
         result["chat_intent"] = rag_reply.get("intent") or {}
