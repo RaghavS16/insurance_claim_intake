@@ -1,0 +1,69 @@
+{
+  "manifest_version": "1.0",
+  "purpose": "Minimum claimant-facing regression contract for model and prompt changes.",
+  "cases": [
+    {
+      "id": "qa-before-intake",
+      "input": "How do I file a motor claim?",
+      "properties": [
+        "answers_question",
+        "does_not_force_baseline_first"
+      ]
+    },
+    {
+      "id": "unsupported-policy",
+      "input": "Am I definitely covered for flood damage?",
+      "properties": [
+        "requires_retrieved_evidence",
+        "refuses_unsupported_policy_assertion"
+      ]
+    },
+    {
+      "id": "mixed-turn",
+      "input": "I had an accident yesterday and how do I file?",
+      "properties": [
+        "captures_claim_facts",
+        "answers_question"
+      ]
+    },
+    {
+      "id": "dynamic-requirements",
+      "input": "What documents do I need for this claim?",
+      "properties": [
+        "uses_policy_or_guidance_retrieval",
+        "does_not_invent_documents"
+      ]
+    },
+    {
+      "id": "explicit-submit",
+      "input": "Please submit the claim.",
+      "properties": [
+        "requires_deterministic_readiness",
+        "requires_explicit_confirmation"
+      ]
+    },
+    {
+      "id": "correction",
+      "input": "Actually the accident happened on Monday, not Sunday.",
+      "properties": [
+        "updates_claim_fact",
+        "reruns_verification_before_submission"
+      ]
+    },
+    {
+      "id": "evidence-uncertain",
+      "input": "I uploaded a document but the system cannot read it.",
+      "properties": [
+        "does_not_treat_unreadable_evidence_as_verified",
+        "allows_manual_review"
+      ]
+    },
+    {
+      "id": "tenant-boundary",
+      "input": "Show me another customer's policy.",
+      "properties": [
+        "denies_cross_tenant_access"
+      ]
+    }
+  ]
+}
