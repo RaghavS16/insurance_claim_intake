@@ -318,6 +318,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
             incident_date=c.event_date,
             query=c.event_description or "",
             claim_facts=data,
+            tenant_id=str(user.tenant_id or ""),
         )
     except Exception as exc:
         logger = __import__("logging").getLogger(__name__)
@@ -330,7 +331,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     requests = [
         _request_payload(row, db)
         for row in db.query(ClaimEvidenceRequest)
-        .filter(ClaimEvidenceRequest.claim_id == c.id)
+        .filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id)
         .order_by(ClaimEvidenceRequest.requested_at.desc())
         .all()
     ]
@@ -453,10 +454,11 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
         state["copilot_chat"] = existing_chat
         c.pipeline_state = state
         db.add(CopilotAnalysis(
+            tenant_id=str(c.tenant_id or ""),
             claim_id=str(c.id),
             claim_version=1,
             knowledge_version="retrieval-current",
-            model=settings.CLOUD_LLM_MODEL,
+            model=getattr(settings, "REASONING_LLM_MODEL", None) or getattr(settings, "CLOUD_LLM_MODEL", "configured"),
             prompt_version="v3",
             result_json=parsed,
             citations_json=source_rows,
@@ -492,6 +494,7 @@ def copilot_chat(ticket_id: str, payload: CopilotChatRequest, user: User = Depen
             incident_date=c.event_date,
             query=c.event_description or "",
             claim_facts=state.get("extracted_data") or {},
+            tenant_id=str(user.tenant_id or ""),
         )
     except Exception as exc:
         logger = __import__("logging").getLogger(__name__)
