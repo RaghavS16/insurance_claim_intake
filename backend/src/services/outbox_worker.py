@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from src.database.session import SessionLocal
 from src.database.hardening_models import OutboxEvent
+from src.utils.logger import app_logger
 from src.services.outbox import mark_processed, mark_retry
 
 async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
@@ -26,7 +27,7 @@ async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
                 row.processed_at=datetime.now(timezone.utc)
                 continue
             try:
-                result=handler(row.payload_json)
+                result=handler(row)
                 if asyncio.iscoroutine(result):
                     await result
                 mark_processed(row)
@@ -44,13 +45,18 @@ async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
 async def run_worker(handlers: dict[str, object], poll_seconds: float = 1.0) -> None:
     while True:
         try:
-            await dispatch_once(handlers)
+            processed = await dispatch_once(handlers)
+            if processed == 0:
+                await asyncio.sleep(poll_seconds)
         except Exception:
-            # The worker remains alive; individual events are retried transactionally.
-            pass
-        await asyncio.sleep(poll_seconds)
+            app_logger.exception("Outbox worker cycle failed")
+            await asyncio.sleep(poll_seconds)
+
+
+async def _main() -> None:
+    from src.services.outbox_handlers import HANDLERS
+    await run_worker(HANDLERS)
+
 
 if __name__ == "__main__":
-    async def _main() -> None:
-        await run_worker({})
     asyncio.run(_main())
