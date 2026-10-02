@@ -1,0 +1,28 @@
+name: Security Scan
+on:
+  push:
+    branches: [production-grade-hardening-2026-10]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  python-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - run: pip install pip-audit bandit
+      - run: pip-audit -r backend/requirements.txt --strict
+      - run: bandit -r backend/src -ll -iii
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
