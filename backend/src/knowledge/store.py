@@ -438,8 +438,10 @@ def list_policy_documents(
                 "source_name": row.source_name,
                 "source_uri": row.source_uri,
                 "insurance_type": row.insurance_type,
-                "metadata": {**dict(row.metadata_json or {}), "page_number": row.page_number, "section_number": row.section_number, "clause_number": row.clause_number, "citation_label": row.citation_label},
-                "policy_version": (row.metadata_json or {}).get("policy_version"),
+                "metadata": dict(row.metadata_json or {}),
+                "policy_version": (row.metadata_json or {}).get("policy_version") or row.document_version,
+                "jurisdiction": row.jurisdiction,
+                "document_version": row.document_version,
             }
             for row in rows
         ]
@@ -461,7 +463,7 @@ def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[
                 "chunk_id": str(row.id),
                 "chunk_index": row.chunk_index,
                 "text": row.text,
-                "metadata": dict(row.metadata_json or {}),
+                "metadata": {**dict(row.metadata_json or {}), "page_number": row.page_number, "section_number": row.section_number, "clause_number": row.clause_number, "citation_label": row.citation_label},
             }
             for row in rows
         ]
