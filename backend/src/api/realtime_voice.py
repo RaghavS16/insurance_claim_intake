@@ -27,7 +27,7 @@ def _validate_claim_access(db: Session, ticket_id: str, user: User) -> Claim:
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     try:
-        enforce_claim_ownership(claim, user)
+        enforce_claim_ownership(claim, user, db)
     except Exception as exc:
         raise HTTPException(status_code=403, detail="Claim access denied.") from exc
     return claim
