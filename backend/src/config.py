@@ -95,7 +95,8 @@ class Settings(BaseSettings):
     AWS_SESSION_TOKEN: Optional[str] = None
     S3_BUCKET: Optional[str] = None
     S3_ENDPOINT_URL: Optional[str] = None
-    S3_SERVER_SIDE_ENCRYPTION: str = "AES256"
+    S3_SERVER_SIDE_ENCRYPTION: str = "aws:kms"
+    S3_KMS_KEY_ID: Optional[str] = None
     S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
     S3_EVIDENCE_PREFIX: str = "claims"
@@ -233,6 +234,8 @@ class Settings(BaseSettings):
             raise RuntimeError("SMTP_HOST is required when email verification is enabled.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.S3_SERVER_SIDE_ENCRYPTION == "aws:kms" and not self.S3_KMS_KEY_ID:
+            raise RuntimeError("S3_KMS_KEY_ID is required when S3_SERVER_SIDE_ENCRYPTION=aws:kms.")
         if self.ENVIRONMENT in ("production", "staging") and self.LLM_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):
             raise RuntimeError("A Gemini/Google API key is required when LLM_PROVIDER=gemini.")
         hf_needed = (
