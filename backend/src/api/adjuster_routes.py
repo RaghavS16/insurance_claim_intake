@@ -99,7 +99,7 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
     adj = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
     if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
         return adj
-    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id, ClaimAssignment.tenant_id == claim.tenant_id).first():
+    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
         return adj
     if str(assigned_id) == str(user.id):
         a = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
