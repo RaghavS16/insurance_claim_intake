@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import User, PasswordResetOTP, RevokedToken
-from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant, TenantMembership, RefreshToken
+from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant, TenantMembership, RefreshToken, WebAuthnCredential
 from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
@@ -25,6 +25,7 @@ from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, send_otp_ema
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 from src.api.deps import get_current_user
+from src.services.passkey import registration_options, verify_registration, authentication_options, verify_authentication
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
@@ -115,9 +116,9 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
     return user, replacement
 
 
-def _auth_response(user: User, refresh_token: str) -> dict:
+def _auth_response(user: User, refresh_token: str, *, amr: list[str] | None = None, mfa_authenticated: bool = False) -> dict:
     return {
-        "access_token": create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": True}),
+        "access_token": create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": mfa_authenticated, "amr": amr or []}),
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {"id": str(user.id), "full_name": user.full_name, "email": user.email, "role": user.role},
@@ -235,7 +236,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
     refresh_token = _issue_refresh_token(db, user)
     db.commit()
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": True})
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": False, "amr": ["pwd"]})
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -406,6 +407,120 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
     return {"reset_token": reset_token, "message": "Code verified. Use this token to set a new password."}
 
 
+
+# ---------------------------------------------------------------------------
+# WebAuthn / passkeys
+# ---------------------------------------------------------------------------
+class PasskeyRegistrationVerifyRequest(BaseModel):
+    challenge_id: str = Field(..., min_length=20, max_length=64)
+    credential: dict
+
+
+class PasskeyAuthenticationOptionsRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+
+
+class PasskeyAuthenticationVerifyRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    challenge_id: str = Field(..., min_length=20, max_length=64)
+    credential: dict
+
+
+@router.post("/passkey/registration/options")
+def passkey_registration_options(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not settings.PASSKEY_ENABLED:
+        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
+    try:
+        return registration_options(db, current_user)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Passkey registration options failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Passkey registration is temporarily unavailable.")
+
+
+@router.post("/passkey/registration/verify")
+def passkey_registration_verify(
+    payload: PasskeyRegistrationVerifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not settings.PASSKEY_ENABLED:
+        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
+    try:
+        saved = verify_registration(db, current_user, payload.challenge_id, payload.credential)
+        return {"registered": True, "credential_id": saved.credential_id}
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Passkey registration verification failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=401, detail="Passkey registration could not be verified.")
+
+
+@router.post("/passkey/auth/options")
+def passkey_authentication_options(payload: PasskeyAuthenticationOptionsRequest, request: Request, db: Session = Depends(get_db)):
+    if not settings.PASSKEY_ENABLED:
+        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
+    enforce_rate_limit(request, action="passkey_options", max_requests=10, window_seconds=60)
+    try:
+        clean_email = validate_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None), User.status == "active").first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    try:
+        return authentication_options(db, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Passkey authentication options failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Passkey authentication is temporarily unavailable.")
+
+
+@router.post("/passkey/auth/verify")
+def passkey_authentication_verify(
+    payload: PasskeyAuthenticationVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    if not settings.PASSKEY_ENABLED:
+        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
+    enforce_rate_limit(request, action="passkey_verify", max_requests=10, window_seconds=60)
+    try:
+        clean_email = validate_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None), User.status == "active").first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    try:
+        verify_authentication(db, user, payload.challenge_id, payload.credential)
+    except ValueError:
+        db.rollback()
+        raise HTTPException(status_code=401, detail="Invalid passkey authentication.")
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Passkey authentication failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=401, detail="Invalid passkey authentication.")
+    user.last_login_at = datetime.now(timezone.utc)
+    user.session_version = int(getattr(user, "session_version", 1) or 1)
+    refresh = _issue_refresh_token(db, user)
+    db.commit()
+    return _auth_response(user, refresh, amr=["webauthn"], mfa_authenticated=True)
+
+
+@router.get("/passkey/status")
+def passkey_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    count = db.query(WebAuthnCredential).filter(
+        WebAuthnCredential.user_id == current_user.id,
+        WebAuthnCredential.tenant_id == current_user.tenant_id,
+    ).count()
+    return {"enabled": settings.PASSKEY_ENABLED, "registered": count > 0, "credential_count": count}
+
+
 # ---------------------------------------------------------------------------
 # Forgot Password: Step 3 — Reset password using verified token
 # ---------------------------------------------------------------------------
@@ -558,7 +673,7 @@ def verify_mfa(payload: MFAVerifyRequest, request: Request, db: Session = Depend
     challenge.consumed = True
     refresh = _issue_refresh_token(db, user)
     db.commit()
-    return _auth_response(user, refresh)
+    return _auth_response(user, refresh, amr=["pwd", "totp"], mfa_authenticated=True)
 
 
 @router.post("/mfa/recover")
@@ -595,7 +710,7 @@ def mfa_recover(payload: dict, request: Request, db: Session = Depends(get_db)):
     challenge.consumed = True
     refresh = _issue_refresh_token(db, user)
     db.commit()
-    return _auth_response(user, refresh)
+    return _auth_response(user, refresh, amr=["pwd", "recovery_code"], mfa_authenticated=True)
 
 
 @router.post("/logout")
