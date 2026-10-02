@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
+from src.config import settings
 from src.database.models import Claim, ConversationTurn
 from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfirmation
 from src.services.audit import append_system_audit
