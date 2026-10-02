@@ -15,7 +15,7 @@ resource "aws_db_instance" "postgres" {
   multi_az                        = true
   publicly_accessible             = false
   skip_final_snapshot             = false
-  copy_tags_to_snapshot            = true
+  copy_tags_to_snapshot           = true
   auto_minor_version_upgrade      = true
   apply_immediately               = false
   db_subnet_group_name            = aws_db_subnet_group.postgres.name
@@ -25,16 +25,16 @@ resource "aws_db_instance" "postgres" {
 }
 
 resource "aws_elasticache_replication_group" "redis" {
-  replication_group_id          = replace("${local.name}-redis", "_", "-")
-  description                   = "HA Redis for sessions, rate limits and voice coordination"
-  node_type                     = var.redis_node_type
-  num_cache_clusters            = 2
-  automatic_failover_enabled    = true
-  multi_az_enabled              = true
-  at_rest_encryption_enabled   = true
-  transit_encryption_enabled    = true
-  kms_key_id                    = aws_kms_key.data.arn
-  subnet_group_name             = aws_elasticache_subnet_group.redis.name
-  security_group_ids            = [aws_security_group.redis.id]
-  tags                          = local.tags
+  replication_group_id       = replace("${local.name}-redis", "_", "-")
+  description                = "HA Redis for sessions, rate limits and voice coordination"
+  node_type                  = var.redis_node_type
+  num_cache_clusters         = 2
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
+  kms_key_id                 = aws_kms_key.data.arn
+  subnet_group_name          = aws_elasticache_subnet_group.redis.name
+  security_group_ids         = [aws_security_group.redis.id]
+  tags                       = local.tags
 }
