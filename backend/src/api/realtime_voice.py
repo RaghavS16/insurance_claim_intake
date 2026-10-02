@@ -65,7 +65,7 @@ async def create_realtime_session(
         "ticket_id": ticket_id,
         "provider": "pipecat_local",
         "transport": "small_webrtc",
-        "worker_id": settings.VOICE_WORKER_ID,
+        "worker_id": voice_session_manager.worker_id(),
     })
     response.set_cookie(
         settings.VOICE_STICKY_COOKIE_NAME,
