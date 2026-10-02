@@ -50,6 +50,7 @@ class KnowledgeChunk(Base):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -68,6 +69,7 @@ class User(Base):
 class Policy(Base):
     __tablename__ = "policies"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     policy_number: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     customer_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True, default=None, index=True)
     policy_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
@@ -104,6 +106,7 @@ class PolicyLinkAudit(Base):
 class Adjuster(Base):
     __tablename__ = "adjusters"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -114,6 +117,7 @@ class Adjuster(Base):
 class Claim(Base):
     __tablename__ = "claims"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     ticket_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     claimant_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True, default=None, index=True)
     customer_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, default=None, index=True)
@@ -145,6 +149,7 @@ class VoiceSession(Base):
     """Durable metadata for managed realtime voice sessions."""
     __tablename__ = "voice_sessions"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     call_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
