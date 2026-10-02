@@ -42,30 +42,50 @@ class EvidenceAnalysis(BaseModel):
     consistency_notes: list[str] = Field(default_factory=list)
 
 
-def _extract_image_text(content: bytes, filename: str) -> str:
-    """OCR raster evidence using the same local OCR stack used by knowledge ingestion."""
+def _ocr_worker(content: bytes, queue) -> None:
     try:
         from PIL import Image
         from rapidocr_onnxruntime import RapidOCR
-        image = Image.open(io.BytesIO(content)).convert("RGB")
-        # RapidOCR accepts an ndarray/PIL-compatible image in supported versions.
         import numpy as np
-        def _run_ocr():
-            return RapidOCR()(np.asarray(image))
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_run_ocr)
-            try:
-                result, _ = future.result(timeout=settings.MAX_OCR_SECONDS)
-            except FuturesTimeoutError as exc:
-                raise TimeoutError("Image OCR exceeded the configured time limit.") from exc
-        if not result:
-            return ""
-        return " ".join(str(row[1]) for row in result if isinstance(row, (list, tuple)) and len(row) > 1).strip()
+
+        image = Image.open(io.BytesIO(content)).convert("RGB")
+        result, _ = RapidOCR()(np.asarray(image))
+        text = " ".join(
+            str(row[1])
+            for row in (result or [])
+            if isinstance(row, (list, tuple)) and len(row) > 1
+        ).strip()
+        queue.put({"ok": True, "text": text})
     except Exception as exc:
-        logger.warning("Evidence OCR failed for %s: %s", filename, exc)
+        queue.put({"ok": False, "error": type(exc).__name__})
+
+
+def _extract_image_text(content: bytes, filename: str) -> str:
+    """OCR raster evidence in an isolated worker with a hard execution timeout."""
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn" if os.name == "nt" else "fork")
+    queue = ctx.Queue(maxsize=1)
+    process = ctx.Process(target=_ocr_worker, args=(content, queue), daemon=True)
+    process.start()
+    process.join(timeout=settings.MAX_OCR_SECONDS)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2)
+        logger.warning("Evidence OCR timed out for %s", filename)
         return ""
-
-
+    try:
+        result = queue.get_nowait()
+    except Exception:
+        return ""
+    if result.get("ok"):
+        return str(result.get("text") or "")
+    logger.warning(
+        "Evidence OCR failed for %s (%s)",
+        filename,
+        result.get("error") or "unknown",
+    )
+    return ""
 def validate_evidence_file(content: bytes, filename: str) -> tuple[bool, str]:
     """Validate payload signatures; never trust browser MIME or filename alone."""
     if not content:
