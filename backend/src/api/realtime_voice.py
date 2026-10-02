@@ -184,6 +184,17 @@ async def voice_events(websocket: WebSocket, ticket_id: str):
             pass
 
 
+@router.post("/heartbeat/{ticket_id}/{call_id}")
+async def voice_heartbeat(ticket_id: str, call_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _validate_claim_access(db, ticket_id, current_user)
+    active = await voice_session_manager.active_call(ticket_id)
+    if active != call_id:
+        raise HTTPException(status_code=409, detail="Voice session ownership has changed.")
+    renewed = await voice_session_manager.heartbeat(ticket_id=ticket_id, call_id=call_id)
+    if not renewed:
+        raise HTTPException(status_code=409, detail="Voice session lease expired or is owned by another worker.")
+    return {"call_id": call_id, "lease_renewed": True}
+
 @router.post("/close/{ticket_id}")
 async def close_voice_session(
     ticket_id: str,
