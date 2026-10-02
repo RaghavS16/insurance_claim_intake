@@ -159,7 +159,7 @@ def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
         payload["turn_count"] = turn_count
         result.append(payload)
-    total = db.query(Claim).filter(Claim.claimant_id == current_user.id).count()
+    total = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id).count()
     return {"items": result, "total": total, "limit": limit, "offset": offset}
 
 
@@ -222,6 +222,7 @@ def start_voice_session(request: Request, payload: Optional[VoiceSessionRequest]
         init_extracted["policy_id"] = payload.policy_number.strip().upper()
     claim = Claim(
         ticket_id=ticket_id,
+        tenant_id=str(current_user.tenant_id or ""),
         claimant_id=current_user.id,
         customer_id=str(current_user.id),
         input_mode="voice",
