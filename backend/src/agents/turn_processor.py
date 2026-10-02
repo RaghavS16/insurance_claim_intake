@@ -271,6 +271,10 @@ async def process_claimant_turn(
                 result["message"] = result["next_question"]
             result["submit_requested"] = False
 
+    # Keep the durable claim-state cache synchronized after any verification/submission mutations.
+    claim.pipeline_state = dict(result)
+    flag_modified(claim, "pipeline_state")
+
     # Continuous gap/consistency analysis. The phase field below is a legacy UI projection, not workflow authority.
     try:
         from src.agents.gap_analysis import analyze_claim_gaps
