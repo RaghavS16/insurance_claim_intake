@@ -27,7 +27,7 @@ from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
 from src.evidence.verifier import verify_evidence, validate_evidence_file
-from src.storage.s3 import put_bytes
+from src.storage.s3 import put_bytes, quarantine_bytes, promote_quarantined
 from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness, record_exception
 from src.api.deps import get_current_user, resolve_bearer_user
 
@@ -566,17 +566,25 @@ async def respond_to_evidence_request(
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
         try:
             content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+            quarantine = await asyncio.to_thread(
+                quarantine_bytes,
+                content,
+                ticket_id=ticket_id,
+                filename=file.filename or "evidence",
+                content_type=file.content_type or "application/octet-stream",
+            )
             clean, scan_reason = await asyncio.to_thread(scan_bytes, content)
             if not clean:
                 raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
+            s3 = await asyncio.to_thread(
+                promote_quarantined,
+                quarantine["key"],
+                ticket_id=ticket_id,
+                filename=file.filename or "evidence",
+                content_type=file.content_type or "application/octet-stream",
+            )
         except ValueError as exc:
             raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
-        s3 = put_bytes(
-            content,
-            prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}",
-            filename=file.filename or "evidence",
-            content_type=file.content_type or "application/octet-stream"
-        )
         evidence = ClaimEvidence(
             claim_id=str(claim.id),
             uploaded_by=str(current_user.id),
