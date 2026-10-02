@@ -137,6 +137,7 @@ def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[s
         "priority":state.get("priority","normal"), "assigned_adjuster_id":state.get("assigned_adjuster_id"),
         "assigned_adjuster_name":adjuster.name if adjuster else state.get("assigned_adjuster_name"),
         "claimant_confirmed":bool(state.get("confirmed")),
+        "final_submission_confirmed":bool(state.get("final_submission_confirmed")),
         "policy_verified":bool((state.get("policy_verification") or {}).get("valid")),
         "dynamic_requirements_complete":not bool(state.get("dynamic_missing")),
         "facts": facts, "requirements": requirements, "evidence": evidence,
@@ -158,47 +159,89 @@ def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
 
 @router.get("/queue")
 def queue(status: str | None = None, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    """Return tenant-scoped claims with SLA/aging metadata."""
     valid_queue_statuses = [
-        "submitted",
-        "pending_adjuster",
-        "assigned",
-        "under_review",
-        "pending_evidence",
-        "approved",
-        "partially_approved",
-        "rejected",
-        "escalated",
-        "closed",
+        "submitted","pending_adjuster","assigned","under_review",
+        "pending_evidence","approved","partially_approved","rejected","escalated","closed",
     ]
-    if status and status.lower() != "all":
-        q = db.query(Claim).filter(Claim.tenant_id == user.tenant_id, Claim.status == status.lower())
-    else:
-        q = db.query(Claim).filter(Claim.tenant_id == user.tenant_id, Claim.status.in_(valid_queue_statuses))
-
-    claims = q.order_by(Claim.updated_at.desc()).all()
-    claims = [c for c in claims if str(c.tenant_id) == str(user.tenant_id)]
+    requested = status.lower() if status else "all"
+    if requested != "all" and requested not in valid_queue_statuses:
+        raise HTTPException(status_code=400, detail="Invalid queue status.")
+    statuses = valid_queue_statuses if requested == "all" else [requested]
+    q = db.query(Claim).filter(
+        Claim.tenant_id == user.tenant_id,
+        Claim.status.in_(statuses),
+    )
+    claims = q.order_by(Claim.updated_at.asc()).all()
     if user.role == "ADJUSTER":
         adjuster = db.query(Adjuster).filter(
             Adjuster.email == user.email,
             Adjuster.tenant_id == user.tenant_id,
+            Adjuster.is_active.is_(True),
         ).first()
         assigned_ids = set()
         if adjuster:
             assigned_ids = {
-                str(x.claim_id)
-                for x in db.query(ClaimAssignment).filter(
+                str(row.claim_id)
+                for row in db.query(ClaimAssignment).filter(
                     ClaimAssignment.adjuster_id == adjuster.id,
                     ClaimAssignment.tenant_id == user.tenant_id,
                     ClaimAssignment.is_active.is_(True),
                 ).all()
             }
-        claims = [
-            c for c in claims
-            if str(c.id) in assigned_ids
-            or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id")) in {str(adjuster.id), str(user.id)})
-            or str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
-        ]
-    return {"items": [_item(c, db=db) for c in claims], "total": len(claims)}
+        claims = [claim for claim in claims if str(claim.id) in assigned_ids]
+
+    now = datetime.now(timezone.utc)
+    sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
+    items = []
+    for claim in claims:
+        updated = claim.updated_at
+        updated_utc = updated.replace(tzinfo=timezone.utc) if updated and updated.tzinfo is None else updated
+        age_hours = round(max(0.0, (now - updated_utc).total_seconds() / 3600.0), 2) if updated_utc else 0.0
+        item = _item(claim, db=db)
+        item.update({
+            "age_hours": age_hours,
+            "sla_hours": sla_hours,
+            "sla_breached": age_hours > sla_hours and claim.status not in {"approved","rejected","closed"},
+            "next_action": (
+                "review_evidence" if claim.status == "pending_evidence"
+                else "make_decision" if claim.status == "under_review"
+                else "open_claim"
+            ),
+        })
+        items.append(item)
+    return {
+        "items": items,
+        "total": len(items),
+        "queue_counts": {s: sum(1 for claim in claims if claim.status == s) for s in valid_queue_statuses},
+    }
+
+
+@router.get("/next-claim")
+def next_claim(user: User = Depends(_guard), db: Session = Depends(get_db)):
+    """Return the oldest active assignment for deterministic next-claim processing."""
+    if user.role != "ADJUSTER":
+        raise HTTPException(status_code=403, detail="Next-claim workflow is for adjusters.")
+    adjuster = db.query(Adjuster).filter(
+        Adjuster.email == user.email,
+        Adjuster.tenant_id == user.tenant_id,
+        Adjuster.is_active.is_(True),
+    ).first()
+    if not adjuster:
+        raise HTTPException(status_code=403, detail="Active adjuster profile not found.")
+    assignment = db.query(ClaimAssignment).filter(
+        ClaimAssignment.adjuster_id == adjuster.id,
+        ClaimAssignment.tenant_id == user.tenant_id,
+        ClaimAssignment.is_active.is_(True),
+    ).order_by(ClaimAssignment.assigned_at.asc()).first()
+    if not assignment:
+        return {"claim": None}
+    claim = db.query(Claim).filter(
+        Claim.id == assignment.claim_id,
+        Claim.tenant_id == user.tenant_id,
+    ).first()
+    return {"claim": _item(claim, adjuster, db) if claim else None}
+
 
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
