@@ -21,6 +21,7 @@ from src.knowledge.store import _extract_text
 from src.utils.document_safety import enforce_document_limits, enforce_extracted_text_limit
 
 logger = logging.getLogger(__name__)
+from src.services.observability import record_evidence_verification
 
 
 class EvidenceExtractedField(BaseModel):
@@ -267,4 +268,5 @@ Rules:
     data["extracted_text_length"] = len(text)
     data["requested_evidence_type"] = requested_evidence.get("evidence_type")
     data["requested_requirement_key"] = requested_evidence.get("key") or requested_evidence.get("requirement_key")
+    record_evidence_verification(status=data["verification_status"])
     return data
