@@ -101,6 +101,15 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             detail="Account creation failed. Please try again.",
         )
 
+    if settings.REQUIRE_EMAIL_VERIFICATION:
+        verification_code = generate_otp()
+        db.add(PasswordResetOTP(user_id=new_user.id, otp_hash=hash_otp(verification_code), purpose="email_verification", expires_at=otp_expiry(), attempts=0, verified=False, consumed=False))
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Account verification setup failed.")
+        send_otp_email(new_user.email, verification_code, full_name=new_user.full_name, purpose="email_verification")
     return {
         "id": str(new_user.id),
         "full_name": new_user.full_name,
@@ -140,6 +149,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     user.last_login_at = datetime.now(timezone.utc)
     user.session_version = int(getattr(user, "session_version", 1) or 1)
     db.commit()
+    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
     access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version})
     return {
         "access_token": access_token,
@@ -151,6 +162,42 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "role": user.role,
         },
     }
+
+
+
+@router.post("/verify-email")
+def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="verify_email", max_requests=10, window_seconds=60)
+    try:
+        clean_email = validate_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid email or verification code.")
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid email or verification code.")
+    record = (
+        db.query(PasswordResetOTP)
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
+        .order_by(PasswordResetOTP.created_at.desc())
+        .with_for_update()
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    now = datetime.now(timezone.utc)
+    expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
+    if now > expires or (record.attempts or 0) >= settings.OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    if hash_otp(payload.otp.strip()) != record.otp_hash:
+        record.attempts = (record.attempts or 0) + 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    record.verified = True
+    record.consumed = True
+    user.email_verified_at = now
+    db.commit()
+    return {"message": "Email verified successfully. You can now sign in."}
+
 
 
 # ---------------------------------------------------------------------------
