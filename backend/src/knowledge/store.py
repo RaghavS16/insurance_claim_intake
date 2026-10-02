@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import hashlib, io, logging, os, re, time, uuid
 from datetime import date
+from dataclasses import dataclass
 from pypdf import PdfReader
 from sqlalchemy import select
 from src.config import settings
@@ -127,6 +128,80 @@ def _chunks(text: str, size: int = 450, overlap: int = 75) -> list[str]:
     words = re.findall(r"\S+", text)
     return [part for i in range(0, len(words), max(1, size - overlap)) if (part := " ".join(words[i : i + size]).strip())]
 
+
+def _structure_aware_chunks(units: list[dict[str, Any]], size: int = 450, overlap: int = 75) -> list[dict[str, Any]]:
+    """Chunk document units while preserving page/section/clause provenance."""
+    heading_re = re.compile(
+        r"^\s*(?:(?:section|sec\.?)\s+([A-Za-z0-9.()\-]+)\s*[:\-.]?\s*(.*)|"
+        r"(?:clause)\s+([A-Za-z0-9.()\-]+)\s*[:\-.]?\s*(.*))$",
+        re.IGNORECASE,
+    )
+    number_heading_re = re.compile(r"^\s*(\d+(?:\.\d+){0,4})\s+(.{2,140})$")
+    chunks: list[dict[str, Any]] = []
+    buffer: list[str] = []
+    state = {"section_number": None, "section_title": None, "clause_number": None,
+             "page_start": None, "page_end": None}
+
+    def flush() -> None:
+        nonlocal buffer
+        if not buffer:
+            return
+        words = buffer[:]
+        step = max(1, size - overlap)
+        for offset in range(0, len(words), step):
+            part = " ".join(words[offset:offset + size]).strip()
+            if not part:
+                continue
+            chunks.append({
+                "text": part,
+                "page_number": state["page_start"] if state["page_start"] == state["page_end"] else None,
+                "page_start": state["page_start"],
+                "page_end": state["page_end"],
+                "section_number": state["section_number"],
+                "section_title": state["section_title"],
+                "clause_number": state["clause_number"],
+            })
+            if offset + size >= len(words):
+                break
+        buffer = []
+
+    for unit in units:
+        page = unit.get("page_number")
+        text = str(unit.get("text") or "").strip()
+        if not text:
+            continue
+        if state["page_start"] is None:
+            state["page_start"] = page
+        state["page_end"] = page
+        for raw_line in text.splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip()
+            if not line:
+                continue
+            heading = heading_re.match(line)
+            numbered = number_heading_re.match(line)
+            if heading:
+                flush()
+                if heading.group(1):
+                    state["section_number"] = heading.group(1)
+                    state["section_title"] = (heading.group(2) or "").strip() or None
+                    state["clause_number"] = None
+                else:
+                    state["clause_number"] = heading.group(3)
+                continue
+            if numbered and len(line) <= 180 and not line.endswith("."):
+                flush()
+                state["section_number"] = numbered.group(1)
+                state["section_title"] = numbered.group(2).strip()
+                state["clause_number"] = None
+                continue
+            buffer.extend(re.findall(r"\S+", line))
+            if len(buffer) >= size:
+                flush()
+                state["page_start"] = page
+                state["page_end"] = page
+    flush()
+    return chunks
+
 def ingest_document(
     *,
     content: bytes,
@@ -200,8 +275,27 @@ def ingest_document(
     finally:
         db.close()
 
-    chunks = _chunks(text)
-    logger.info("[Knowledge] Document partitioned into %d semantic chunks. Generating embeddings...", len(chunks))
+    if filename.lower().endswith(".pdf"):
+        page_units = []
+        try:
+            import pymupdf
+            pdf = pymupdf.open(stream=content, filetype="pdf")
+            for idx, page in enumerate(pdf):
+                page_units.append({"page_number": idx + 1, "text": page.get_text("text") or ""})
+            pdf.close()
+        except Exception:
+            page_units = []
+        if not page_units:
+            page_units = [{"page_number": None, "text": text}]
+    else:
+        page_units = [{"page_number": None, "text": text}]
+    chunk_rows = _structure_aware_chunks(page_units)
+    if not chunk_rows:
+        chunk_rows = [{"text": chunk, "page_number": None, "page_start": None, "page_end": None,
+                       "section_number": None, "section_title": None, "clause_number": None}
+                      for chunk in _chunks(text)]
+    chunks = [row["text"] for row in chunk_rows]
+    logger.info("[Knowledge] Document partitioned into %d structure-aware chunks. Generating embeddings...", len(chunks))
     
     # Process embeddings in batches of 64 with progress logging
     vectors: list[list[float]] = []
@@ -252,6 +346,7 @@ def ingest_document(
         db.flush()
         
         for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
+            row_meta = chunk_rows[idx]
             db.add(
                 KnowledgeChunk(
                     id=str(uuid.uuid4()),
@@ -259,7 +354,7 @@ def ingest_document(
                     chunk_index=idx,
                     text=chunk,
                     embedding=vector,
-                    metadata_json={"source_name": filename, "jurisdiction": jurisdiction, "policy_version": policy_version},
+                    metadata_json={**row_meta, "source_name": filename, "jurisdiction": jurisdiction, "policy_version": policy_version},
                 )
             )
         db.commit()
