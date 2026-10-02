@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import User, PasswordResetOTP, RevokedToken
+from src.database.hardening_models import MFAChallenge, MFARecoveryCode
+from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
 from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, send_otp_email
@@ -151,7 +153,13 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     db.commit()
     if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version})
+    if bool(getattr(user, "mfa_enabled", False) or getattr(user, "mfa_required", False)):
+        raw_challenge = __import__("secrets").token_urlsafe(32)
+        challenge = MFAChallenge(user_id=str(user.id), challenge_token_hash=__import__("hashlib").sha256(raw_challenge.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.MFA_CHALLENGE_EXPIRE_SECONDS))
+        db.add(challenge)
+        db.commit()
+        return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": False})
     return {
         "access_token": access_token,
         "token_type": "bearer",
