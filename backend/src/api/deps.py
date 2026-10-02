@@ -148,6 +148,7 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session tenant context is no longer valid.")
     request.state.authenticated_user_id = str(user.id)
     request.state.authenticated_tenant_id = str(user.tenant_id or "")
+    request.state.auth_amr = list(payload.get("amr") or []) if token else []
     if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email verification is required.")
     if (
@@ -168,14 +169,27 @@ def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
     return current_user.id
 
 
-def require_role(allowed_roles: List[str]):
-    """Enforce that the authenticated user possesses an allowed role."""
+def require_role(allowed_roles: List[str], *, require_phishing_resistant: bool = False):
+    """Enforce role access and, for privileged roles, optional passkey authentication."""
 
-    def dependency(current_user: User = Depends(get_current_user)):
+    def dependency(
+        request: Request,
+        current_user: User = Depends(get_current_user),
+    ):
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: Role '{current_user.role}' not permitted.",
+            )
+        privileged = str(current_user.role).upper() in {"ADMIN", "ADJUSTER"}
+        if (
+            (require_phishing_resistant or (privileged and settings.PRIVILEGED_PASSKEY_REQUIRED))
+            and privileged
+            and "webauthn" not in set(getattr(request.state, "auth_amr", []) or [])
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Phishing-resistant passkey authentication is required for this privileged operation.",
             )
         return current_user
 
