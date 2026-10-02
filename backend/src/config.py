@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
     MAX_EVIDENCE_UPLOAD_BYTES: int = 25 * 1024 * 1024
     REQUIRE_S3_IN_PRODUCTION: bool = True
+    REQUIRE_MALWARE_SCAN: bool = True
+    CLAMAV_HOST: Optional[str] = None
+    CLAMAV_PORT: int = Field(3310, ge=1, le=65535)
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     @property
