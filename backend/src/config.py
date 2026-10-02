@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     VOICE_EVENT_STREAM_MAXLEN: int = Field(1000, ge=100, le=10000)
     MAX_VOICE_SDP_BYTES: int = Field(256 * 1024, ge=16 * 1024, le=2 * 1024 * 1024)
     MAX_VOICE_SESSION_SECONDS: int = Field(1800, ge=60, le=3600)
+    MAX_REQUEST_BODY_BYTES: int = Field(50 * 1024 * 1024, ge=1024, le=500 * 1024 * 1024)
+    SECURITY_FAIL_CLOSED: bool = Field(True)
+    REQUIRE_REDIS_IN_PRODUCTION: bool = Field(True)
+    REQUIRE_MIGRATIONS_IN_PRODUCTION: bool = Field(True)
+    REQUIRE_EMAIL_VERIFICATION: bool = Field(False)
+    SESSION_VERSION_CLAIM: str = "sv"
+    EMBEDDING_DIMENSION: int = Field(768, ge=1, le=4096)
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
