@@ -66,7 +66,7 @@ def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
     if db is not None:
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == c.tenant_id).first()
+        adjuster = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == c.tenant_id).first()
         if adjuster:
             if assigned_adj_id and assigned_adj_id == str(adjuster.id):
                 return True
@@ -97,7 +97,7 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
         if not a:
             a = db.query(Adjuster).filter(Adjuster.tenant_id == claim.tenant_id).first()
         if a: return a
-    adj = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
+    adj = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
     if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
         return adj
     if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
@@ -175,7 +175,7 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
     claims = q.order_by(Claim.updated_at.asc()).all()
     if user.role == "ADJUSTER":
         adjuster = db.query(Adjuster).filter(
-            Adjuster.email == user.email,
+            Adjuster.user_id == user.id,
             Adjuster.tenant_id == user.tenant_id,
             Adjuster.is_active.is_(True),
         ).first()
@@ -223,7 +223,7 @@ def next_claim(user: User = Depends(_guard), db: Session = Depends(get_db)):
     if user.role != "ADJUSTER":
         raise HTTPException(status_code=403, detail="Next-claim workflow is for adjusters.")
     adjuster = db.query(Adjuster).filter(
-        Adjuster.email == user.email,
+        Adjuster.user_id == user.id,
         Adjuster.tenant_id == user.tenant_id,
         Adjuster.is_active.is_(True),
     ).first()
