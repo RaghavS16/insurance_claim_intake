@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON
+from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 from src.config import settings
@@ -70,7 +70,8 @@ class Policy(Base):
     __tablename__ = "policies"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
-    policy_number: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    policy_number: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    __table_args__ = (UniqueConstraint("tenant_id", "policy_number", name="uq_policy_tenant_number"),)
     customer_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True, default=None, index=True)
     policy_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     coverage_amount: Mapped[float] = mapped_column(Numeric, nullable=False)
@@ -186,3 +187,25 @@ class ConversationTurn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     claim: Mapped["Claim"] = relationship("Claim", back_populates="turns")
+
+
+class PolicyVersion(Base):
+    """Immutable policy metadata snapshot for historical verification."""
+    __tablename__ = "policy_versions"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "version_number", name="uq_policy_version_number"),
+    )
+
+    id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    policy_id: Mapped[str] = _UUID(ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_type: Mapped[str] = mapped_column(String, nullable=False)
+    coverage_amount: Mapped[float] = mapped_column(Numeric, nullable=False)
+    deductible: Mapped[float] = mapped_column(Numeric, nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    snapshot_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
+    created_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

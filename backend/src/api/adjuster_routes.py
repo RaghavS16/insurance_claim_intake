@@ -33,7 +33,7 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
         if c.status not in {"submitted","pending_adjuster"}:
             continue
         active = db.query(ClaimAssignment).filter(
-            ClaimAssignment.claim_id == c.id, ClaimAssignment.is_active.is_(True)
+            ClaimAssignment.claim_id == c.id, ClaimAssignment.tenant_id == c.tenant_id, ClaimAssignment.is_active.is_(True)
         ).first()
         if active:
             continue
@@ -41,12 +41,12 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
         if not readiness.get("ready"):
             continue
         spec=(c.insurance_type or "").lower()
-        a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+        a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == c.tenant_id, Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if not a:
-            a=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+            a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == c.tenant_id).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if a:
             a.claims_assigned=(a.claims_assigned or 0)+1
-            db.add(ClaimAssignment(claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
+            db.add(ClaimAssignment(tenant_id=c.tenant_id, claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
             state["assigned_adjuster_id"]=str(a.id)
             state["assigned_adjuster_name"]=a.name
             c.pipeline_state=state
@@ -57,23 +57,27 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
         db.commit()
 
 def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
+    if str(c.tenant_id) != str(user.tenant_id):
+        return False
     if user.role == "ADMIN":
         return True
     assigned_adj_id = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
     if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
     if db is not None:
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == c.tenant_id).first()
         if adjuster:
             if assigned_adj_id and assigned_adj_id == str(adjuster.id):
                 return True
             if db.query(ClaimAssignment).filter(
                 ClaimAssignment.claim_id == c.id,
+                ClaimAssignment.tenant_id == c.tenant_id,
                 ClaimAssignment.adjuster_id == adjuster.id,
             ).first():
                 return True
         if db.query(ClaimAssignment).filter(
             ClaimAssignment.claim_id == c.id,
+            ClaimAssignment.tenant_id == c.tenant_id,
             ClaimAssignment.adjuster_id == user.id,
         ).first():
             return True
@@ -88,17 +92,17 @@ def _resolve_adjuster(request: Request, db: Session) -> User:
 def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster:
     assigned_id = (claim.pipeline_state or {}).get("assigned_adjuster_id")
     if user.role == "ADMIN":
-        a = db.query(Adjuster).filter(Adjuster.id == assigned_id).first() if assigned_id else None
+        a = db.query(Adjuster).filter(Adjuster.id == assigned_id, Adjuster.tenant_id == claim.tenant_id).first() if assigned_id else None
         if not a:
-            a = db.query(Adjuster).first()
+            a = db.query(Adjuster).filter(Adjuster.tenant_id == claim.tenant_id).first()
         if a: return a
-    adj = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+    adj = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
     if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
         return adj
-    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.adjuster_id == adj.id).first():
+    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
         return adj
     if str(assigned_id) == str(user.id):
-        a = db.query(Adjuster).filter(Adjuster.id == user.id).first()
+        a = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
         if a: return a
     if adj:
         return adj
@@ -114,13 +118,13 @@ def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[s
     facts, requirements, evidence, exceptions, readiness = {}, [], [], [], {}
     if db is not None:
         facts = {str(row.fact_key): {"value": (row.value_json or {}).get("value"), "state": row.state, "source_type": row.source_type, "confidence": row.confidence, "version": row.version}
-                 for row in db.query(ClaimFact).filter(ClaimFact.claim_id == c.id).all()}
+                 for row in db.query(ClaimFact).filter(ClaimFact.claim_id == c.id, ClaimFact.tenant_id == c.tenant_id).all()}
         requirements = [{"key": row.requirement_key, "label": row.label, "status": row.status, "required": row.required, "evidence_type": row.evidence_type, "provenance": row.provenance_json or {}}
-                        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == c.id).all()]
+                        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == c.id, ClaimRequirement.tenant_id == c.tenant_id).all()]
         evidence = [{"id": str(row.id), "name": row.original_filename, "status": row.status, "verification_status": row.verification_status, "verification_confidence": row.verification_confidence, "requirement_id": str(row.requirement_id) if row.requirement_id else None}
-                    for row in db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == c.id).all()]
+                    for row in db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == c.id, ClaimEvidence.tenant_id == c.tenant_id).all()]
         exceptions = [{"id": str(row.id), "event_type": row.event_type, "severity": row.severity, "reason": row.reason, "blocking": row.blocking, "status": row.status}
-                     for row in db.query(ClaimException).filter(ClaimException.claim_id == c.id, ClaimException.status == "open").all()]
+                     for row in db.query(ClaimException).filter(ClaimException.claim_id == c.id, ClaimException.tenant_id == c.tenant_id, ClaimException.status == "open").all()]
         readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
     return {
         "ticket_id":c.ticket_id, "status":c.status, "insurance_type":c.insurance_type,
@@ -163,19 +167,20 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
         "closed",
     ]
     if status and status.lower() != "all":
-        q = db.query(Claim).filter(Claim.status == status.lower())
+        q = db.query(Claim).filter(Claim.status == status.lower(), Claim.tenant_id == user.tenant_id)
     else:
-        q = db.query(Claim).filter(Claim.status.in_(valid_queue_statuses))
+        q = db.query(Claim).filter(Claim.status.in_(valid_queue_statuses), Claim.tenant_id == user.tenant_id)
 
     claims = q.order_by(Claim.updated_at.desc()).all()
     if user.role == "ADJUSTER":
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == user.tenant_id).first()
         assigned_ids = set()
         if adjuster:
             assigned_ids = {
                 str(x.claim_id)
                 for x in db.query(ClaimAssignment).filter(
-                    ClaimAssignment.adjuster_id == adjuster.id
+                    ClaimAssignment.adjuster_id == adjuster.id,
+                    ClaimAssignment.tenant_id == user.tenant_id,
                 ).all()
             }
         claims = [
@@ -189,10 +194,10 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
 
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    c = get_claim_or_404(db, ticket_id)
+    c = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
-    turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
+    turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id, ConversationTurn.tenant_id==c.tenant_id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     package = state.get("submission_package")
     if not package:
         from src.agents.submission_synthesizer import synthesize_claims_package
@@ -216,23 +221,23 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
 
 @router.post("/claims/{ticket_id}/exceptions/{exception_id}/resolve")
 def resolve_exception(ticket_id: str, exception_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     current_user = _resolve_adjuster(request, db)
     _ensure_assigned_adjuster(claim, current_user, db)
-    row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.status == "open").first()
+    row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.tenant_id == claim.tenant_id, ClaimException.status == "open").first()
     if not row:
         raise HTTPException(status_code=404, detail="Open claim exception not found.")
     row.status = "resolved"
     row.resolved_at = datetime.now(timezone.utc)
     row.resolution_json = {"resolved_by": str(current_user.id), "resolved_at": row.resolved_at.isoformat()}
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
+    db.add(ClaimAuditEvent(tenant_id=claim.tenant_id, claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
                            new_value_json={"exception_id": str(row.id)}, reason="Adjuster resolved blocking exception"))
     db.commit()
     return {"success": True, "exception_id": str(row.id), "status": row.status}
 
 @router.get("/claims/{ticket_id}/package")
 def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    c = get_claim_or_404(db, ticket_id)
+    c = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
     package = state.get("submission_package")
@@ -251,14 +256,14 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
             raise HTTPException(status_code=400, detail="Invalid priority.")
         state["priority"]=payload.priority
     if payload.note:
-        db.add(ClaimNote(claim_id=str(c.id), author_user_id=str(user.id), note=payload.note, visibility="internal"))
+        db.add(ClaimNote(tenant_id=c.tenant_id, claim_id=str(c.id), author_user_id=str(user.id), note=payload.note, visibility="internal"))
     if payload.status:
         try:
             transition_claim(db, c, payload.status, str(user.id), "adjuster workflow update")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
     c.pipeline_state=state
-    db.add(ClaimAuditEvent(claim_id=str(c.id), actor_user_id=str(user.id), event_type="claim_updated",
+    db.add(ClaimAuditEvent(tenant_id=c.tenant_id, claim_id=str(c.id), actor_user_id=str(user.id), event_type="claim_updated",
                            new_value_json={"priority":state.get("priority"),"status":c.status}))
     db.commit(); db.refresh(c)
     return _item(c)
@@ -266,9 +271,9 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
 @router.post("/claims/{ticket_id}/assign")
 def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
-    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.is_active.is_(True)).first()
+    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id, ClaimAssignment.tenant_id==c.tenant_id, ClaimAssignment.is_active.is_(True)).first()
     if active:
-        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id).first()
+        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id, Adjuster.tenant_id==c.tenant_id).first()
         return {"success":True,"already_assigned":True,"claim":_item(c,aa)}
     from src.database.claim_workflow import assign_claim as assign_claim_tx
     try:
@@ -282,7 +287,7 @@ def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Dep
 
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
 def evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(claim,user,db): raise HTTPException(status_code=403,detail="This claim is not assigned to you.")
     state=dict(claim.pipeline_state or {})
     item=next((e for e in state.get("evidence",[]) if str(e.get("id"))==evidence_id),None)
@@ -305,6 +310,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
             incident_date=c.event_date,
             query=c.event_description or "",
             claim_facts=data,
+            tenant_id=str(user.tenant_id),
         )
     except Exception as exc:
         logger = __import__("logging").getLogger(__name__)
@@ -317,7 +323,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     requests = [
         _request_payload(row, db)
         for row in db.query(ClaimEvidenceRequest)
-        .filter(ClaimEvidenceRequest.claim_id == c.id)
+        .filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id)
         .order_by(ClaimEvidenceRequest.requested_at.desc())
         .all()
     ]
@@ -440,6 +446,7 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
         state["copilot_chat"] = existing_chat
         c.pipeline_state = state
         db.add(CopilotAnalysis(
+            tenant_id=c.tenant_id,
             claim_id=str(c.id),
             claim_version=1,
             knowledge_version="retrieval-current",
@@ -572,11 +579,12 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
     adjuster = _ensure_assigned_adjuster(c, user, db)
     if c.status in {"approved", "partially_approved", "rejected", "closed"}:
         raise HTTPException(status_code=409, detail="Evidence cannot be requested after a final claim outcome.")
-    row = ClaimEvidenceRequest(claim_id=str(c.id), adjuster_id=str(adjuster.id), request_text=payload.request_text.strip(), status="open")
+    row = ClaimEvidenceRequest(tenant_id=c.tenant_id, claim_id=str(c.id), adjuster_id=str(adjuster.id), request_text=payload.request_text.strip(), status="open")
     db.add(row)
     if c.status in {"submitted", "assigned", "under_review"}:
         transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
     db.add(ClaimAuditEvent(
+        tenant_id=c.tenant_id,
         claim_id=str(c.id), actor_user_id=str(user.id), event_type="evidence_requested",
         new_value_json={"request_id": str(row.id), "request_text": row.request_text}, reason=row.request_text
     ))
@@ -603,10 +611,10 @@ class NoteRequest(BaseModel):
 @router.get("/claims/{ticket_id}/assignment")
 def get_normalized_assignment(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
     a = db.execute(select(ClaimAssignment).where(
-        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
+        ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.is_active.is_(True)
     )).scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="No active assignment exists.")
@@ -616,7 +624,7 @@ def get_normalized_assignment(ticket_id: str, request: Request, db: Session = De
 @router.post("/claims/{ticket_id}/decision")
 def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     adjuster = _ensure_assigned_adjuster(claim, current_user, db)
     decision_map = {
         "approve": "approved", "partial_approve": "partially_approved",
@@ -628,12 +636,14 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     row = ClaimDecision(
+        tenant_id=claim.tenant_id,
         claim_id=str(claim.id), adjuster_id=str(adjuster.id), decision=payload.decision,
         rationale=payload.rationale, approved_amount=payload.approved_amount,
         ai_recommendation_json=(claim.pipeline_state or {}).get("copilot") or {},
     )
     db.add(row)
     db.add(ClaimAuditEvent(
+        tenant_id=claim.tenant_id,
         claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="decision_recorded",
         new_value_json={"decision": payload.decision, "approved_amount": payload.approved_amount},
         reason=payload.rationale,
@@ -645,12 +655,12 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
 @router.post("/claims/{ticket_id}/notes")
 def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
-    note = ClaimNote(claim_id=str(claim.id), author_user_id=str(current_user.id),
+    note = ClaimNote(tenant_id=claim.tenant_id, claim_id=str(claim.id), author_user_id=str(current_user.id),
                      note=payload.note, visibility=payload.visibility)
     db.add(note)
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id),
+    db.add(ClaimAuditEvent(tenant_id=claim.tenant_id, claim_id=str(claim.id), actor_user_id=str(current_user.id),
                            event_type="note_added", new_value_json={"note_id": note.id}))
     db.commit()
     return {"id": note.id, "created_at": note.created_at.isoformat(), "visibility": note.visibility}
@@ -658,7 +668,7 @@ def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: S
 @router.get("/claims/{ticket_id}/audit")
 def get_claim_audit(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
-    rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id).order_by(ClaimAuditEvent.created_at.asc()).all()
+    rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id, ClaimAuditEvent.tenant_id == claim.tenant_id).order_by(ClaimAuditEvent.created_at.asc()).all()
     return [_format_audit_row(r) for r in rows]

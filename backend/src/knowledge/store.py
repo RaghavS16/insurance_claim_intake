@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import hashlib, io, logging, os, re, time, uuid
 from datetime import date
+from dataclasses import dataclass
 from pypdf import PdfReader
 from sqlalchemy import select
 from src.config import settings
@@ -127,6 +128,80 @@ def _chunks(text: str, size: int = 450, overlap: int = 75) -> list[str]:
     words = re.findall(r"\S+", text)
     return [part for i in range(0, len(words), max(1, size - overlap)) if (part := " ".join(words[i : i + size]).strip())]
 
+
+def _structure_aware_chunks(units: list[dict[str, Any]], size: int = 450, overlap: int = 75) -> list[dict[str, Any]]:
+    """Chunk document units while preserving page/section/clause provenance."""
+    heading_re = re.compile(
+        r"^\s*(?:(?:section|sec\.?)\s+([A-Za-z0-9.()\-]+)\s*[:\-.]?\s*(.*)|"
+        r"(?:clause)\s+([A-Za-z0-9.()\-]+)\s*[:\-.]?\s*(.*))$",
+        re.IGNORECASE,
+    )
+    number_heading_re = re.compile(r"^\s*(\d+(?:\.\d+){0,4})\s+(.{2,140})$")
+    chunks: list[dict[str, Any]] = []
+    buffer: list[str] = []
+    state = {"section_number": None, "section_title": None, "clause_number": None,
+             "page_start": None, "page_end": None}
+
+    def flush() -> None:
+        nonlocal buffer
+        if not buffer:
+            return
+        words = buffer[:]
+        step = max(1, size - overlap)
+        for offset in range(0, len(words), step):
+            part = " ".join(words[offset:offset + size]).strip()
+            if not part:
+                continue
+            chunks.append({
+                "text": part,
+                "page_number": state["page_start"] if state["page_start"] == state["page_end"] else None,
+                "page_start": state["page_start"],
+                "page_end": state["page_end"],
+                "section_number": state["section_number"],
+                "section_title": state["section_title"],
+                "clause_number": state["clause_number"],
+            })
+            if offset + size >= len(words):
+                break
+        buffer = []
+
+    for unit in units:
+        page = unit.get("page_number")
+        text = str(unit.get("text") or "").strip()
+        if not text:
+            continue
+        if state["page_start"] is None:
+            state["page_start"] = page
+        state["page_end"] = page
+        for raw_line in text.splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip()
+            if not line:
+                continue
+            heading = heading_re.match(line)
+            numbered = number_heading_re.match(line)
+            if heading:
+                flush()
+                if heading.group(1):
+                    state["section_number"] = heading.group(1)
+                    state["section_title"] = (heading.group(2) or "").strip() or None
+                    state["clause_number"] = None
+                else:
+                    state["clause_number"] = heading.group(3)
+                continue
+            if numbered and len(line) <= 180 and not line.endswith("."):
+                flush()
+                state["section_number"] = numbered.group(1)
+                state["section_title"] = numbered.group(2).strip()
+                state["clause_number"] = None
+                continue
+            buffer.extend(re.findall(r"\S+", line))
+            if len(buffer) >= size:
+                flush()
+                state["page_start"] = page
+                state["page_end"] = page
+    flush()
+    return chunks
+
 def ingest_document(
     *,
     content: bytes,
@@ -137,7 +212,9 @@ def ingest_document(
     effective_from: str | None = None,
     effective_to: str | None = None,
     policy_version: str | None = None,
+    jurisdiction: str | None = None,
     uploaded_by: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     t0 = time.time()
     size_mb = len(content) / (1024 * 1024)
@@ -161,7 +238,7 @@ def ingest_document(
     
     db = SessionLocal()
     try:
-        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256).first()
+        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
             if any(value not in (None, "") for value in (policy_number, effective_from, effective_to, policy_version)):
@@ -171,6 +248,7 @@ def ingest_document(
                     "effective_from": effective_from or (existing.metadata_json or {}).get("effective_from"),
                     "effective_to": effective_to or (existing.metadata_json or {}).get("effective_to"),
                     "policy_version": policy_version or (existing.metadata_json or {}).get("policy_version"),
+                    "jurisdiction": jurisdiction or (existing.metadata_json or {}).get("jurisdiction"),
                     "uploaded_by": uploaded_by or (existing.metadata_json or {}).get("uploaded_by"),
                 }
                 db.commit()
@@ -184,6 +262,8 @@ def ingest_document(
                     )
                     if s3.get("uri", "").startswith("s3://"):
                         existing.source_uri = s3["uri"]
+                        if jurisdiction:
+                            existing.jurisdiction = jurisdiction
                         db.commit()
                 except Exception:
                     pass
@@ -198,8 +278,27 @@ def ingest_document(
     finally:
         db.close()
 
-    chunks = _chunks(text)
-    logger.info("[Knowledge] Document partitioned into %d semantic chunks. Generating embeddings...", len(chunks))
+    if filename.lower().endswith(".pdf"):
+        page_units = []
+        try:
+            import pymupdf
+            pdf = pymupdf.open(stream=content, filetype="pdf")
+            for idx, page in enumerate(pdf):
+                page_units.append({"page_number": idx + 1, "text": page.get_text("text") or ""})
+            pdf.close()
+        except Exception:
+            page_units = []
+        if not page_units:
+            page_units = [{"page_number": None, "text": text}]
+    else:
+        page_units = [{"page_number": None, "text": text}]
+    chunk_rows = _structure_aware_chunks(page_units)
+    if not chunk_rows:
+        chunk_rows = [{"text": chunk, "page_number": None, "page_start": None, "page_end": None,
+                       "section_number": None, "section_title": None, "clause_number": None}
+                      for chunk in _chunks(text)]
+    chunks = [row["text"] for row in chunk_rows]
+    logger.info("[Knowledge] Document partitioned into %d structure-aware chunks. Generating embeddings...", len(chunks))
     
     # Process embeddings in batches of 64 with progress logging
     vectors: list[list[float]] = []
@@ -226,6 +325,8 @@ def ingest_document(
     try:
         doc = KnowledgeDocument(
             id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            jurisdiction=jurisdiction,
             source_name=filename,
             source_uri=s3["uri"],
             document_type=document_type or meta.document_type or "unknown",
@@ -241,20 +342,23 @@ def ingest_document(
                 "policy_version": policy_version,
                 "uploaded_by": uploaded_by,
                 "publication_status": "pending_review",
+                "jurisdiction": jurisdiction,
             },
         )
         db.add(doc)
         db.flush()
         
         for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
+            row_meta = chunk_rows[idx]
             db.add(
                 KnowledgeChunk(
                     id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
                     document_id=doc.id,
                     chunk_index=idx,
                     text=chunk,
                     embedding=vector,
-                    metadata_json={"source_name": filename},
+                    metadata_json={**row_meta, "source_name": filename, "jurisdiction": jurisdiction, "policy_version": policy_version},
                 )
             )
         db.commit()
@@ -278,14 +382,20 @@ def list_policy_documents(
     insurance_type: str | None = None,
     policy_number: str | None = None,
     incident_date: date | None = None,
+    jurisdiction: str | None = None,
+    tenant_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return candidate policy-wording documents for document-level compilation."""
     db = SessionLocal()
     try:
         conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording"]
+        if tenant_id:
+            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
         # Newly ingested policy wording is untrusted until an authorized reviewer publishes it.
         publication_status = KnowledgeDocument.metadata_json["publication_status"].as_string()
         conditions.append((publication_status.is_(None)) | (publication_status == "published"))
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append(
                 (KnowledgeDocument.insurance_type == insurance_type)
@@ -346,13 +456,13 @@ def list_policy_documents(
         db.close()
 
 
-def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
+def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     """Load every indexed chunk for a document in original order."""
     db = SessionLocal()
     try:
         rows = db.execute(
             select(KnowledgeChunk)
-            .where(KnowledgeChunk.document_id == document_id)
+            .where(KnowledgeChunk.document_id == document_id, *([KnowledgeChunk.tenant_id == tenant_id] if tenant_id else []))
             .order_by(KnowledgeChunk.chunk_index.asc())
         ).scalars().all()
         return [
@@ -368,10 +478,10 @@ def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
+def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return []
         manifest = (row.metadata_json or {}).get("requirement_manifest")
@@ -380,10 +490,10 @@ def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]]) -> None:
+def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return
         row.metadata_json = {
@@ -401,12 +511,18 @@ def search(
     policy_number: str | None = None,
     document_types: list[str] | None = None,
     incident_date: date | None = None,
+    jurisdiction: str | None = None,
+    tenant_id: str | None = None,
     limit: int = 12,
 ) -> list[dict]:
     vector = embed_documents([query])[0]
     db = SessionLocal()
     try:
         conditions: list[Any] = []
+        if tenant_id:
+            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append((KnowledgeDocument.insurance_type == insurance_type) | (KnowledgeDocument.insurance_type.is_(None)))
         if document_types:
@@ -446,6 +562,13 @@ def search(
                 "policy_version": (d.metadata_json or {}).get("policy_version"),
                 "effective_from": (d.metadata_json or {}).get("effective_from"),
                 "effective_to": (d.metadata_json or {}).get("effective_to"),
+                "jurisdiction": d.jurisdiction or (d.metadata_json or {}).get("jurisdiction"),
+                "section_number": (c.metadata_json or {}).get("section_number"),
+                "section_title": (c.metadata_json or {}).get("section_title"),
+                "clause_number": (c.metadata_json or {}).get("clause_number"),
+                "page_number": (c.metadata_json or {}).get("page_number"),
+                "page_start": (c.metadata_json or {}).get("page_start"),
+                "page_end": (c.metadata_json or {}).get("page_end"),
                 "score": round(1 - float(dist), 6),
             }
             for c, d, dist in rows

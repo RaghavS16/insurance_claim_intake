@@ -158,6 +158,9 @@ def calculate_readiness(
         "identity": "PASS"
         if policy_verification and policy_verification.get("identity_verified") is True
         else "PENDING",
+        "claimant_confirmation": "PASS"
+        if policy_verification and policy_verification.get("claimant_confirmed") is True
+        else "PENDING",
     }
 
     verified_evidence = sum(
@@ -181,6 +184,7 @@ def calculate_readiness(
         not blocking
         and verification["policy"] == "PASS"
         and verification["identity"] == "PASS"
+        and verification["claimant_confirmation"] == "PASS"
         and not blocking_exceptions
     )
     return ReadinessResult(

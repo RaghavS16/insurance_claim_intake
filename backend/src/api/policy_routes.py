@@ -78,7 +78,7 @@ def link_policy(
     ip = request.client.host if request.client else "unknown"
     policy_number = payload.policy_number.strip().upper()
 
-    policy = db.query(Policy).filter(Policy.policy_number == policy_number).first()
+    policy = db.query(Policy).filter(Policy.policy_number == policy_number, Policy.tenant_id == current_user.tenant_id).first()
 
     if not policy:
         _audit(db, current_user.id, policy_number, "not_found", ip)

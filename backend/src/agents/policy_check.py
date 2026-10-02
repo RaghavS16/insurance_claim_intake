@@ -16,7 +16,7 @@ def verify_policy_for_claim(
     claim_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Verify ownership, type, activity and date for the exact claimant claim."""
-    result: dict[str, Any] = {"valid": False, "reason": None}
+    result: dict[str, Any] = {"valid": False, "reason": None, "identity_verified": False, "claimant_confirmed": False}
     if db is None:
         result["reason"] = "no_db_session"
         return result
@@ -46,7 +46,7 @@ def verify_policy_for_claim(
         result["reason"] = "claimant_confirmation_required"
         return result
 
-    policy = db.query(Policy).filter(Policy.policy_number == normalized_policy).first()
+    policy = db.query(Policy).filter(Policy.policy_number == normalized_policy, Policy.tenant_id == candidate.tenant_id).first()
     if not policy:
         result["reason"] = "policy_not_found"
         return result
@@ -56,6 +56,8 @@ def verify_policy_for_claim(
     if str(policy.customer_id) != claimant_user_id:
         result["reason"] = "ownership_mismatch"
         return result
+    result["identity_verified"] = True
+    result["claimant_confirmed"] = True
     if insurance_type and policy.policy_type != insurance_type:
         result["reason"] = "insurance_type_mismatch"
         return result

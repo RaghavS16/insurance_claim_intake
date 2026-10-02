@@ -190,6 +190,8 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
             policy_number=data.get("policy_id"),
             incident_date=incident_date,
             claim_facts=data,
+            tenant_id=state.get("tenant_id"),
+            jurisdiction=state.get("jurisdiction"),
         )
         state["rag_answer"] = str(result.get("answer") or "").strip()
         state["rag_answer_sources"] = list(result.get("sources") or [])
@@ -388,6 +390,37 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     return state
 
 
+def _confirmation_gate(state: ClaimState) -> ClaimState:
+    """Deterministic claimant confirmation checkpoint before submission."""
+    if state.get("_skip_all"):
+        return state
+    missing = list(state.get("missing_fields") or [])
+    dynamic_missing = list(state.get("dynamic_missing") or [])
+    missing_evidence = list(state.get("missing_evidence") or [])
+    pending_review = list(state.get("pending_evidence_review") or [])
+    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") == "OK"
+    if (
+        plan_ready
+        and not missing
+        and not dynamic_missing
+        and not missing_evidence
+        and not pending_review
+        and not state.get("confirmed")
+    ):
+        state["awaiting_confirmation"] = True
+        state["awaiting_submission_confirmation"] = True
+        state["final_submission_confirmed"] = False
+        state["conversation_phase"] = "4_gap_analysis"
+        state["conversation_status"] = "pending_confirmation"
+        state["next_question_field"] = "confirmation"
+        state["next_question"] = (
+            nodes._confirmation_summary(state.get("extracted_data", {}))
+            + " Please confirm these details are correct before I verify the policy and prepare the claim for submission."
+        )
+        state["message"] = state["next_question"]
+    return state
+
+
 def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
@@ -482,6 +515,7 @@ def _build_conversation_graph():
     graph.add_node("rag_question_responder", _rag_question_responder)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
+    graph.add_node("confirmation_gate", _confirmation_gate)
     graph.add_node("next_question_generator", _response_planner)
     graph.set_entry_point("workflow_event_router")
     graph.add_conditional_edges(
@@ -497,7 +531,8 @@ def _build_conversation_graph():
     graph.add_edge("claim_extractor", "rag_question_responder")
     graph.add_edge("rag_question_responder", "mandatory_field_checker")
     graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
-    graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
+    graph.add_edge("dynamic_requirement_enrichment", "confirmation_gate")
+    graph.add_edge("confirmation_gate", "next_question_generator")
     graph.add_edge("next_question_generator", END)
     return graph.compile()
 
