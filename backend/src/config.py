@@ -252,7 +252,7 @@ class Settings(BaseSettings):
             if not self.VOICE_TTS_BASE_URL:
                 raise RuntimeError("VOICE_TTS_BASE_URL is required when production/staging voice uses Pipecat.")
             ice = [x.strip() for x in self.VOICE_ICE_SERVERS.split(",") if x.strip()]
-            if not any(x.lower().startswith("turn:") for x in ice):
+            if not any(x.lower().startswith(("turn:", "turns:")) for x in ice):
                 raise RuntimeError("VOICE_ICE_SERVERS must include a TURN server in production/staging.")
             if self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ENABLED:
                 raise RuntimeError("PASSKEY_ENABLED must remain true when privileged passkeys are required.")
