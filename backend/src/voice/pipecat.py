@@ -262,6 +262,7 @@ async def run_voice_pipeline(
             call_id=call_id,
             user_id=user_id,
             events=events,
+            tenant_id=tenant_id,
         )
 
         @transport.event_handler("on_client_connected")
