@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from src.database.models import Claim, Adjuster
-from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmission
+from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmission, ClaimSubmissionConfirmation
 from src.services.outbox import enqueue
 
 ALLOWED_TRANSITIONS = {
@@ -93,7 +93,13 @@ def build_submission_readiness(db: Session, claim: Claim, policy_verification: d
         ClaimException.tenant_id == claim.tenant_id,
         ClaimException.status == "open",
     ).all()
-    claimant_confirmation = bool((claim.pipeline_state or {}).get("final_submission_confirmed"))
+    claimant_confirmation = bool((claim.pipeline_state or {}).get("final_submission_confirmed")) or bool(
+        db.query(ClaimSubmissionConfirmation).filter(
+            ClaimSubmissionConfirmation.claim_id == claim.id,
+            ClaimSubmissionConfirmation.tenant_id == claim.tenant_id,
+            ClaimSubmissionConfirmation.claim_state_version == int(claim.state_version or 1),
+        ).first()
+    )
     return build_readiness(
         requirements=requirements,
         policy_verification=policy_verification,
