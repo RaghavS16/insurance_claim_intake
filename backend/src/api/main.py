@@ -35,6 +35,7 @@ from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
 from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
 from src.middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware, RequestContextMiddleware
+from src.services.observability import configure_otel
 
 # Route modules
 from src.api import auth_routes, claim_routes, policy_routes, admin_routes, adjuster_routes, knowledge_routes
@@ -177,6 +178,7 @@ _init_db_and_seeds = _init_db_schema  # Backward-compatible alias
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle manager."""
     settings.validate_startup()
+    configure_otel()
     if settings.ENVIRONMENT in ("production", "staging"):
         from sqlalchemy import text
         with engine.connect() as conn:
