@@ -248,6 +248,7 @@ def ingest_document(
                     "effective_from": effective_from or (existing.metadata_json or {}).get("effective_from"),
                     "effective_to": effective_to or (existing.metadata_json or {}).get("effective_to"),
                     "policy_version": policy_version or (existing.metadata_json or {}).get("policy_version"),
+                    "jurisdiction": jurisdiction or (existing.metadata_json or {}).get("jurisdiction"),
                     "uploaded_by": uploaded_by or (existing.metadata_json or {}).get("uploaded_by"),
                 }
                 db.commit()
@@ -261,6 +262,8 @@ def ingest_document(
                     )
                     if s3.get("uri", "").startswith("s3://"):
                         existing.source_uri = s3["uri"]
+                        if jurisdiction:
+                            existing.jurisdiction = jurisdiction
                         db.commit()
                 except Exception:
                     pass
