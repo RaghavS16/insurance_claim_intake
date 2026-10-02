@@ -34,6 +34,7 @@ from src.api.realtime_voice import router as voice_router
 from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
 from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
+from src.middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware, RequestContextMiddleware
 
 # Route modules
 from src.api import auth_routes, claim_routes, policy_routes, admin_routes, adjuster_routes, knowledge_routes
@@ -176,7 +177,28 @@ _init_db_and_seeds = _init_db_schema  # Backward-compatible alias
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle manager."""
     settings.validate_startup()
-    _init_db_schema()
+    if settings.ENVIRONMENT in ("production", "staging"):
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        if settings.REQUIRE_MIGRATIONS_IN_PRODUCTION:
+            try:
+                from alembic.config import Config
+                from alembic.script import ScriptDirectory
+                cfg = Config(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "alembic.ini"))
+                script = ScriptDirectory.from_config(cfg)
+                heads = set(script.get_heads())
+                with engine.connect() as conn:
+                    current = {str(row[0]) for row in conn.execute(text("SELECT version_num FROM alembic_version"))}
+                if current != heads:
+                    raise RuntimeError(f"Database migration state is not at head: current={sorted(current)} expected={sorted(heads)}")
+            except Exception as exc:
+                logger.exception("Production migration verification failed: %s", type(exc).__name__)
+                raise
+        if settings.REQUIRE_REDIS_IN_PRODUCTION and not settings.REDIS_URL:
+            raise RuntimeError("REDIS_URL is required in production/staging.")
+    else:
+        _init_db_schema()
     yield
     # Graceful shutdown: dispose connection pool
     dispose_engine()
@@ -194,13 +216,16 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Tracing & CORS Middleware
 # ---------------------------------------------------------------------------
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
@@ -212,7 +237,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Return API-safe JSON for request validation errors."""
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "message": "Invalid request payload."},
+        content={"error": {"code": "VALIDATION_ERROR", "message": "Invalid request payload."}, "request_id": getattr(request.state, "request_id", None)},
     )
 
 
@@ -222,7 +247,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled server exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred. Please try again later."},
+        content={"error": {"code": "INTERNAL_ERROR", "message": "An internal server error occurred. Please try again later."}, "request_id": getattr(request.state, "request_id", None)},
     )
 
 
@@ -231,6 +256,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 @app.get("/", include_in_schema=False)
 def root():
+    if settings.ENVIRONMENT in ("production", "staging"):
+        return {"service": "insurance-claim-intake", "status": "ok"}
     return RedirectResponse(url="/docs")
 
 
