@@ -229,5 +229,11 @@ async def close_voice_session(
     _validate_claim_access(db, ticket_id, current_user)
     active = await voice_session_manager.active_call(ticket_id)
     if active:
+        row = db.query(VoiceSession).filter(
+            VoiceSession.call_id == active,
+            VoiceSession.tenant_id == str(current_user.tenant_id or ""),
+        ).first()
+        if row and row.worker_id != settings.VOICE_WORKER_ID:
+            raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
         await voice_session_manager.close(active)
     return {"status": "closed"}
