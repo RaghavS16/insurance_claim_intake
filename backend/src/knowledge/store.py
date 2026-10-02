@@ -11,11 +11,19 @@ from src.database.session import SessionLocal
 from src.knowledge.embeddings import embed_documents
 from src.knowledge.document_intelligence import infer_metadata
 from src.storage.s3 import put_bytes
+from src.utils.document_safety import enforce_document_limits, enforce_extracted_text_limit
 
 logger = logging.getLogger(__name__)
 
+def _require_tenant(tenant_id: str | None) -> str:
+    value = str(tenant_id or "").strip()
+    if not value:
+        raise ValueError("tenant_id is required for knowledge-store access")
+    return value
+
 def _extract_pdf_pages(content: bytes, filename: str) -> list[str]:
     """Extract PDF text page-by-page, preserving page provenance."""
+    enforce_document_limits(content, filename)
     pages: list[str] = []
     try:
         import pymupdf
@@ -33,6 +41,7 @@ def _extract_pdf_pages(content: bytes, filename: str) -> list[str]:
     return pages
 
 def _extract_pdf(content: bytes, filename: str) -> str:
+    enforce_document_limits(content, filename)
     extracted_pages: list[str] = []
     num_pages = 0
 
@@ -41,6 +50,9 @@ def _extract_pdf(content: bytes, filename: str) -> str:
         import pymupdf
         doc = pymupdf.open(stream=content, filetype="pdf")
         num_pages = len(doc)
+        if num_pages > settings.MAX_PDF_PAGES:
+            doc.close()
+            raise ValueError(f"PDF exceeds the maximum supported page count of {settings.MAX_PDF_PAGES}.")
         logger.info("[Knowledge] Parsing PDF '%s' with PyMuPDF (%d page(s))...", filename, num_pages)
         for idx, page in enumerate(doc):
             t = str(page.get_text("text") or "")
@@ -55,6 +67,8 @@ def _extract_pdf(content: bytes, filename: str) -> str:
         try:
             reader = PdfReader(io.BytesIO(content))
             num_pages = len(reader.pages)
+            if num_pages > settings.MAX_PDF_PAGES:
+                raise ValueError(f"PDF exceeds the maximum supported page count of {settings.MAX_PDF_PAGES}.")
             logger.info("[Knowledge] Parsing PDF '%s' with pypdf (%d page(s))...", filename, num_pages)
             for idx, page in enumerate(reader.pages):
                 try:
@@ -80,8 +94,11 @@ def _extract_pdf(content: bytes, filename: str) -> str:
         ocr_engine = RapidOCR()
         doc = pymupdf.open(stream=content, filetype="pdf")
         num_pages = len(doc)
+        deadline = time.monotonic() + settings.MAX_OCR_SECONDS
         ocr_pages: list[str] = []
         for idx, page in enumerate(doc):
+            if time.monotonic() > deadline:
+                raise TimeoutError("PDF OCR processing exceeded the configured time limit.")
             pix = page.get_pixmap(dpi=150)
             img_bytes = pix.tobytes("png")
             results, _ = ocr_engine(img_bytes)
@@ -226,6 +243,7 @@ def ingest_document(
     tenant_id: str | None = None,
     jurisdiction: str | None = None,
 ) -> dict:
+    tenant_id = _require_tenant(tenant_id)
     t0 = time.time()
     size_mb = len(content) / (1024 * 1024)
     max_mb = settings.KNOWLEDGE_MAX_UPLOAD_BYTES // (1024 * 1024)
@@ -379,6 +397,7 @@ def list_policy_documents(
     jurisdiction: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return candidate policy-wording documents for document-level compilation."""
+    tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
         conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording", KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [KnowledgeDocument.document_type == "policy_wording"]
@@ -451,6 +470,7 @@ def list_policy_documents(
 
 def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     """Load every indexed chunk for a document in original order."""
+    tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
         rows = db.execute(
@@ -472,6 +492,7 @@ def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[
 
 
 def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
+    tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
         row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
@@ -508,12 +529,11 @@ def search(
     tenant_id: str | None = None,
     jurisdiction: str | None = None,
 ) -> list[dict]:
+    tenant_id = _require_tenant(tenant_id)
     vector = embed_documents([query])[0]
     db = SessionLocal()
     try:
-        conditions: list[Any] = []
-        if tenant_id:
-            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
+        conditions: list[Any] = [KnowledgeDocument.tenant_id == tenant_id]
         if jurisdiction:
             conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
