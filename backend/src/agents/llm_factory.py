@@ -251,10 +251,11 @@ def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatMo
     model = model_name.strip()
     if ":" not in model:
         raise RuntimeError("Hugging Face routing requires a provider-qualified model such as openai/gpt-oss-20b:groq.")
-    return ChatOpenAI(
+    primary = ChatOpenAI(
         model=model, api_key=token, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
+    return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: float | None = None) -> BaseChatModel:
     base_url = (settings.CLOUD_LLM_BASE_URL or "").strip()
@@ -264,21 +265,23 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
         raise RuntimeError("OpenRouter is not supported by the production routing path.")
     if not settings.CLOUD_LLM_API_KEY:
         raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
-    return ChatOpenAI(
+    primary = ChatOpenAI(
         model=model_name or settings.CLOUD_LLM_MODEL,
         api_key=settings.CLOUD_LLM_API_KEY, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
     )
+    return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
     """Optional emergency direct-Groq path; HF is the production default."""
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
-    return ChatOpenAI(
+    primary = ChatOpenAI(
         model=model_name, api_key=settings.GROQ_API_KEY,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
+    return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 def get_fast_llm() -> BaseChatModel:
     """Return the low-latency model used for claimant turns."""
