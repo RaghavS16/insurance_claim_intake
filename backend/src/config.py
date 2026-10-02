@@ -1,6 +1,8 @@
 """Centralized application settings and environment validation."""
 from pathlib import Path
 from typing import List, Optional
+import os
+import socket
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -113,18 +115,43 @@ class Settings(BaseSettings):
     VOICE_STT_NO_SPEECH_PROB: float = Field(0.4, ge=0.0, le=1.0)
     VOICE_TTS_BASE_URL: str = "http://localhost:5001"
     VOICE_TTS_VOICE_ID: str = "en_US-ryan-high"
+    VOICE_WORKER_ID: str = Field(default_factory=lambda: os.getenv("VOICE_WORKER_ID") or socket.gethostname())
+    VOICE_STICKY_COOKIE_NAME: str = "voice_worker_id"
+    VOICE_ICE_SERVERS: str = ""  # comma-separated STUN/TURN URLs; production requires TURN
+    VOICE_EVENT_RETENTION_SECONDS: int = Field(86400, ge=300, le=2592000)
+    VOICE_WORKER_DRAINING: bool = False
     VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS: int = Field(60, ge=10, le=300)
     VOICE_PIPELINE_IDLE_TIMEOUT_SECONDS: int = Field(300, ge=30, le=3600)
     VOICE_EVENT_STREAM_MAXLEN: int = Field(1000, ge=100, le=10000)
     MAX_VOICE_SDP_BYTES: int = Field(256 * 1024, ge=16 * 1024, le=2 * 1024 * 1024)
     MAX_VOICE_SESSION_SECONDS: int = Field(1800, ge=60, le=3600)
     MAX_REQUEST_BODY_BYTES: int = Field(50 * 1024 * 1024, ge=1024, le=500 * 1024 * 1024)
+    MAX_PDF_PAGES: int = Field(200, ge=1, le=2000)
+    MAX_IMAGE_PIXELS: int = Field(40_000_000, ge=1_000_000, le=200_000_000)
+    MAX_EXTRACTED_TEXT_CHARS: int = Field(2_000_000, ge=10_000, le=20_000_000)
+    MAX_OCR_SECONDS: int = Field(30, ge=5, le=300)
+    MAX_ARCHIVE_EXPANDED_BYTES: int = Field(200 * 1024 * 1024, ge=10 * 1024 * 1024, le=2 * 1024 * 1024 * 1024)
     SECURITY_FAIL_CLOSED: bool = Field(True)
     REQUIRE_REDIS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_MIGRATIONS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_EMAIL_VERIFICATION: bool = Field(False)
     SESSION_VERSION_CLAIM: str = "sv"
     EMBEDDING_DIMENSION: int = Field(768, ge=1, le=4096)
+
+    # AI governance and tenant-level resource controls.
+    AI_PROMPT_VERSION: str = "v4"
+    AI_MAX_TURNS_PER_TENANT_PER_MINUTE: int = Field(120, ge=10, le=10000)
+    AI_MAX_CONCURRENT_TURNS_PER_TENANT: int = Field(8, ge=1, le=100)
+    AI_MAX_RAG_REQUESTS_PER_TENANT_PER_MINUTE: int = Field(120, ge=10, le=10000)
+    AI_ALLOWED_MODELS: str = ""  # optional comma-separated approved exact model identifiers
+    AI_ALLOW_LOCAL_FALLBACK: bool = True
+    AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION: bool = True
+    PASSKEY_ENABLED: bool = True
+    PASSKEY_RP_ID: str = "localhost"
+    PASSKEY_RP_NAME: str = "InsureClaim AI"
+    PASSKEY_ORIGIN: str = "http://localhost:3000"
+    PASSKEY_REQUIRE_USER_VERIFICATION: bool = True
+    PRIVILEGED_PASSKEY_REQUIRED: bool = True
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -136,6 +163,13 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     @property
+    def voice_ice_servers_list(self) -> List[str]:
+        return [item.strip() for item in self.VOICE_ICE_SERVERS.split(",") if item.strip()]
+
+    @property
+    def ai_allowed_models_list(self) -> List[str]:
+        return [item.strip() for item in self.AI_ALLOWED_MODELS.split(",") if item.strip()]
+
     def allowed_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()] or ["http://localhost:3000"]
 
@@ -210,6 +244,11 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT in ("production", "staging") and self.VOICE_ENABLED and self.VOICE_PROVIDER == "pipecat_local":
             if not self.VOICE_TTS_BASE_URL:
                 raise RuntimeError("VOICE_TTS_BASE_URL is required when production/staging voice uses Pipecat.")
+            ice = [x.strip() for x in self.VOICE_ICE_SERVERS.split(",") if x.strip()]
+            if not any(x.lower().startswith("turn:") for x in ice):
+                raise RuntimeError("VOICE_ICE_SERVERS must include a TURN server in production/staging.")
+            if self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ENABLED:
+                raise RuntimeError("PASSKEY_ENABLED must remain true when privileged passkeys are required.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")
@@ -217,6 +256,10 @@ class Settings(BaseSettings):
             raise RuntimeError("A Gemini/Google embedding API key is required when EMBEDDING_PROVIDER=gemini.")
         if self.ENVIRONMENT in ("production", "staging") and "openrouter.ai" in (self.EMBEDDING_BASE_URL or "").lower():
             raise RuntimeError("OpenRouter cannot be used as the embedding endpoint; configure a real embedding provider.")
+        if self.ENVIRONMENT in ("production", "staging") and self.AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION and not self.AI_ALLOWED_MODELS:
+            raise RuntimeError("AI_ALLOWED_MODELS must be configured in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging") and self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ORIGIN.startswith("https://"):
+            raise RuntimeError("PASSKEY_ORIGIN must use HTTPS when privileged passkeys are required in production/staging.")
 
 
 settings = Settings()
