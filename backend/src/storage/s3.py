@@ -43,6 +43,11 @@ def put_bytes(content:bytes,*,prefix:str,filename:str,content_type:str|None=None
             raise RuntimeError("S3_BUCKET is not configured.")
         extra: dict[str, Any] = {"ContentType": content_type or "application/octet-stream",
                                  "ServerSideEncryption": settings.S3_SERVER_SIDE_ENCRYPTION}
+        if settings.S3_SERVER_SIDE_ENCRYPTION == "aws:kms":
+            if not settings.S3_KMS_KEY_ID and settings.ENVIRONMENT in {"production", "staging"}:
+                raise RuntimeError("S3_KMS_KEY_ID is required for KMS-encrypted production objects.")
+            if settings.S3_KMS_KEY_ID:
+                extra["SSEKMSKeyId"] = settings.S3_KMS_KEY_ID
         if metadata: extra["Metadata"]=metadata
         _client().put_object(Bucket=settings.S3_BUCKET,Key=key,Body=content,**extra)
         logger.info("Successfully uploaded object to S3: s3://%s/%s", settings.S3_BUCKET, key)
@@ -81,7 +86,8 @@ def presigned_put(*,prefix:str,filename:str,content_type:str="application/octet-
     key=f"{prefix.rstrip('/')}/{uuid.uuid4().hex}{suffix}"
     url=_client().generate_presigned_url("put_object",Params={
         "Bucket":settings.S3_BUCKET,"Key":key,"ContentType":content_type,
-        "ServerSideEncryption":settings.S3_SERVER_SIDE_ENCRYPTION},ExpiresIn=ttl)
+        "ServerSideEncryption":settings.S3_SERVER_SIDE_ENCRYPTION,
+        **({"SSEKMSKeyId": settings.S3_KMS_KEY_ID} if settings.S3_KMS_KEY_ID else {}),},ExpiresIn=ttl)
     return {"bucket":settings.S3_BUCKET,"key":key,"url":url,"expires_in":ttl}
 
 
@@ -109,6 +115,7 @@ def promote_quarantined(source_key: str, *, ticket_id: str, filename: str, conte
             Key=destination,
             ContentType=content_type or "application/octet-stream",
             ServerSideEncryption=settings.S3_SERVER_SIDE_ENCRYPTION,
+            **({"SSEKMSKeyId": settings.S3_KMS_KEY_ID} if settings.S3_KMS_KEY_ID else {}),
             MetadataDirective="REPLACE",
             Metadata={"quarantine": "false", "scan_status": "clean"},
         )
