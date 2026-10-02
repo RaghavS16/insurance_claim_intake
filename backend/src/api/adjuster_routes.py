@@ -1,5 +1,7 @@
 """Authenticated adjuster workbench API."""
 from __future__ import annotations
+
+import asyncio
 from typing import Any
 import json
 import re
@@ -20,6 +22,7 @@ from src.database.claim_workflow import transition_claim, build_submission_readi
 from src.database.session import get_db
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.retriever import KnowledgeRetriever
+from src.services.ai_governance import tenant_ai_guard
 from src.services.audit import append_system_audit
 
 router = APIRouter(prefix="/api/v1/adjuster", tags=["Adjuster"])
@@ -351,7 +354,7 @@ def evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard),
     return {"url":presigned_get(item["s3_key"]),"expires_in":900}
 
 @router.get("/claims/{ticket_id}/copilot")
-def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+async def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     if not _can_access_claim(c, user, db):
         raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
@@ -447,7 +450,13 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
 """
 
     try:
-        result = get_configured_llm().invoke(prompt)
+        estimated_tokens = min(12000, max(512, len(prompt) // 4 + 512))
+        async with tenant_ai_guard(
+            str(user.tenant_id or ""),
+            operation="adjuster_copilot",
+            estimated_tokens=estimated_tokens,
+        ):
+            result = await asyncio.to_thread(get_configured_llm().invoke, prompt)
         raw = getattr(result, "content", str(result))
         parsed = None
         try:
@@ -543,7 +552,7 @@ class CopilotChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=5000)
 
 @router.post("/claims/{ticket_id}/copilot/chat")
-def copilot_chat(ticket_id: str, payload: CopilotChatRequest, user: User = Depends(_guard), db: Session = Depends(get_db)):
+async def copilot_chat(ticket_id: str, payload: CopilotChatRequest, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     if not _can_access_claim(c, user, db):
         raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
@@ -594,7 +603,13 @@ Instructions:
 - Use professional yet approachable tone formatted with clear markdown (bullet points, bold text).
 """
     try:
-        result = get_configured_llm().invoke(prompt)
+        estimated_tokens = min(12000, max(512, len(prompt) // 4 + 512))
+        async with tenant_ai_guard(
+            str(user.tenant_id or ""),
+            operation="adjuster_copilot_chat",
+            estimated_tokens=estimated_tokens,
+        ):
+            result = await asyncio.to_thread(get_configured_llm().invoke, prompt)
         answer = getattr(result, "content", str(result)).strip()
         if not answer:
             raise ValueError("Empty Copilot response.")
