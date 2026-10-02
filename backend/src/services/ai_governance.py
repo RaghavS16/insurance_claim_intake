@@ -115,7 +115,6 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
     concurrency_limit = max_concurrent or settings.AI_MAX_CONCURRENT_TURNS_PER_TENANT
 
     await _consume_window(tenant, operation, rate_limit, 60)
-    await _reserve_budget(tenant, estimated_tokens)
     lock_key = f"{tenant}:{operation}:concurrency"
     redis_client = await _redis_client()
     acquired = False
@@ -125,6 +124,7 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
             await redis_client.expire(lock_key, 120)
             if int(lease) > concurrency_limit:
                 await redis_client.decr(lock_key)
+                record_ai_rejection(operation=operation, reason="concurrency")
                 raise HTTPException(status_code=429, detail="AI concurrency limit reached for this tenant.")
             acquired = True
         finally:
@@ -133,10 +133,17 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
         async with _local_locks[lock_key]:
             current = _local_concurrency[lock_key]
             if current >= concurrency_limit:
+                record_ai_rejection(operation=operation, reason="concurrency")
                 raise HTTPException(status_code=429, detail="AI concurrency limit reached for this tenant.")
             _local_concurrency[lock_key] = current + 1
             acquired = True
+
     try:
+        try:
+            await _reserve_budget(tenant, estimated_tokens)
+        except HTTPException:
+            record_ai_rejection(operation=operation, reason="token_budget")
+            raise
         yield
     finally:
         if not acquired:
