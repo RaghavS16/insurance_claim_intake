@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import socket
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -101,6 +102,11 @@ class VoiceEventStore:
 class VoiceSessionManager:
     """Owns authenticated Pipecat workers and enforces one voice call per claim."""
 
+    @staticmethod
+    def worker_id() -> str:
+        """Return a stable worker identity for this process/container."""
+        return str(settings.VOICE_WORKER_ID or socket.gethostname() or "voice-worker").strip()
+
     def __init__(self) -> None:
         self.events = VoiceEventStore()
         self._tasks: dict[str, asyncio.Task] = {}
@@ -126,7 +132,7 @@ class VoiceSessionManager:
         """Reserve a claim-scoped voice session and persist its lifecycle row."""
         if settings.VOICE_WORKER_DRAINING:
             return False
-        worker_id = settings.VOICE_WORKER_ID
+        worker_id = self.worker_id()
         async with self._lock:
             active = self._active_call_by_ticket.get(ticket_id)
             if active and active != call_id:
@@ -273,7 +279,7 @@ class VoiceSessionManager:
             row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id, VoiceSession.tenant_id == tenant_id).first()
             if row:
                 row.status = "active"
-                row.worker_id = settings.VOICE_WORKER_ID
+                row.worker_id = self.worker_id()
                 row.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.MAX_VOICE_SESSION_SECONDS + 60)
                 db.commit()
 
