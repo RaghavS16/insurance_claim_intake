@@ -61,12 +61,19 @@ def upgrade() -> None:
     # Normalize the pgvector contract to the application embedding dimension.
     # The application uses 768-dimensional embeddings everywhere.
     if "knowledge_chunks" in inspector.get_table_names():
-        try:
-            op.execute("ALTER TABLE knowledge_chunks ALTER COLUMN embedding TYPE vector(768)")
-        except Exception:
-            # Existing incompatible rows must be rebuilt by the knowledge indexer.
-            # Do not make migration success depend on an unsafe vector cast.
-            pass
+        row = bind.execute(sa.text("""
+            SELECT format_type(a.atttypid, a.atttypmod)
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            WHERE c.relname = 'knowledge_chunks'
+              AND a.attname = 'embedding'
+              AND NOT a.attisdropped
+        """)).scalar()
+        if row and str(row) != "vector(768)":
+            raise RuntimeError(
+                f"knowledge_chunks.embedding is {row}; expected vector(768). "
+                "Rebuild/re-embed the knowledge index before deploying."
+            )
 
 def downgrade() -> None:
     bind = op.get_bind()
