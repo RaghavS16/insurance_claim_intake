@@ -82,6 +82,5 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> 
         return True
     except Exception:
         logger.exception("Failed to send OTP email to %s", to_email)
-        logger.info("OTP for %s (SMTP send failed, fallback log): %s", to_email, otp)
         return False
 
