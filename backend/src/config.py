@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field("dev-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, ge=5, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, ge=1, le=90)
+    CLAIM_SLA_HOURS: int = Field(72, ge=1, le=720)
+    VOICE_LATENCY_TARGET_MS: int = Field(1800, ge=250, le=10000)
 
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
