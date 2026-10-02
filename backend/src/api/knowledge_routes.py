@@ -61,7 +61,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="A document file is required.")
     try:
         raw = await read_limited(file, 150 * 1024 * 1024)
-        clean, scan_reason = scan_bytes(raw)
+        clean, scan_reason = await asyncio.to_thread(scan_bytes, raw)
         if not clean:
             raise HTTPException(status_code=422, detail="The document failed security scanning.")
     except ValueError as exc:
