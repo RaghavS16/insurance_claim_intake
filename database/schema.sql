@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS password_reset_otps (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES users(id),
     otp_hash        VARCHAR NOT NULL,
+    purpose         VARCHAR(40) NOT NULL DEFAULT 'password_reset',
     expires_at      TIMESTAMPTZ NOT NULL,
     attempts        INTEGER NOT NULL DEFAULT 0,
     verified        BOOLEAN NOT NULL DEFAULT FALSE,
