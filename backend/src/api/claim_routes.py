@@ -554,9 +554,10 @@ async def respond_to_evidence_request(
         ext = Path(file.filename).suffix.lower()
         if ext not in {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}:
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
-        content = await file.read()
-        if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Evidence file is too large.")
+        try:
+            content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
         s3 = put_bytes(
             content,
             prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}",
@@ -628,9 +629,10 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     ext = Path(file.filename).suffix.lower()
     if ext not in allowed:
         raise HTTPException(status_code=400, detail="Unsupported evidence format.")
-    content = await file.read()
-    if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+    try:
+        content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
     valid_file, file_reason = validate_evidence_file(content, file.filename)
     if not valid_file:
         raise HTTPException(status_code=400, detail=file_reason)
