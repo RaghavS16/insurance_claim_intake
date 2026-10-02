@@ -9,12 +9,16 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = '0001'
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = '0000'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Fresh databases created by 0000 already contain the current schema.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql" and bind.execute(sa.text("SELECT to_regclass('public.schema_baseline')")).scalar():
+        return
     # --- users: allow ADMIN role ---
     try:
         op.drop_constraint("users_role_check", "users", type_="check")
