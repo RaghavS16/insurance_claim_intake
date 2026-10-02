@@ -13,6 +13,7 @@ from src.config import settings
 _local_windows: dict[str, list[float]] = defaultdict(list)
 _local_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 _local_concurrency: dict[str, int] = defaultdict(int)
+_local_budget: dict[str, int] = defaultdict(int)
 
 
 def assert_model_allowed(model_name: str) -> None:
@@ -76,9 +77,31 @@ async def _consume_window(tenant_id: str, operation: str, limit: int, window_sec
         values.append(now)
         _local_windows[key] = values
 
+async def _reserve_budget(tenant_id: str, estimated_tokens: int) -> None:
+    if estimated_tokens <= 0:
+        return
+    key = f"ai:budget:{tenant_id}"
+    limit = settings.AI_MAX_ESTIMATED_TOKENS_PER_TENANT_PER_DAY
+    redis_client = await _redis_client()
+    if redis_client is not None:
+        try:
+            current = await redis_client.incrby(key, int(estimated_tokens))
+            await redis_client.expire(key, 90000)
+            if int(current) > limit:
+                await redis_client.decrby(key, int(estimated_tokens))
+                raise HTTPException(status_code=429, detail="AI daily token budget exceeded for this tenant.")
+        finally:
+            await redis_client.close()
+        return
+    async with _local_locks[key]:
+        current = _local_budget[key]
+        if current + estimated_tokens > limit:
+            raise HTTPException(status_code=429, detail="AI daily token budget exceeded for this tenant.")
+        _local_budget[key] = current + estimated_tokens
+
 
 @asynccontextmanager
-async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_requests: int | None = None, max_concurrent: int | None = None):
+async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_requests: int | None = None, max_concurrent: int | None = None, estimated_tokens: int = 0):
     tenant = str(tenant_id or "").strip()
     if not tenant:
         raise HTTPException(status_code=403, detail="Tenant context is required for AI operations.")
@@ -90,6 +113,7 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
     concurrency_limit = max_concurrent or settings.AI_MAX_CONCURRENT_TURNS_PER_TENANT
 
     await _consume_window(tenant, operation, rate_limit, 60)
+    await _reserve_budget(tenant, estimated_tokens)
     lock_key = f"{tenant}:{operation}:concurrency"
     redis_client = await _redis_client()
     acquired = False
