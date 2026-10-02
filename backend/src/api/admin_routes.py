@@ -319,7 +319,7 @@ def add_adjuster(
     Create a new Adjuster user account and associated adjuster profile.
     Generates a secure temporary password for initial access.
     """
-    _require_admin(request, db)
+    current_user = _require_admin(request, db)
 
     try:
         clean_name = validate_full_name(payload.name)
