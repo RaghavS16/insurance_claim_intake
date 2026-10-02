@@ -41,12 +41,12 @@ def _auto_assign_pending(claims:list[Claim], db:Session, tenant_id: str | None =
         if not readiness.get("ready"):
             continue
         spec=(c.insurance_type or "").lower()
-        a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == tenant_id or Adjuster.tenant_id.is_not(None), Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+        a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == tenant_id, Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if not a:
-            a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == user.tenant_id).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+            a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == c.tenant_id).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if a:
             a.claims_assigned=(a.claims_assigned or 0)+1
-            db.add(ClaimAssignment(claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
+            db.add(ClaimAssignment(tenant_id=c.tenant_id, claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
             state["assigned_adjuster_id"]=str(a.id)
             state["assigned_adjuster_name"]=a.name
             c.pipeline_state=state
@@ -65,14 +65,14 @@ def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
     if db is not None:
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
+        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == c.tenant_id).first()
         if adjuster:
             if assigned_adj_id and assigned_adj_id == str(adjuster.id):
                 return True
             if db.query(ClaimAssignment).filter(
                 ClaimAssignment.claim_id == c.id,
                 ClaimAssignment.tenant_id == c.tenant_id,
-                ClaimAssignment.adjuster_id == adjuster.id, ClaimAssignment.tenant_id == user.tenant_id,
+                ClaimAssignment.adjuster_id == adjuster.id,
             ).first():
                 return True
         if db.query(ClaimAssignment).filter(
