@@ -10,7 +10,7 @@ import hashlib
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -54,6 +54,17 @@ class VerifyOtpRequest(BaseModel):
     otp: str = Field(..., min_length=4, max_length=8)
 
 
+class MFASetupVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=8)
+
+class MFAVerifyRequest(BaseModel):
+    challenge_token: str = Field(..., min_length=20, max_length=200)
+    code: Optional[str] = Field(None, min_length=6, max_length=8)
+    recovery_code: Optional[str] = Field(None, min_length=6, max_length=32)
+
+class MFADisableRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=8)
+
 class ResetPasswordRequest(BaseModel):
     reset_token: str = Field(..., min_length=10)
     new_password: str = Field(..., min_length=8, max_length=128)
@@ -73,7 +84,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         secure=settings.ENVIRONMENT in {"production", "staging"},
-        samesite=settings.REFRESH_COOKIE_SAMESITE,
+        samesite=(settings.REFRESH_COOKIE_SAMESITE if settings.ENVIRONMENT in {"production", "staging"} else "lax"),
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path="/api/v1/auth",
     )
@@ -165,7 +176,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
 
 
 @router.post("/login")
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate a user and return a JWT access token."""
     enforce_rate_limit(request, action="login", max_requests=10, window_seconds=60)
     try:
@@ -202,6 +213,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         db.commit()
         return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
     access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": False})
+    refresh_token = _issue_refresh_token(db, user, request)
+    db.commit()
+    _set_refresh_cookie(response, refresh_token)
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -407,8 +421,8 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
     user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
-    # Revoke the reset token so it cannot be used again
     revoke_token(payload.reset_token)
+    db.query(RefreshToken).filter(RefreshToken.user_id == user.id, RefreshToken.tenant_id == user.tenant_id, RefreshToken.revoked_at.is_(None)).update({"revoked_at": datetime.now(timezone.utc)})
 
     try:
         db.commit()
@@ -435,7 +449,7 @@ def logout(request: Request, db: Session = Depends(get_db)):
             jti = payload.get("jti") or token
             exp_ts = payload.get("exp")
             exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
-            db.add(RevokedToken(token_jti=jti, user_id=payload.get("sub"), expires_at=exp_dt))
+            db.add(RevokedToken(token_jti=jti, tenant_id=db.query(User.tenant_id).filter(User.id == payload.get("sub")).scalar(), user_id=payload.get("sub"), expires_at=exp_dt))
             db.commit()
         except Exception:
             db.rollback()
