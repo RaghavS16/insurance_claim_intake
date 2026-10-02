@@ -24,6 +24,7 @@ class IngestRequest(BaseModel):
     effective_from: str | None = None
     effective_to: str | None = None
     policy_version: str | None = None
+    jurisdiction: str | None = Field(None, max_length=120)
 
 @router.post("/documents")
 async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER"]))):
@@ -38,6 +39,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             effective_from=payload.effective_from,
             effective_to=payload.effective_to,
             policy_version=payload.policy_version,
+            jurisdiction=payload.jurisdiction,
             uploaded_by=str(user.id),
         )
     except ValueError as exc:
@@ -54,7 +56,8 @@ async def upload_document(
     policy_number: str | None = Form(None),
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
-    policy_version: str | None = Form(None),
+    policy_version: str | None = Form(None)
+    jurisdiction: str | None = Form(None),
     user: User = Depends(require_role(["ADJUSTER"])),
 ):
     if not file.filename:
@@ -77,6 +80,7 @@ async def upload_document(
             effective_from=effective_from,
             effective_to=effective_to,
             policy_version=policy_version,
+            jurisdiction=jurisdiction,
             uploaded_by=str(user.id),
         )
     except ValueError as exc:
