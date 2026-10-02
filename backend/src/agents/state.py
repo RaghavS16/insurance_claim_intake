@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 class ClaimState(TypedDict, total=False):
     ticket_id: str
+    tenant_id: Optional[str]
+    jurisdiction: Optional[str]
     claim_text: str
     input_mode: str
     insurance_type_hint: Optional[str]
