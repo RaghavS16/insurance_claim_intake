@@ -429,11 +429,11 @@ def verify_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
 
 @router.post("/{ticket_id}/confirm")
 async def confirm_claim(ticket_id: str, request: Request, payload: Optional[ClaimConfirmRequest] = None, db: Session = Depends(get_db)):
-    """Compatibility submission endpoint.
+    """Explicit claimant confirmation + deterministic submission gate.
 
-    The endpoint name is retained for existing clients, but confirmation flags are
-    no longer authoritative. Submission always rechecks policy/readiness and is
-    protected by a durable unique submission record plus a row lock.
+    Successful submission requires explicit claimant confirmation. Policy
+    verification, evidence readiness, exception checks and exactly-once
+    persistence remain authoritative server-side controls.
     """
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == current_user.tenant_id).first()
@@ -464,6 +464,11 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         }
 
     state = dict(claim.pipeline_state or {})
+    if state.get("confirmed") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail="Claimant confirmation is required before policy verification and submission.",
+        )
     extracted = dict(state.get("extracted_data") or {})
     verification = verify_policy_for_claim(
         policy_id=extracted.get("policy_id"),
@@ -498,7 +503,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
     try:
         locked = db.execute(
-            select(Claim).where(Claim.id == claim.id).with_for_update()
+            select(Claim).where(Claim.id == claim.id, Claim.tenant_id == claim.tenant_id).with_for_update()
         ).scalar_one()
         existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == locked.id, ClaimSubmission.tenant_id == locked.tenant_id).first()
         if existing:
