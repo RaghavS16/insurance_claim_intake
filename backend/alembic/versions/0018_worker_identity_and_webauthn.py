@@ -19,9 +19,6 @@ def _baseline() -> bool:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if _baseline():
-        return
-
     def add_column(table: str, column: sa.Column) -> None:
         if inspector.has_table(table) and column.name not in {c["name"] for c in inspector.get_columns(table)}:
             op.add_column(table, column)
@@ -85,8 +82,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if _baseline():
-        return
     if inspector.has_table("webauthn_challenges"):
         op.drop_index("ix_webauthn_challenges_consumed", table_name="webauthn_challenges", if_exists=True)
         op.drop_index("ix_webauthn_challenges_user_id", table_name="webauthn_challenges", if_exists=True)
