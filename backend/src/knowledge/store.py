@@ -14,6 +14,24 @@ from src.storage.s3 import put_bytes
 
 logger = logging.getLogger(__name__)
 
+def _extract_pdf_pages(content: bytes, filename: str) -> list[str]:
+    """Extract PDF text page-by-page, preserving page provenance."""
+    pages: list[str] = []
+    try:
+        import pymupdf
+        doc = pymupdf.open(stream=content, filetype="pdf")
+        for page in doc:
+            text = str(page.get_text("text") or "").strip()
+            pages.append(text)
+        doc.close()
+    except Exception:
+        try:
+            reader = PdfReader(io.BytesIO(content))
+            pages = [(p.extract_text() or "").strip() for p in reader.pages]
+        except Exception:
+            pages = []
+    return pages
+
 def _extract_pdf(content: bytes, filename: str) -> str:
     extracted_pages: list[str] = []
     num_pages = 0
@@ -183,6 +201,16 @@ def _structure_aware_chunks(text: str, *, page_number: int | None = None) -> lis
     flush()
     return rows
 
+
+def _structure_aware_pages(pages: list[str]) -> list[dict[str, Any]]:
+    """Return structure-aware chunks with real PDF page metadata when available."""
+    rows: list[dict[str, Any]] = []
+    for page_index, page_text in enumerate(pages, start=1):
+        if not page_text.strip():
+            continue
+        page_rows = _structure_aware_chunks(page_text, page_number=page_index)
+        rows.extend(page_rows)
+    return rows
 
 def ingest_document(
     *,
