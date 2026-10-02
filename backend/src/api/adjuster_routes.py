@@ -584,6 +584,7 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
     if c.status in {"submitted", "assigned", "under_review"}:
         transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
     db.add(ClaimAuditEvent(
+        tenant_id=c.tenant_id,
         claim_id=str(c.id), actor_user_id=str(user.id), event_type="evidence_requested",
         new_value_json={"request_id": str(row.id), "request_text": row.request_text}, reason=row.request_text
     ))
@@ -613,7 +614,7 @@ def get_normalized_assignment(ticket_id: str, request: Request, db: Session = De
     claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
     a = db.execute(select(ClaimAssignment).where(
-        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
+        ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.is_active.is_(True)
     )).scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="No active assignment exists.")
@@ -654,7 +655,7 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
 @router.post("/claims/{ticket_id}/notes")
 def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
     note = ClaimNote(tenant_id=claim.tenant_id, claim_id=str(claim.id), author_user_id=str(current_user.id),
                      note=payload.note, visibility=payload.visibility)
