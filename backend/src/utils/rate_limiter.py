@@ -83,8 +83,18 @@ limiter=_build_limiter()
 def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seconds:int=60,allow_test_bypass:bool=True)->None:
     if allow_test_bypass and settings.ENVIRONMENT=="test" and not request.headers.get("X-Test-Enforce-Rate-Limit"): return
     ip=request.client.host if request.client else "unknown"
-    # Account-aware routes can add X-Rate-Limit-Identity from trusted server code.
-    identity=request.headers.get("X-Rate-Limit-Identity") or ip
+    # Never trust a client-supplied identity header for throttling. When a bearer
+    # token is present, use a stable token fingerprint; pre-auth routes fall back
+    # to the source IP. Authenticated route handlers also set tenant/user context
+    # on request.state, which is incorporated when available.
+    auth_header=request.headers.get("Authorization", "")
+    token_fp=""
+    if auth_header.lower().startswith("bearer "):
+        import hashlib
+        token_fp=hashlib.sha256(auth_header[7:].strip().encode("utf-8")).hexdigest()[:24]
+    user_id=str(getattr(request.state, "authenticated_user_id", "") or "")
+    tenant_id=str(getattr(request.state, "authenticated_tenant_id", "") or "")
+    identity="|".join(x for x in (tenant_id,user_id,token_fp,ip) if x) or ip
     allowed,remaining,retry=limiter.is_allowed(f"{action}:{identity}",max_requests,window_seconds)
     if not allowed:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,detail="Too many requests. Please try again later.",headers={"Retry-After":str(retry)})
