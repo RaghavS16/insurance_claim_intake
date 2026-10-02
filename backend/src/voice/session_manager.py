@@ -207,8 +207,12 @@ class VoiceSessionManager:
     ) -> None:
         """Attach a negotiated WebRTC connection to the reserved voice session."""
         async with self._lock:
-            if self._active_call_by_ticket.get(ticket_id) != call_id:
+            active = await self.active_call(ticket_id)
+            if active != call_id:
                 raise RuntimeError("Voice session is not active.")
+            # Redis is the source of truth for distributed reservation state;
+            # recover the local pointer when signaling lands on the owning worker.
+            self._active_call_by_ticket[ticket_id] = call_id
             if call_id in self._tasks and not self._tasks[call_id].done():
                 raise RuntimeError("Voice session is already attached.")
 
@@ -218,8 +222,13 @@ class VoiceSessionManager:
                     VoiceSession.call_id == call_id,
                     VoiceSession.tenant_id == tenant_id,
                 ).first()
-                if not row or row.worker_id != settings.VOICE_WORKER_ID:
-                    raise RuntimeError("Voice session belongs to another worker.")
+                if (
+                    not row
+                    or row.worker_id != settings.VOICE_WORKER_ID
+                    or row.ended_at is not None
+                    or row.status not in {"connecting", "active"}
+                ):
+                    raise RuntimeError("Voice session belongs to another worker or is no longer attachable.")
             finally:
                 db.close()
 
