@@ -103,10 +103,13 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
     if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
         return adj
     if str(assigned_id) == str(user.id):
-        a = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
-        if a: return a
-    if adj:
-        return adj
+        a = db.query(Adjuster).filter(
+            Adjuster.id == user.id,
+            Adjuster.tenant_id == claim.tenant_id,
+            Adjuster.is_active.is_(True),
+        ).first()
+        if a:
+            return a
     raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
 
 class ClaimUpdate(BaseModel):
