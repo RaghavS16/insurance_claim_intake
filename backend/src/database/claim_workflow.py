@@ -32,7 +32,7 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
         raise ValueError(f"Invalid claim transition: {old} -> {new_status}")
     claim.status = new_status
     db.add(ClaimAuditEvent(
-        claim_id=claim.id, actor_user_id=actor_user_id, event_type="status_changed",
+        claim_id=claim.id, tenant_id=str(claim.tenant_id or ""), actor_user_id=actor_user_id, event_type="status_changed",
         old_value_json={"status": old}, new_value_json={"status": new_status}, reason=reason,
     ))
     enqueue(
@@ -41,18 +41,19 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
         aggregate_type="claim",
         aggregate_id=str(claim.id),
         payload={"old_status": old, "new_status": new_status, "actor_user_id": actor_user_id, "reason": reason},
+        tenant_id=str(claim.tenant_id or ""),
         idempotency_key=f"claim:{claim.id}:status:{claim.state_version}:{new_status}",
     )
     return claim
 
 def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) -> Adjuster:
     active = db.execute(select(ClaimAssignment).where(
-        ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
+        ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.is_active.is_(True)
     )).scalar_one_or_none()
     if active:
         raise ValueError("Claim already has an active assignment")
     candidates = list(db.execute(
-        select(Adjuster).where(Adjuster.is_active.is_(True)).order_by(
+        select(Adjuster).where(Adjuster.is_active.is_(True), Adjuster.tenant_id == claim.tenant_id).order_by(
             Adjuster.claims_assigned.asc(), Adjuster.id.asc()
         )
     ).scalars())
@@ -63,11 +64,11 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         claims_assigned=Adjuster.claims_assigned + 1
     ))
     db.add(ClaimAssignment(
-        claim_id=claim.id, adjuster_id=chosen.id, assigned_by=actor_user_id,
+        tenant_id=str(claim.tenant_id or ""), claim_id=claim.id, adjuster_id=chosen.id, assigned_by=actor_user_id,
         reason="specialization_then_load",
     ))
     db.add(ClaimAuditEvent(
-        claim_id=claim.id, actor_user_id=actor_user_id, event_type="assigned",
+        claim_id=claim.id, tenant_id=str(claim.tenant_id or ""), actor_user_id=actor_user_id, event_type="assigned",
         new_value_json={"adjuster_id": chosen.id, "reason": "specialization_then_load"},
     ))
     enqueue(
@@ -76,6 +77,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         aggregate_type="claim",
         aggregate_id=str(claim.id),
         payload={"adjuster_id": str(chosen.id), "actor_user_id": actor_user_id},
+        tenant_id=str(claim.tenant_id or ""),
         idempotency_key=f"claim:{claim.id}:assignment:{chosen.id}",
     )
     return chosen
