@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field("dev-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, ge=5, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, ge=1, le=90)
-    REFRESH_COOKIE_SAMESITE: str = "none"
+    CLAIM_SLA_HOURS: int = Field(72, ge=1, le=720)
+    VOICE_LATENCY_TARGET_MS: int = Field(1800, ge=250, le=10000)
 
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
@@ -68,8 +69,6 @@ class Settings(BaseSettings):
     # Voice turns are finalized only after VAD confirms silence, then an
     # additional short debounce protects against trailing STT packets.
     VOICE_TURN_SILENCE_SECONDS: float = Field(0.3, ge=0.15, le=2.0)
-    CLAIM_SLA_HOURS: int = Field(48, ge=1, le=720)
-    DEFAULT_JURISDICTION: Optional[str] = None
     VOICE_VAD_STOP_SECONDS: float = Field(0.65, ge=0.3, le=2.0)
     VOICE_MAX_QUEUED_TURNS: int = Field(1, ge=1, le=3)
     CLOUD_LLM_BASE_URL: Optional[str] = None
@@ -80,7 +79,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_FAST_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_MAX_OUTPUT_TOKENS: int = Field(2048, ge=256, le=65536)
-    EMBEDDING_PROVIDER: str = "fastembed"
+    EMBEDDING_PROVIDER: str = "ollama"
     EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
     EMBEDDING_MODEL: str = "nomic-embed-text"
     EMBEDDING_API_KEY: Optional[str] = None

@@ -23,7 +23,7 @@ logger = app_logger
 
 
 def _validate_claim_access(db: Session, ticket_id: str, user: User) -> Claim:
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == user.tenant_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     try:
@@ -51,6 +51,7 @@ async def create_realtime_session(
         ticket_id=ticket_id,
         user_id=str(current_user.id),
         model=settings.VOICE_STT_MODEL,
+        tenant_id=str(current_user.tenant_id or ""),
     )
     if not ok:
         raise HTTPException(

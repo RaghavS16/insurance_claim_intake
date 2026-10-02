@@ -1,7 +1,7 @@
 """Canonical, source-aware claim context used by the agentic intake workflow.
 
-This module is deliberately independent from the conversational LangGraph state.
-The claim database remains the source of truth; this context is a read/decision model.
+The database remains authoritative.  This module contains deterministic read/decision
+logic only; no LLM output can make a claim submission-ready by itself.
 """
 from __future__ import annotations
 
@@ -18,17 +18,6 @@ FACT_STATES = {
     "ACCEPTED",
     "CONFLICTED",
     "REJECTED",
-}
-
-REQUIREMENT_TYPES = {"FACT", "DOCUMENT", "VERIFICATION", "AUTHORIZATION"}
-REQUIREMENT_STATES = {
-    "unknown",
-    "open",
-    "satisfied",
-    "blocked",
-    "waived",
-    "verified",
-    "conflicted",
 }
 
 POST_SUBMISSION_STATUSES = {
@@ -95,7 +84,6 @@ def merge_fact_metadata(
     confidence: Optional[float],
     status: str,
 ) -> dict[str, Any]:
-    """Produce provenance without overwriting historical source semantics."""
     result = dict(existing or {})
     history = list(result.get("provenance_history") or [])
     history.append(
@@ -115,8 +103,8 @@ def merge_fact_metadata(
 
 def _requirement_blocking(requirement: Any) -> bool:
     required = bool(getattr(requirement, "required", True))
-    status = str(getattr(requirement, "status", "unknown")).lower()
-    return required and status not in {"satisfied", "verified", "waived"}
+    state = str(getattr(requirement, "status", "unknown")).lower()
+    return required and state not in {"satisfied", "verified", "waived"}
 
 
 def calculate_readiness(
@@ -125,6 +113,7 @@ def calculate_readiness(
     policy_verification: Optional[dict[str, Any]] = None,
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
+    claimant_confirmation: bool = False,
 ) -> ReadinessResult:
     requirements_list = list(requirements)
     evidence_list = list(evidence_rows)
@@ -158,9 +147,7 @@ def calculate_readiness(
         "identity": "PASS"
         if policy_verification and policy_verification.get("identity_verified") is True
         else "PENDING",
-        "claimant_confirmation": "PASS"
-        if policy_verification and policy_verification.get("claimant_confirmed") is True
-        else "PENDING",
+        "claimant_confirmation": "PASS" if claimant_confirmation else "PENDING",
     }
 
     verified_evidence = sum(
@@ -187,6 +174,7 @@ def calculate_readiness(
         and verification["claimant_confirmation"] == "PASS"
         and not blocking_exceptions
     )
+
     return ReadinessResult(
         ready=ready,
         blocking_requirements=blocking,
@@ -195,8 +183,7 @@ def calculate_readiness(
             "required": sum(
                 1
                 for req in requirements_list
-                if bool(getattr(req, "required", True))
-                and getattr(req, "evidence_type", None)
+                if bool(getattr(req, "required", True)) and getattr(req, "evidence_type", None)
             ),
             "received": sum(
                 1

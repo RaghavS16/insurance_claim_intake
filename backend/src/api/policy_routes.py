@@ -42,11 +42,12 @@ def _resolve_user(request: Request, db: Session) -> User:
     return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
 
 
-def _audit(db: Session, user_id: Any, policy_number: str, outcome: str, ip: Optional[str] = None):
+def _audit(db: Session, user_id: Any, policy_number: str, outcome: str, ip: Optional[str] = None, tenant_id: Optional[str] = None):
     """Log a policy linking attempt to the policy_link_audit table."""
     try:
         audit = PolicyLinkAudit(
             user_id=user_id,
+            tenant_id=tenant_id,
             policy_number=policy_number,
             outcome=outcome,
             ip_address=ip,
@@ -81,14 +82,14 @@ def link_policy(
     policy = db.query(Policy).filter(Policy.policy_number == policy_number, Policy.tenant_id == current_user.tenant_id).first()
 
     if not policy:
-        _audit(db, current_user.id, policy_number, "not_found", ip)
+        _audit(db, current_user.id, policy_number, "not_found", ip, str(current_user.tenant_id or ""))
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="We couldn't verify those details.",
         )
 
     if (policy.link_attempts or 0) >= MAX_LINK_ATTEMPTS:
-        _audit(db, current_user.id, policy_number, "rate_limited", ip)
+        _audit(db, current_user.id, policy_number, "rate_limited", ip, str(current_user.tenant_id or ""))
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many attempts. Please contact support.",
@@ -102,7 +103,7 @@ def link_policy(
                 "already_linked": True,
                 "message": "This policy is already linked to your account.",
             }
-        _audit(db, current_user.id, policy_number, "already_linked_other", ip)
+        _audit(db, current_user.id, policy_number, "already_linked_other", ip, str(current_user.tenant_id or ""))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This policy is already linked to another account.",
@@ -125,7 +126,7 @@ def link_policy(
     if not (dob_match and phone_match and name_match):
         policy.link_attempts = int(getattr(policy, "link_attempts", 0) or 0) + 1  # type: ignore[assignment]
         db.commit()
-        _audit(db, current_user.id, policy_number, "pii_mismatch", ip)
+        _audit(db, current_user.id, policy_number, "pii_mismatch", ip, str(current_user.tenant_id or ""))
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="We couldn't verify those details.",
@@ -136,7 +137,7 @@ def link_policy(
     policy.linked_at = datetime.now(timezone.utc)  # type: ignore[assignment]
     policy.link_attempts = 0  # type: ignore[assignment]
     db.commit()
-    _audit(db, current_user.id, policy_number, "success", ip)
+    _audit(db, current_user.id, policy_number, "success", ip, str(current_user.tenant_id or ""))
 
     cov_amt = float(getattr(policy, "coverage_amount", 0) or 0)
     return {
@@ -160,7 +161,7 @@ def list_my_policies(
     current_user = _resolve_user(request, db)
     policies = (
         db.query(Policy)
-        .filter(Policy.customer_id == current_user.id)
+        .filter(Policy.customer_id == current_user.id, Policy.tenant_id == current_user.tenant_id)
         .order_by(Policy.created_at.desc())
         .all()
     )

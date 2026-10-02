@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
-from src.database.hardening_models import SystemAuditEvent, ClaimAuditEvent, ClaimDecision
 from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
 from src.utils.validators import (
@@ -94,9 +93,6 @@ class UpdatePolicyRequest(BaseModel):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _record_system_audit(db: Session, user: User, *, event_type: str, resource_type: str, resource_id: str | None, action: str, metadata: Dict[str, Any] | None = None) -> None:
-    db.add(SystemAuditEvent(tenant_id=str(user.tenant_id), actor_user_id=str(user.id), event_type=event_type, resource_type=resource_type, resource_id=resource_id, action=action, metadata_json=metadata or {}))
-
 def _require_admin(request: Request, db: Session) -> User:
     """Ensure the caller is an authenticated ADMIN user."""
     return resolve_bearer_user(request, db, ["ADMIN"])
@@ -125,20 +121,17 @@ def parse_date(value: str, field_name: str) -> date:
         )
 
 
-def _find_policy(db: Session, identifier: str, tenant_id: str | None = None) -> Optional[Policy]:
+def _find_policy(db: Session, identifier: str, tenant_id: str) -> Optional[Policy]:
     """Find policy safely by UUID id or policy_number without throwing Postgres UUID casting error."""
     clean_id = identifier.strip()
     try:
         val_uuid = uuid.UUID(clean_id)
-        pol = db.query(Policy).filter(Policy.id == str(val_uuid), *([Policy.tenant_id == tenant_id] if tenant_id else [])).first()
+        pol = db.query(Policy).filter(Policy.id == str(val_uuid), Policy.tenant_id == tenant_id).first()
         if pol:
             return pol
     except (ValueError, AttributeError):
         pass
-    query = db.query(Policy).filter(Policy.policy_number == clean_id.upper())
-    if tenant_id:
-        query = query.filter(Policy.tenant_id == tenant_id)
-    return query.first()
+    return db.query(Policy).filter(Policy.policy_number == clean_id.upper(), Policy.tenant_id == tenant_id).first()
 
 
 def _adjuster_dict(a: Adjuster) -> Dict[str, Any]:
@@ -184,7 +177,7 @@ async def import_policies_csv(
     Import policies from a CSV file.
     Upserts policy details. For existing policies, NEVER overwrites customer_id or linked_at.
     """
-    current_user = _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(
@@ -264,7 +257,7 @@ async def import_policies_csv(
         if phone:
             clean_phone = "".join(filter(str.isdigit, phone))
 
-        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == current_user.tenant_id).first()
+        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == admin.tenant_id).first()
 
         if existing_policy:
             # Update policy fields WITHOUT overwriting customer_id or linked_at
@@ -284,7 +277,7 @@ async def import_policies_csv(
             # Create new unlinked policy
             new_policy = Policy(
                 id=str(uuid.uuid4()),
-                tenant_id=str(current_user.tenant_id),
+                tenant_id=str(admin.tenant_id or ""),
                 policy_number=policy_num,
                 customer_id=None,
                 policy_type=policy_type,
@@ -322,7 +315,7 @@ def add_adjuster(
     Create a new Adjuster user account and associated adjuster profile.
     Generates a secure temporary password for initial access.
     """
-    current_user = _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     try:
         clean_name = validate_full_name(payload.name)
@@ -340,7 +333,7 @@ def add_adjuster(
             detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}",
         )
 
-    existing_user = db.query(User).filter(User.email == clean_email).first()
+    existing_user = db.query(User).filter(User.email == clean_email, User.tenant_id == admin.tenant_id).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -353,7 +346,7 @@ def add_adjuster(
 
     new_user = User(
         id=user_id,
-        tenant_id=str(current_user.tenant_id),
+        tenant_id=str(admin.tenant_id or ""),
         full_name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -363,7 +356,7 @@ def add_adjuster(
     )
     new_adjuster = Adjuster(
         id=user_id,
-        tenant_id=str(current_user.tenant_id),
+        tenant_id=str(admin.tenant_id or ""),
         name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -374,7 +367,6 @@ def add_adjuster(
 
     db.add(new_user)
     db.add(new_adjuster)
-    _record_system_audit(db, current_user, event_type="admin.adjuster_created", resource_type="adjuster", resource_id=str(new_adjuster.id), action="create", metadata={"email": clean_email})
     db_commit_or_500(db, logger, "Failed to create adjuster account.", "Failed to create adjuster account")
 
     return {
@@ -390,9 +382,9 @@ def list_adjusters(
     db: Session = Depends(get_db),
 ):
     """List all registered adjusters and their assigned claims count."""
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == current_user.tenant_id).order_by(Adjuster.name.asc()).all()
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == admin.tenant_id).order_by(Adjuster.name.asc()).all()
     return [_adjuster_dict(a) for a in adjusters]
 
 
@@ -403,11 +395,10 @@ def get_adjuster(
     db: Session = Depends(get_db),
 ):
     """Retrieve details of a single adjuster."""
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
-    if not adjuster:
-        raise HTTPException(status_code=404, detail="Adjuster not found.")
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
+    if not adjuster: raise HTTPException(status_code=404, detail="Adjuster not found.")
     return _adjuster_dict(adjuster)
 
 
@@ -422,16 +413,16 @@ def update_adjuster(
     Update an adjuster's information (name, email, phone, specialization, active status).
     Synchronizes the corresponding User account.
     """
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == current_user.tenant_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
 
     if payload.name is not None:
         try:
@@ -446,7 +437,7 @@ def update_adjuster(
         try:
             clean_email = validate_email(payload.email)
             if clean_email != adjuster.email:
-                existing = db.query(User).filter(User.email == clean_email, User.id != adjuster_id).first()
+                existing = db.query(User).filter(User.email == clean_email, User.id != adjuster_id, User.tenant_id == admin.tenant_id).first()
                 if existing:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -484,7 +475,6 @@ def update_adjuster(
             user.status = "active" if payload.is_active else "inactive"  # type: ignore[assignment]
             user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
 
-    _record_system_audit(db, current_user, event_type="admin.adjuster_updated", resource_type="adjuster", resource_id=str(adjuster.id), action="update")
     db_commit_or_500(db, logger, "Failed to update adjuster.", f"Failed to update adjuster {adjuster_id}")
     db.refresh(adjuster)
 
@@ -503,16 +493,16 @@ def reset_adjuster_password(
     """
     Reset an adjuster's password and generate a new temporary password.
     """
-    current_user = _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == current_user.tenant_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -546,11 +536,11 @@ def delete_adjuster(
     Delete an adjuster and their associated user record.
     Prevents deletion if active claims are assigned (suggests deactivation instead).
     """
-    current_user = _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster:
-        raise HTTPException(status_code=404, detail="Adjuster not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjuster not found.")
 
     if (adjuster.claims_assigned or 0) > 0:
         raise HTTPException(
@@ -558,12 +548,11 @@ def delete_adjuster(
             detail=f"Cannot delete adjuster with {adjuster.claims_assigned} active assigned claims. Deactivate the adjuster account instead.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
 
     db.delete(adjuster)
     if user:
         db.delete(user)
-    _record_system_audit(db, current_user, event_type="admin.adjuster_deleted", resource_type="adjuster", resource_id=str(adjuster_id), action="delete")
     db_commit_or_500(db, logger, "Failed to delete adjuster.", f"Failed to delete adjuster {adjuster_id}")
 
     return {
@@ -580,14 +569,14 @@ def list_all_policies(
     db: Session = Depends(get_db),
 ):
     """Overview list of all policies in the system and their linking status."""
-    current_user = _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     if page < 1:
         page = 1
     if page_size < 1 or page_size > 200:
         page_size = 50
 
-    query = db.query(Policy).filter(Policy.tenant_id == current_user.tenant_id).order_by(Policy.created_at.desc())
+    query = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id).order_by(Policy.created_at.desc())
     total = query.count()
     offset = (page - 1) * page_size
     policies = query.offset(offset).limit(page_size).all()
@@ -637,10 +626,10 @@ def create_policy(
     db: Session = Depends(get_db),
 ):
     """Create a single new policy record with validation."""
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
     policy_num = payload.policy_number.strip().upper()
-    existing = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == current_user.tenant_id).first()
+    existing = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == admin.tenant_id).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -664,7 +653,7 @@ def create_policy(
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
-        tenant_id=str(current_user.tenant_id),
+        tenant_id=str(admin.tenant_id or ""),
         policy_number=policy_num,
         customer_id=None,
         policy_type=policy_type,
@@ -681,7 +670,6 @@ def create_policy(
     )
 
     db.add(new_policy)
-    _record_system_audit(db, current_user, event_type="admin.policy_created", resource_type="policy", resource_id=str(new_policy.id), action="create", metadata={"policy_number": new_policy.policy_number})
     db_commit_or_500(db, logger, "Failed to create policy in database.", "Failed to create policy")
     db.refresh(new_policy)
 
@@ -699,9 +687,9 @@ def update_policy(
     db: Session = Depends(get_db),
 ):
     """Update existing policy details safely."""
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number, str(current_user.tenant_id))
+    policy = _find_policy(db, policy_id_or_number, str(admin.tenant_id or ""))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -768,9 +756,9 @@ def delete_policy(
     db: Session = Depends(get_db),
 ):
     """Delete a policy by ID or policy number."""
-    current_user = _current_admin(request, db)
+    admin = _require_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number, str(current_user.tenant_id))
+    policy = _find_policy(db, policy_id_or_number, str(admin.tenant_id or ""))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -791,54 +779,35 @@ def delete_policy(
 
 
 
-def _current_admin(request: Request, db: Session) -> User:
-    return resolve_bearer_user(request, db, ["ADMIN"])
-
-
-def _audit(
-    db: Session,
-    user: User,
-    *,
-    event_type: str,
-    resource_type: str,
-    resource_id: str | None,
-    action: str,
-    metadata: Dict[str, Any] | None = None,
-) -> None:
-    db.add(SystemAuditEvent(
-        tenant_id=str(user.tenant_id),
-        actor_user_id=str(user.id),
-        event_type=event_type,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        action=action,
-        metadata_json=metadata or {},
-    ))
-
-
-@router.get("/audit")
-def list_system_audit(
+@router.get("/audit/events")
+def list_system_audit_events(
     request: Request,
     limit: int = 100,
+    event_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Return tenant-scoped immutable administrative/security audit events."""
-    current_user = _require_admin(request, db)
-    limit = max(1, min(limit, 500))
-    rows = (
-        db.query(SystemAuditEvent)
-        .filter(SystemAuditEvent.tenant_id == current_user.tenant_id)
-        .order_by(SystemAuditEvent.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [{
-        "id": str(row.id),
-        "event_type": row.event_type,
-        "resource_type": row.resource_type,
-        "resource_id": row.resource_id,
-        "action": row.action,
-        "metadata": row.metadata_json or {},
-        "actor_user_id": str(row.actor_user_id) if row.actor_user_id else None,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-    } for row in rows]
+    """Return tenant-scoped administrative/AI audit events."""
+    admin = _require_admin(request, db)
+    from src.database.hardening_models import SystemAuditEvent
+    q = db.query(SystemAuditEvent).filter(SystemAuditEvent.tenant_id == admin.tenant_id)
+    if event_type:
+        q = q.filter(SystemAuditEvent.event_type == event_type)
+    rows = q.order_by(SystemAuditEvent.sequence_no.desc()).limit(max(1, min(limit, 500))).all()
+    return {
+        "items": [
+            {
+                "id": str(row.id),
+                "sequence_no": row.sequence_no,
+                "event_type": row.event_type,
+                "resource_type": row.resource_type,
+                "resource_id": row.resource_id,
+                "action": row.action,
+                "actor_user_id": str(row.actor_user_id) if row.actor_user_id else None,
+                "payload": row.payload_json,
+                "previous_hash": row.previous_hash,
+                "event_hash": row.event_hash,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    }

@@ -39,9 +39,9 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             effective_from=payload.effective_from,
             effective_to=payload.effective_to,
             policy_version=payload.policy_version,
-            jurisdiction=payload.jurisdiction,
             uploaded_by=str(user.id),
-            tenant_id=str(user.tenant_id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=payload.jurisdiction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -81,15 +81,15 @@ async def upload_document(
             effective_from=effective_from,
             effective_to=effective_to,
             policy_version=policy_version,
-            jurisdiction=jurisdiction,
             uploaded_by=str(user.id),
-            tenant_id=str(user.tenant_id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Knowledge document upload failed for '%s': %s", file.filename, exc)
-        raise HTTPException(status_code=502, detail=f"Knowledge indexing failed: {exc}")
+        raise HTTPException(status_code=502, detail="Knowledge indexing is temporarily unavailable.")
 
 @router.get("/search")
 async def retrieve(
@@ -99,6 +99,7 @@ async def retrieve(
     document_type: str | None = None,
     policy_number: str | None = None,
     incident_date: str | None = None,
+    jurisdiction: str | None = None,
 ):
     try:
         items = await asyncio.to_thread(
@@ -108,13 +109,13 @@ async def retrieve(
             document_types=[document_type] if document_type else None,
             policy_number=policy_number,
             incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
-            tenant_id=str(user.tenant_id),
-            jurisdiction=None,
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction,
         )
         return {"items": items, "query": q}
     except Exception as exc:
         logger.exception("Knowledge search failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Knowledge retrieval failed: {exc}")
+        raise HTTPException(status_code=502, detail="Knowledge retrieval is temporarily unavailable.")
 
 
 
@@ -133,6 +134,5 @@ def publish_document(
     from datetime import datetime, timezone
     meta["published_at"] = datetime.now(timezone.utc).isoformat()
     doc.metadata_json = meta
-    db.add(SystemAuditEvent(tenant_id=str(user.tenant_id), actor_user_id=str(user.id), event_type="knowledge.document_published", resource_type="knowledge_document", resource_id=str(doc.id), action="publish", metadata_json={"source_name": doc.source_name, "policy_version": meta.get("policy_version")}))
     db.commit()
     return {"document_id": str(doc.id), "publication_status": "published"}

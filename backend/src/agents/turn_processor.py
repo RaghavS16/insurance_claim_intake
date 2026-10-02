@@ -11,7 +11,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
-from src.database.hardening_models import ClaimSubmission
+from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfirmation
+from src.services.audit import append_system_audit
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -34,12 +35,12 @@ async def process_claimant_turn(
     from src.database.claim_workflow import assign_claim, transition_claim, persist_canonical_facts, sync_claim_requirements, build_submission_readiness
 
     if claim.status in {"submitted", "assigned", "under_review", "closed"}:
-        prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id, ConversationTurn.tenant_id == claim.tenant_id).count()
+        prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
         logical_turn = (prior_turns // 2) + 1
         agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters."
         try:
-            db.add(ConversationTurn(tenant_id=claim.tenant_id, claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
-            db.add(ConversationTurn(tenant_id=claim.tenant_id, claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_reply))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_reply))
             db.commit()
         except Exception:
             db.rollback()
@@ -47,7 +48,7 @@ async def process_claimant_turn(
         return {**state, "next_question": agent_reply, "message": agent_reply, "conversation_status": "submitted"}
 
     expected_state_version = int(getattr(claim, "state_version", 1) or 1)
-    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id, ConversationTurn.tenant_id == claim.tenant_id).count()
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     logical_turn = (prior_turns // 2) + 1
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
     workflow_event = None
@@ -74,6 +75,7 @@ async def process_claimant_turn(
 
     graph_input = {
         **prior_state,
+        "tenant_id": str(getattr(claim, "tenant_id", "") or ""),
         "claim_text": "" if workflow_event else user_text,
         "ticket_id": claim.ticket_id,
         "input_mode": input_mode,
@@ -121,15 +123,11 @@ async def process_claimant_turn(
             result["next_question"] = rag_reply["answer"]
             result["message"] = rag_reply["answer"]
 
-    # Policy verification is authoritative only after explicit claimant confirmation.
+    # Policy verification is triggered by complete baseline facts, not by a conversational
+    # confirmation flag. The claimant can correct facts at any time; verification is rerun
+    # after each correction before submission.
     missing_baseline = list(result.get("missing_fields") or [])
-    if (
-        not missing_baseline
-        and result.get("confirmed") is True
-        and extracted.get("policy_id")
-        and extracted.get("event_date")
-        and extracted.get("insurance_type")
-    ):
+    if not missing_baseline and extracted.get("policy_id") and extracted.get("event_date") and extracted.get("insurance_type"):
         try:
             claim.pipeline_state = dict(result)
             flag_modified(claim, "pipeline_state")
@@ -189,91 +187,127 @@ async def process_claimant_turn(
     # side effect of the LLM's conversational confirmation state. The backend recomputes
     # readiness and uses a durable unique submission record for exactly-once semantics.
     if result.get("submit_requested") and claim.status not in {"submitted", "assigned"}:
-        if result.get("confirmed") is not True:
-            result["submit_requested"] = False
-            result["conversation_status"] = "pending_confirmation"
-            result["awaiting_confirmation"] = True
+        policy_verification = result.get("policy_verification") or {}
+        readiness = build_submission_readiness(db, claim, policy_verification)
+        result["submission_readiness"] = readiness
+        if readiness.get("ready") and not result.get("final_submission_confirmed"):
             result["awaiting_submission_confirmation"] = True
+            result["final_submission_confirmed"] = False
+            result["conversation_status"] = "awaiting_submission_confirmation"
             result["next_question"] = (
-                nodes._confirmation_summary(extracted)
-                + " Please confirm these details are correct before I verify and submit the claim."
+                "I have the required claim information and verified evidence. "
+                "Please review the summary, then say “confirm and submit” when everything is correct."
             )
             result["message"] = result["next_question"]
-        else:
-            policy_verification = result.get("policy_verification") or {}
-            readiness = build_submission_readiness(db, claim, policy_verification)
-            result["submission_readiness"] = readiness
-            if readiness.get("ready"):
-                try:
-                    locked = db.execute(
-                        __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id, Claim.tenant_id == claim.tenant_id).with_for_update()
-                    ).scalar_one()
-                    existing_submission = db.query(ClaimSubmission).filter(
-                        ClaimSubmission.claim_id == claim.id,
-                        ClaimSubmission.tenant_id == claim.tenant_id,
-                    ).first()
-                    if existing_submission:
-                        result["conversation_status"] = "submitted"
-                        result["next_question"] = (
-                            f"Your claim #{claim.ticket_id} has already been submitted. "
-                            "You can follow its progress from Track Claim."
-                        )
-                        result["message"] = result["next_question"]
-                    else:
-                        assigned = assign_claim(db, locked, str(claim.claimant_id))
-                        transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
-                        idempotency_key = f"claim:{claim.id}:submission:v1"
-                        db.add(ClaimSubmission(
-                            tenant_id=locked.tenant_id,
-                            claim_id=locked.id,
-                            idempotency_key=idempotency_key,
-                            submitted_by=str(claim.claimant_id),
-                            result_json={"ticket_id": locked.ticket_id, "adjuster_id": str(assigned.id)},
-                        ))
-                        claim.status = "submitted"
-                        result["assigned_adjuster_id"] = str(assigned.id)
-                        result["assigned_adjuster_name"] = assigned.name
-                        result["assigned_adjuster"] = {
-                            "id": str(assigned.id), "name": assigned.name,
-                            "specialization": assigned.specialization,
-                        }
-                        result["conversation_status"] = "submitted"
-                        result["status"] = "submitted"
-                        result["conversation_phase"] = "5_completed"
-                        try:
-                            from src.agents.submission_synthesizer import synthesize_claims_package
-                            result["submission_package"] = synthesize_claims_package(result, db, locked)
-                        except Exception as exc:
-                            logger.warning("Submission dossier synthesis failed after durable acceptance: %s", exc)
-                        result["next_question"] = (
-                            f"Your claim #{claim.ticket_id} has been submitted and assigned to "
-                            f"{assigned.name}. You can track its progress from Track Claim."
-                        )
-                        result["message"] = result["next_question"]
-                except Exception as exc:
-                    db.rollback()
-                    logger.exception("Exactly-once claim submission failed")
-                    result["submission_error"] = type(exc).__name__
+        elif readiness.get("ready"):
+            try:
+                locked = db.execute(
+                    __import__("sqlalchemy").select(Claim).where(
+                        Claim.id == claim.id,
+                        Claim.tenant_id == claim.tenant_id,
+                    ).with_for_update()
+                ).scalar_one()
+                existing_submission = db.query(ClaimSubmission).filter(
+                    ClaimSubmission.claim_id == claim.id,
+                    ClaimSubmission.tenant_id == locked.tenant_id,
+                ).first()
+                if existing_submission:
+                    result["conversation_status"] = "submitted"
                     result["next_question"] = (
-                        "I couldn't complete the submission safely just now. Your claim details are saved; "
-                        "please try submitting again."
+                        f"Your claim #{claim.ticket_id} has already been submitted. "
+                        "You can follow its progress from Track Claim."
                     )
                     result["message"] = result["next_question"]
-            else:
+                else:
+                    # Recompute the submission gate against the locked row; a correction committed
+                    # concurrently must invalidate the prior readiness result.
+                    locked_state = dict(locked.pipeline_state or {})
+                    locked_readiness = build_submission_readiness(db, locked, locked_state.get("policy_verification") or {})
+                    if not locked_readiness.get("ready") or not bool(locked_state.get("final_submission_confirmed")):
+                        raise ClaimTurnConflict("Claim changed while submission confirmation was being processed.")
+                    assigned = assign_claim(db, locked, str(claim.claimant_id))
+                    transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
+                    idempotency_key = f"claim:{claim.id}:submission:v1"
+                    import hashlib, json
+                    summary_hash = hashlib.sha256(json.dumps({
+                        "extracted_data": locked_state.get("extracted_data") or {},
+                        "dynamic_requirements": locked_state.get("dynamic_requirements") or [],
+                        "evidence": locked_state.get("evidence") or [],
+                    }, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+                    existing_confirmation = db.query(ClaimSubmissionConfirmation).filter(
+                        ClaimSubmissionConfirmation.claim_id == locked.id,
+                        ClaimSubmissionConfirmation.tenant_id == locked.tenant_id,
+                        ClaimSubmissionConfirmation.claim_state_version == int(locked.state_version or 1),
+                    ).first()
+                    if not existing_confirmation:
+                        db.add(ClaimSubmissionConfirmation(
+                            claim_id=locked.id,
+                            tenant_id=str(locked.tenant_id or ""),
+                            confirmed_by=str(claim.claimant_id),
+                            claim_state_version=int(locked.state_version or 1),
+                            summary_sha256=summary_hash,
+                        ))
+                    db.add(ClaimSubmission(
+                        claim_id=locked.id,
+                        tenant_id=str(locked.tenant_id or ""),
+                        idempotency_key=idempotency_key,
+                        submitted_by=str(claim.claimant_id),
+                        result_json={"ticket_id": locked.ticket_id, "adjuster_id": str(assigned.id)},
+                    ))
+                    claim.status = "submitted"
+                    result["assigned_adjuster_id"] = str(assigned.id)
+                    result["assigned_adjuster_name"] = assigned.name
+                    result["assigned_adjuster"] = {
+                        "id": str(assigned.id), "name": assigned.name,
+                        "specialization": assigned.specialization,
+                    }
+                    result["conversation_status"] = "submitted"
+                    result["status"] = "submitted"
+                    result["conversation_phase"] = "5_completed"
+                    try:
+                        from src.agents.submission_synthesizer import synthesize_claims_package
+                        result["submission_package"] = synthesize_claims_package(result, db, locked)
+                    except Exception as exc:
+                        logger.warning("Submission dossier synthesis failed after durable acceptance: %s", exc)
+                    result["next_question"] = (
+                        f"Your claim #{claim.ticket_id} has been submitted and assigned to "
+                        f"{assigned.name}. You can track its progress from Track Claim."
+                    )
+                    result["message"] = result["next_question"]
+                    append_system_audit(
+                        db,
+                        tenant_id=str(locked.tenant_id or ""),
+                        actor_user_id=str(claim.claimant_id),
+                        event_type="claim_submission",
+                        resource_type="claim",
+                        resource_id=str(locked.id),
+                        action="submit_claim",
+                        payload={
+                            "ticket_id": locked.ticket_id,
+                            "adjuster_id": str(assigned.id),
+                            "state_version": int(locked.state_version or 1),
+                        },
+                    )
+            except Exception as exc:
+                db.rollback()
+                logger.exception("Exactly-once claim submission failed")
+                result["submission_error"] = type(exc).__name__
                 result["next_question"] = (
-                    "Your claim isn't ready to submit yet. "
-                    + (", ".join(
-                        str(item.get("label") or item.get("key"))
-                        for item in readiness.get("blocking_requirements", [])
-                    ) or "I still need a policy verification or review.")
-                    + "."
+                    "I couldn't complete the submission safely just now. Your claim details are saved; "
+                    "please try submitting again."
                 )
                 result["message"] = result["next_question"]
-            result["submit_requested"] = False
-
-    # Keep the durable claim-state cache synchronized after any verification/submission mutations.
-    claim.pipeline_state = dict(result)
-    flag_modified(claim, "pipeline_state")
+        else:
+            result["next_question"] = (
+                "Your claim isn't ready to submit yet. "
+                + (", ".join(
+                    str(item.get("label") or item.get("key"))
+                    for item in readiness.get("blocking_requirements", [])
+                ) or "I still need a policy verification or review.")
+                + "."
+            )
+            result["message"] = result["next_question"]
+        result["submit_requested"] = False
 
     # Continuous gap/consistency analysis. The phase field below is a legacy UI projection, not workflow authority.
     try:
@@ -321,13 +355,12 @@ async def process_claimant_turn(
         locked_claim.state_version = expected_state_version + 1
         event_id = uuid.uuid4().hex
         if not workflow_event:
-            user_turn = ConversationTurn(tenant_id=claim.tenant_id, claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:u", speaker="user", text=user_text)
+            user_turn = ConversationTurn(claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:u", speaker="user", text=user_text)
             if attachment:
                 user_turn.attachment = dict(attachment)
             db.add(user_turn)
         elif attachment:
             user_turn = ConversationTurn(
-                tenant_id=claim.tenant_id,
                 claim_id=claim.id,
                 turn_number=logical_turn,
                 event_id=f"{event_id}:u",
@@ -337,7 +370,7 @@ async def process_claimant_turn(
             user_turn.attachment = dict(attachment)
             db.add(user_turn)
         if agent_text:
-            db.add(ConversationTurn(tenant_id=claim.tenant_id, claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:a", speaker="agent", text=agent_text))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:a", speaker="agent", text=agent_text))
         db.commit()
     except Exception:
         db.rollback()

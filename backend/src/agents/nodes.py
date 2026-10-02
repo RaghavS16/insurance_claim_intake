@@ -728,23 +728,17 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
         state["extraction_confidence"] = round(sum(confidences) / len(confidences), 2)
     else:
         state["extraction_confidence"] = 0.0
-    # Baseline completion requires an explicit claimant confirmation. Policy verification
-    # and submission readiness remain deterministic backend decisions.
+    # Baseline facts are confirmed naturally. Final submission confirmation is separate
+    # and is never inferred from the baseline field-completeness state.
+    state["awaiting_confirmation"] = False
     if state.get("_rejection_active"):
         state["conversation_status"] = "collecting"
         state["confirmed"] = False
-        state["awaiting_confirmation"] = False
     elif not missing:
-        if state.get("confirmed") is True:
-            state["conversation_status"] = "pending_verification"
-            state["awaiting_confirmation"] = False
-        else:
-            state["conversation_status"] = "pending_confirmation"
-            state["awaiting_confirmation"] = True
-            state["awaiting_submission_confirmation"] = True
+        state["conversation_status"] = "pending_verification"
+        state["confirmed"] = True
     else:
         state["conversation_status"] = "collecting"
-        state["awaiting_confirmation"] = False
     return state
 
 def _confirmation_summary(data: Dict[str, Any]) -> str:

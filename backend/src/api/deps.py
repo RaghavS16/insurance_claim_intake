@@ -129,11 +129,15 @@ def get_current_user(
                 db.add(user)
                 db.commit()
                 db.refresh(user)
+            if not getattr(user, "tenant_id", None):
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant context is unavailable.")
             return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required: User not found.",
         )
+    if not getattr(user, "tenant_id", None):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant membership is required.")
     if str(user.status).lower() != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
     token_version = int(payload.get("sv", 1)) if token else 1
@@ -196,15 +200,12 @@ def resolve_bearer_user(
     return user
 
 
-def get_claim_or_404(db: Session, ticket_id: str, tenant_id: str | None = None) -> Claim:
+def get_claim_or_404(db: Session, ticket_id: str) -> Claim:
     """Fetch a Claim by ticket_id and raise HTTP 404 if not found.
 
     Replaces the repeated pattern::
 
-        query = db.query(Claim).filter(Claim.ticket_id == ticket_id)
-    if tenant_id:
-        query = query.filter(Claim.tenant_id == tenant_id)
-    claim = query.first()
+        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
         if not claim:
             raise HTTPException(status_code=404, detail="Claim not found.")
     """
@@ -214,15 +215,12 @@ def get_claim_or_404(db: Session, ticket_id: str, tenant_id: str | None = None) 
     return claim
 
 
-def get_adjuster_or_404(db: Session, adjuster_id: str, tenant_id: str | None = None) -> Adjuster:
+def get_adjuster_or_404(db: Session, adjuster_id: str) -> Adjuster:
     """Fetch an Adjuster by id and raise HTTP 404 if not found.
 
     Replaces the repeated pattern::
 
-        query = db.query(Adjuster).filter(Adjuster.id == adjuster_id)
-    if tenant_id:
-        query = query.filter(Adjuster.tenant_id == tenant_id)
-    adjuster = query.first()
+        adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
         if not adjuster:
             raise HTTPException(status_code=404, detail="Adjuster not found.")
     """

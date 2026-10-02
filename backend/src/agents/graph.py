@@ -159,6 +159,24 @@ def _single_intake_follow_up(state: ClaimState) -> str:
     return ""
 
 
+def _confirmation_summary(data: dict[str, Any]) -> str:
+    """Produce a compact deterministic summary for explicit claimant confirmation."""
+    labels = {
+        "policy_id": "policy number",
+        "event_date": "incident date",
+        "insurance_type": "insurance type",
+        "event_description": "what happened",
+        "event_location": "incident location",
+        "estimated_claim_amount": "estimated loss",
+    }
+    parts = [
+        f"{labels[key]}: {value}"
+        for key, value in data.items()
+        if key in labels and value not in (None, "", "UNKNOWN")
+    ]
+    return "Here is the claim summary: " + "; ".join(parts[:6]) + "." if parts else "Here is the current claim summary."
+
+
 def _rag_question_responder(state: ClaimState) -> ClaimState:
     state["rag_answer"] = ""
     state["rag_answer_sources"] = []
@@ -390,37 +408,6 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     return state
 
 
-def _confirmation_gate(state: ClaimState) -> ClaimState:
-    """Deterministic claimant confirmation checkpoint before submission."""
-    if state.get("_skip_all"):
-        return state
-    missing = list(state.get("missing_fields") or [])
-    dynamic_missing = list(state.get("dynamic_missing") or [])
-    missing_evidence = list(state.get("missing_evidence") or [])
-    pending_review = list(state.get("pending_evidence_review") or [])
-    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") == "OK"
-    if (
-        plan_ready
-        and not missing
-        and not dynamic_missing
-        and not missing_evidence
-        and not pending_review
-        and not state.get("confirmed")
-    ):
-        state["awaiting_confirmation"] = True
-        state["awaiting_submission_confirmation"] = True
-        state["final_submission_confirmed"] = False
-        state["conversation_phase"] = "4_gap_analysis"
-        state["conversation_status"] = "pending_confirmation"
-        state["next_question_field"] = "confirmation"
-        state["next_question"] = (
-            nodes._confirmation_summary(state.get("extracted_data", {}))
-            + " Please confirm these details are correct before I verify the policy and prepare the claim for submission."
-        )
-        state["message"] = state["next_question"]
-    return state
-
-
 def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
@@ -481,15 +468,27 @@ def _response_planner(state: ClaimState) -> ClaimState:
         and not missing_evidence
         and not pending_review
     ):
-        state["final_submission_confirmed"] = False
-        state["awaiting_submission_confirmation"] = False
         state["conversation_phase"] = "4_gap_analysis"
-        state["conversation_status"] = "ready_for_submission"
         state["next_question_field"] = "submission"
-        state["next_question"] = (
-            "I have the required claim details and evidence. Your claim is ready to submit. "
-            "If you want me to file it now, just say submit."
-        )
+        if state.get("final_submission_confirmed"):
+            state["conversation_status"] = "submission_requested"
+            state["awaiting_submission_confirmation"] = False
+            state["next_question"] = ""
+        elif state.get("submit_requested"):
+            state["conversation_status"] = "awaiting_submission_confirmation"
+            state["awaiting_submission_confirmation"] = True
+            state["final_submission_confirmed"] = False
+            state["next_question"] = (
+                _confirmation_summary(data)
+                + " Please review this summary and say “confirm and submit” when everything is correct."
+            )
+        else:
+            state["conversation_status"] = "ready_for_submission"
+            state["awaiting_submission_confirmation"] = False
+            state["next_question"] = (
+                "I have the required claim details and evidence, and the policy check is complete. "
+                "Your claim is ready whenever you want to submit it."
+            )
         state["message"] = state["next_question"]
         return state
 
@@ -515,7 +514,6 @@ def _build_conversation_graph():
     graph.add_node("rag_question_responder", _rag_question_responder)
     graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
-    graph.add_node("confirmation_gate", _confirmation_gate)
     graph.add_node("next_question_generator", _response_planner)
     graph.set_entry_point("workflow_event_router")
     graph.add_conditional_edges(
@@ -531,8 +529,7 @@ def _build_conversation_graph():
     graph.add_edge("claim_extractor", "rag_question_responder")
     graph.add_edge("rag_question_responder", "mandatory_field_checker")
     graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
-    graph.add_edge("dynamic_requirement_enrichment", "confirmation_gate")
-    graph.add_edge("confirmation_gate", "next_question_generator")
+    graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
     graph.add_edge("next_question_generator", END)
     return graph.compile()
 

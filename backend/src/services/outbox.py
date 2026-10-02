@@ -6,17 +6,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.database.hardening_models import OutboxEvent
 
-def enqueue(db: Session, *, event_type: str, aggregate_type: str, aggregate_id: str, payload: dict[str,Any], idempotency_key: str) -> OutboxEvent:
+def enqueue(
+    db: Session,
+    *,
+    event_type: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    payload: dict[str,Any],
+    idempotency_key: str,
+    tenant_id: str | None = None,
+) -> OutboxEvent:
     existing=db.execute(select(OutboxEvent).where(OutboxEvent.idempotency_key==idempotency_key)).scalar_one_or_none()
     if existing: return existing
-    tenant_id = None
-    if aggregate_type == "claim":
-        try:
-            from src.database.models import Claim
-            tenant_id = db.execute(select(Claim.tenant_id).where(Claim.id == aggregate_id)).scalar_one_or_none()
-        except Exception:
-            tenant_id = None
-    row=OutboxEvent(tenant_id=tenant_id,event_type=event_type,aggregate_type=aggregate_type,aggregate_id=aggregate_id,payload_json=payload,idempotency_key=idempotency_key,status="pending",next_attempt_at=datetime.now(timezone.utc))
+    row=OutboxEvent(event_type=event_type,aggregate_type=aggregate_type,aggregate_id=aggregate_id,payload_json=payload,tenant_id=str(tenant_id or ""),idempotency_key=idempotency_key,status="pending",next_attempt_at=datetime.now(timezone.utc))
     db.add(row)
     return row
 
