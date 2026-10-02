@@ -1,6 +1,7 @@
 """Add explicit adjuster identity, voice worker affinity, and WebAuthn state."""
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = "0018"
 down_revision = "0017"
@@ -23,7 +24,7 @@ def upgrade() -> None:
         if inspector.has_table(table) and column.name not in {c["name"] for c in inspector.get_columns(table)}:
             op.add_column(table, column)
 
-    add_column("adjusters", sa.Column("user_id", sa.String(36), nullable=True))
+    add_column("adjusters", sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=True))
     add_column("voice_sessions", sa.Column("worker_id", sa.String(120), nullable=False, server_default="unknown"))
     add_column("voice_sessions", sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True))
     add_column("refresh_tokens", sa.Column("auth_context_json", sa.JSON(), nullable=False, server_default="{}"))
@@ -51,7 +52,7 @@ def upgrade() -> None:
         "webauthn_credentials",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("tenant_id", sa.String(36), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("credential_id", sa.String(512), nullable=False, unique=True),
         sa.Column("public_key", sa.Text(), nullable=False),
         sa.Column("sign_count", sa.Integer(), nullable=False, server_default="0"),
