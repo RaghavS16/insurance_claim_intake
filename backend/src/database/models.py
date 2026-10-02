@@ -154,6 +154,7 @@ class PasswordResetOTP(Base):
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False)
     otp_hash: Mapped[str] = mapped_column(String, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False, default="password_reset")
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
