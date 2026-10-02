@@ -9,6 +9,7 @@ from src.database.session import get_db
 from sqlalchemy.orm import Session
 from src.knowledge.store import ingest_document, search
 from src.utils.upload_limits import read_limited
+from src.utils.clamav import scan_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,9 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="A document file is required.")
     try:
         raw = await read_limited(file, 150 * 1024 * 1024)
+        clean, scan_reason = scan_bytes(raw)
+        if not clean:
+            raise HTTPException(status_code=422, detail="The document failed security scanning.")
     except ValueError as exc:
         raise HTTPException(status_code=413, detail="Knowledge document is too large.") from exc
     try:
