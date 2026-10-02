@@ -23,7 +23,7 @@ logger = app_logger
 
 
 def _validate_claim_access(db: Session, ticket_id: str, user: User) -> Claim:
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     try:
