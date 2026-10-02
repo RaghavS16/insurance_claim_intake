@@ -171,6 +171,7 @@ def record_exception(
 ) -> ClaimException:
     existing = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
+        ClaimException.tenant_id == claim.tenant_id,
         ClaimException.event_type == event_type,
         ClaimException.status == "open",
     ).first()
@@ -218,6 +219,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
         if row is None:
             row = ClaimRequirement(
                 claim_id=str(claim.id),
+                tenant_id=str(claim.tenant_id or ""),
                 requirement_key=key,
                 label=str(req.get("label") or key),
                 question_hint=req.get("question_hint"),
