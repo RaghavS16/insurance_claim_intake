@@ -113,8 +113,8 @@ class KnowledgeRetriever:
             }
 
         try:
-            policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date)
-            guidance = search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date)
+            policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
+            guidance = search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
         except Exception:
             policy, guidance = [], []
 
@@ -357,6 +357,8 @@ class KnowledgeRetriever:
                 rows = search(
                     question,
                     document_types=document_types,
+                    tenant_id=tenant_id,
+                    jurisdiction=jurisdiction,
                     limit=max(top_k * 2, 8),
                 )
             except Exception:
