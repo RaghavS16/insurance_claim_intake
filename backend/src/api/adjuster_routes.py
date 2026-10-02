@@ -193,10 +193,10 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
 
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    c = get_claim_or_404(db, ticket_id)
+    c = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
-    turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
+    turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id, ConversationTurn.tenant_id==c.tenant_id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     package = state.get("submission_package")
     if not package:
         from src.agents.submission_synthesizer import synthesize_claims_package
@@ -220,16 +220,16 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
 
 @router.post("/claims/{ticket_id}/exceptions/{exception_id}/resolve")
 def resolve_exception(ticket_id: str, exception_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     current_user = _resolve_adjuster(request, db)
     _ensure_assigned_adjuster(claim, current_user, db)
-    row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.status == "open").first()
+    row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.tenant_id == claim.tenant_id, ClaimException.status == "open").first()
     if not row:
         raise HTTPException(status_code=404, detail="Open claim exception not found.")
     row.status = "resolved"
     row.resolved_at = datetime.now(timezone.utc)
     row.resolution_json = {"resolved_by": str(current_user.id), "resolved_at": row.resolved_at.isoformat()}
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
+    db.add(ClaimAuditEvent(tenant_id=claim.tenant_id, claim_id=str(claim.id), actor_user_id=str(current_user.id), event_type="exception_resolved",
                            new_value_json={"exception_id": str(row.id)}, reason="Adjuster resolved blocking exception"))
     db.commit()
     return {"success": True, "exception_id": str(row.id), "status": row.status}
@@ -270,9 +270,9 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
 @router.post("/claims/{ticket_id}/assign")
 def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
-    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.is_active.is_(True)).first()
+    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id, ClaimAssignment.tenant_id==c.tenant_id, ClaimAssignment.is_active.is_(True)).first()
     if active:
-        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id).first()
+        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id, Adjuster.tenant_id==c.tenant_id).first()
         return {"success":True,"already_assigned":True,"claim":_item(c,aa)}
     from src.database.claim_workflow import assign_claim as assign_claim_tx
     try:
@@ -309,6 +309,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
             incident_date=c.event_date,
             query=c.event_description or "",
             claim_facts=data,
+            tenant_id=str(user.tenant_id),
         )
     except Exception as exc:
         logger = __import__("logging").getLogger(__name__)
@@ -321,7 +322,7 @@ def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(
     requests = [
         _request_payload(row, db)
         for row in db.query(ClaimEvidenceRequest)
-        .filter(ClaimEvidenceRequest.claim_id == c.id)
+        .filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id)
         .order_by(ClaimEvidenceRequest.requested_at.desc())
         .all()
     ]
@@ -653,10 +654,10 @@ def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: S
     current_user = _resolve_adjuster(request, db)
     claim = get_claim_or_404(db, ticket_id)
     _ensure_assigned_adjuster(claim, current_user, db)
-    note = ClaimNote(claim_id=str(claim.id), author_user_id=str(current_user.id),
+    note = ClaimNote(tenant_id=claim.tenant_id, claim_id=str(claim.id), author_user_id=str(current_user.id),
                      note=payload.note, visibility=payload.visibility)
     db.add(note)
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id),
+    db.add(ClaimAuditEvent(tenant_id=claim.tenant_id, claim_id=str(claim.id), actor_user_id=str(current_user.id),
                            event_type="note_added", new_value_json={"note_id": note.id}))
     db.commit()
     return {"id": note.id, "created_at": note.created_at.isoformat(), "visibility": note.visibility}
@@ -666,5 +667,5 @@ def get_claim_audit(ticket_id: str, request: Request, db: Session = Depends(get_
     current_user = _resolve_adjuster(request, db)
     claim = get_claim_or_404(db, ticket_id)
     _ensure_assigned_adjuster(claim, current_user, db)
-    rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id).order_by(ClaimAuditEvent.created_at.asc()).all()
+    rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id, ClaimAuditEvent.tenant_id == claim.tenant_id).order_by(ClaimAuditEvent.created_at.asc()).all()
     return [_format_audit_row(r) for r in rows]
