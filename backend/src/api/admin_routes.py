@@ -94,6 +94,9 @@ class UpdatePolicyRequest(BaseModel):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _record_system_audit(db: Session, user: User, *, event_type: str, resource_type: str, resource_id: str | None, action: str, metadata: Dict[str, Any] | None = None) -> None:
+    db.add(SystemAuditEvent(tenant_id=str(user.tenant_id), actor_user_id=str(user.id), event_type=event_type, resource_type=resource_type, resource_id=resource_id, action=action, metadata_json=metadata or {}))
+
 def _require_admin(request: Request, db: Session) -> User:
     """Ensure the caller is an authenticated ADMIN user."""
     return resolve_bearer_user(request, db, ["ADMIN"])
@@ -371,6 +374,7 @@ def add_adjuster(
 
     db.add(new_user)
     db.add(new_adjuster)
+    _record_system_audit(db, current_user, event_type="admin.adjuster_created", resource_type="adjuster", resource_id=str(new_adjuster.id), action="create", metadata={"email": clean_email})
     db_commit_or_500(db, logger, "Failed to create adjuster account.", "Failed to create adjuster account")
 
     return {
@@ -480,6 +484,7 @@ def update_adjuster(
             user.status = "active" if payload.is_active else "inactive"  # type: ignore[assignment]
             user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
 
+    _record_system_audit(db, current_user, event_type="admin.adjuster_updated", resource_type="adjuster", resource_id=str(adjuster.id), action="update")
     db_commit_or_500(db, logger, "Failed to update adjuster.", f"Failed to update adjuster {adjuster_id}")
     db.refresh(adjuster)
 
@@ -558,6 +563,7 @@ def delete_adjuster(
     db.delete(adjuster)
     if user:
         db.delete(user)
+    _record_system_audit(db, current_user, event_type="admin.adjuster_deleted", resource_type="adjuster", resource_id=str(adjuster_id), action="delete")
     db_commit_or_500(db, logger, "Failed to delete adjuster.", f"Failed to delete adjuster {adjuster_id}")
 
     return {
@@ -675,6 +681,7 @@ def create_policy(
     )
 
     db.add(new_policy)
+    _record_system_audit(db, current_user, event_type="admin.policy_created", resource_type="policy", resource_id=str(new_policy.id), action="create", metadata={"policy_number": new_policy.policy_number})
     db_commit_or_500(db, logger, "Failed to create policy in database.", "Failed to create policy")
     db.refresh(new_policy)
 
