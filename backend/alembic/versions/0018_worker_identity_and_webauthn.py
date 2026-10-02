@@ -29,10 +29,13 @@ def upgrade() -> None:
     add_column("adjusters", sa.Column("user_id", sa.String(36), nullable=True))
     add_column("voice_sessions", sa.Column("worker_id", sa.String(120), nullable=False, server_default="unknown"))
     add_column("voice_sessions", sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True))
+    add_column("refresh_tokens", sa.Column("auth_context_json", sa.JSON(), nullable=False, server_default="{}"))
 
     if inspector.has_table("adjusters"):
+        bind.execute(sa.text("UPDATE adjusters a SET user_id = u.id FROM users u WHERE a.user_id IS NULL AND a.email = u.email AND a.tenant_id = u.tenant_id"))
         op.create_index("ix_adjusters_user_id", "adjusters", ["user_id"], unique=True, if_not_exists=True)
     if inspector.has_table("voice_sessions"):
+        bind.execute(sa.text("UPDATE voice_sessions SET worker_id = 'unknown' WHERE worker_id IS NULL OR worker_id = ''"))
         op.create_index("ix_voice_sessions_worker_id", "voice_sessions", ["worker_id"], if_not_exists=True)
 
     if inspector.has_table("webauthn_credentials"):
@@ -84,6 +87,8 @@ def downgrade() -> None:
         op.drop_index("ix_webauthn_credentials_user_id", table_name="webauthn_credentials", if_exists=True)
         op.drop_index("ix_webauthn_credentials_tenant_id", table_name="webauthn_credentials", if_exists=True)
         op.drop_table("webauthn_credentials")
+    if inspector.has_table("refresh_tokens") and "auth_context_json" in {c["name"] for c in inspector.get_columns("refresh_tokens")}:
+        op.drop_column("refresh_tokens", "auth_context_json")
     if inspector.has_table("voice_sessions"):
         op.drop_index("ix_voice_sessions_worker_id", table_name="voice_sessions", if_exists=True)
         for col in ("lease_expires_at", "worker_id"):
