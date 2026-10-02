@@ -37,6 +37,15 @@ def upgrade() -> None:
     if inspector.has_table("voice_sessions"):
         bind.execute(sa.text("UPDATE voice_sessions SET worker_id = 'unknown' WHERE worker_id IS NULL OR worker_id = ''"))
         op.create_index("ix_voice_sessions_worker_id", "voice_sessions", ["worker_id"], if_not_exists=True)
+    if inspector.has_table("claim_assignments"):
+        op.create_index(
+            "uq_claim_assignments_active_claim",
+            "claim_assignments",
+            ["claim_id"],
+            unique=True,
+            postgresql_where=sa.text("is_active = true"),
+            if_not_exists=True,
+        )
 
     if inspector.has_table("webauthn_credentials"):
         return
@@ -89,6 +98,8 @@ def downgrade() -> None:
         op.drop_table("webauthn_credentials")
     if inspector.has_table("refresh_tokens") and "auth_context_json" in {c["name"] for c in inspector.get_columns("refresh_tokens")}:
         op.drop_column("refresh_tokens", "auth_context_json")
+    if inspector.has_table("claim_assignments"):
+        op.drop_index("uq_claim_assignments_active_claim", table_name="claim_assignments", if_exists=True)
     if inspector.has_table("voice_sessions"):
         op.drop_index("ix_voice_sessions_worker_id", table_name="voice_sessions", if_exists=True)
         for col in ("lease_expires_at", "worker_id"):
