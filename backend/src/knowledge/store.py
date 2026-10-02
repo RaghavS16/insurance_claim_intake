@@ -252,7 +252,7 @@ def ingest_document(
     if len(content) > settings.KNOWLEDGE_MAX_UPLOAD_BYTES:
         raise ValueError(f"Knowledge document is too large ({size_mb:.1f}MB). Maximum allowed size is {max_mb}MB.")
     
-    text = _extract_text(content, filename).strip()
+    text = enforce_extracted_text_limit(_extract_text(content, filename).strip(), filename)
     if len(text) < 50:
         raise ValueError(
             f"The document '{filename}' contains too little extractable text ({len(text)} characters). "
