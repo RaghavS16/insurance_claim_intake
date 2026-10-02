@@ -448,14 +448,14 @@ def _response_planner(state: ClaimState) -> ClaimState:
         and not missing_evidence
         and not pending_review
     ):
-        state["final_submission_confirmed"] = False
-        state["awaiting_submission_confirmation"] = False
+        if not state.get("final_submission_confirmed"):
+            state["awaiting_submission_confirmation"] = True
         state["conversation_phase"] = "4_gap_analysis"
-        state["conversation_status"] = "ready_for_submission"
+        state["conversation_status"] = "awaiting_submission_confirmation"
         state["next_question_field"] = "submission"
         state["next_question"] = (
-            "I have the required claim details and evidence. Your claim is ready to submit. "
-            "If you want me to file it now, just say submit."
+            "I have the required claim details and evidence. Please review the summary and "
+            "confirm that everything is correct before I submit it."
         )
         state["message"] = state["next_question"]
         return state
