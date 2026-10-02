@@ -203,7 +203,8 @@ async def process_claimant_turn(
                     __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
                 ).scalar_one()
                 existing_submission = db.query(ClaimSubmission).filter(
-                    ClaimSubmission.claim_id == claim.id
+                    ClaimSubmission.claim_id == claim.id,
+                    ClaimSubmission.tenant_id == locked.tenant_id,
                 ).first()
                 if existing_submission:
                     result["conversation_status"] = "submitted"
@@ -213,9 +214,29 @@ async def process_claimant_turn(
                     )
                     result["message"] = result["next_question"]
                 else:
+                    # Recompute the submission gate against the locked row; a correction committed
+                    # concurrently must invalidate the prior readiness result.
+                    locked_state = dict(locked.pipeline_state or {})
+                    locked_readiness = build_submission_readiness(db, locked, locked_state.get("policy_verification") or {})
+                    locked_readiness["verification"]["claimant_confirmation"] = "PASS"
+                    if not locked_readiness.get("ready"):
+                        raise ClaimTurnConflict("Claim changed while submission confirmation was being processed.")
                     assigned = assign_claim(db, locked, str(claim.claimant_id))
                     transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
                     idempotency_key = f"claim:{claim.id}:submission:v1"
+                    import hashlib, json
+                    summary_hash = hashlib.sha256(json.dumps({
+                        "extracted_data": locked_state.get("extracted_data") or {},
+                        "dynamic_requirements": locked_state.get("dynamic_requirements") or [],
+                        "evidence": locked_state.get("evidence") or [],
+                    }, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+                    db.add(ClaimSubmissionConfirmation(
+                        claim_id=locked.id,
+                        tenant_id=str(locked.tenant_id or ""),
+                        confirmed_by=str(claim.claimant_id),
+                        claim_state_version=int(locked.state_version or 1),
+                        summary_sha256=summary_hash,
+                    ))
                     db.add(ClaimSubmission(
                         claim_id=locked.id,
                         tenant_id=str(locked.tenant_id or ""),
