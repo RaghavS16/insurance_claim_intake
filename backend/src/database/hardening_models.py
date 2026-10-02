@@ -9,6 +9,35 @@ from src.database.models import Base, _UUID, _JSONB
 def _now(): return datetime.now(timezone.utc)
 def _uuid(): return str(uuid.uuid4())
 
+
+
+class WebAuthnCredential(Base):
+    """Durable phishing-resistant passkey credential for a user."""
+    __tablename__ = "webauthn_credentials"
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    credential_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    device_type: Mapped[Optional[str]] = mapped_column(String(80))
+    backed_up: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class WebAuthnChallenge(Base):
+    """One-shot WebAuthn ceremony challenge with tenant binding."""
+    __tablename__ = "webauthn_challenges"
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False)
+    challenge: Mapped[str] = mapped_column(String(512), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
 class ClaimAssignment(Base):
     __tablename__="claim_assignments"
     tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
