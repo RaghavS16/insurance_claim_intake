@@ -493,16 +493,16 @@ def reset_adjuster_password(
     """
     Reset an adjuster's password and generate a new temporary password.
     """
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -536,9 +536,11 @@ def delete_adjuster(
     Delete an adjuster and their associated user record.
     Prevents deletion if active claims are assigned (suggests deactivation instead).
     """
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = get_adjuster_or_404(db, adjuster_id)
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
+    if not adjuster:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjuster not found.")
 
     if (adjuster.claims_assigned or 0) > 0:
         raise HTTPException(
@@ -567,14 +569,14 @@ def list_all_policies(
     db: Session = Depends(get_db),
 ):
     """Overview list of all policies in the system and their linking status."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     if page < 1:
         page = 1
     if page_size < 1 or page_size > 200:
         page_size = 50
 
-    query = db.query(Policy).order_by(Policy.created_at.desc())
+    query = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id).order_by(Policy.created_at.desc())
     total = query.count()
     offset = (page - 1) * page_size
     policies = query.offset(offset).limit(page_size).all()
@@ -624,10 +626,10 @@ def create_policy(
     db: Session = Depends(get_db),
 ):
     """Create a single new policy record with validation."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     policy_num = payload.policy_number.strip().upper()
-    existing = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+    existing = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == admin.tenant_id).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -651,6 +653,7 @@ def create_policy(
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
+        tenant_id=str(admin.tenant_id or ""),
         policy_number=policy_num,
         customer_id=None,
         policy_type=policy_type,
@@ -684,7 +687,7 @@ def update_policy(
     db: Session = Depends(get_db),
 ):
     """Update existing policy details safely."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     policy = _find_policy(db, policy_id_or_number, str(admin.tenant_id or ""))
     if not policy:
@@ -753,9 +756,9 @@ def delete_policy(
     db: Session = Depends(get_db),
 ):
     """Delete a policy by ID or policy number."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number)
+    policy = _find_policy(db, policy_id_or_number, str(admin.tenant_id or ""))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
