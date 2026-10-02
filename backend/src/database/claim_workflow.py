@@ -83,31 +83,44 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
     return chosen
 
 
-def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:
+def build_submission_readiness(
+    db: Session,
+    claim: Claim,
+    policy_verification: dict | None = None,
+    *,
+    claimant_confirmation: bool | None = None,
+) -> dict:
     """Return deterministic readiness from durable requirements, evidence and exceptions."""
     from src.domain.readiness import build_readiness
-    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id, ClaimRequirement.tenant_id == claim.tenant_id).all()
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id, ClaimEvidence.tenant_id == claim.tenant_id).all()
+    requirements = db.query(ClaimRequirement).filter(
+        ClaimRequirement.claim_id == claim.id,
+        ClaimRequirement.tenant_id == claim.tenant_id,
+    ).all()
+    evidence = db.query(ClaimEvidence).filter(
+        ClaimEvidence.claim_id == claim.id,
+        ClaimEvidence.tenant_id == claim.tenant_id,
+    ).all()
     exceptions = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
         ClaimException.tenant_id == claim.tenant_id,
+        ClaimException.blocking.is_(True),
         ClaimException.status == "open",
     ).all()
-    claimant_confirmation = bool((claim.pipeline_state or {}).get("final_submission_confirmed")) or bool(
-        db.query(ClaimSubmissionConfirmation).filter(
-            ClaimSubmissionConfirmation.claim_id == claim.id,
-            ClaimSubmissionConfirmation.tenant_id == claim.tenant_id,
-            ClaimSubmissionConfirmation.claim_state_version == int(claim.state_version or 1),
-        ).first()
-    )
+    if claimant_confirmation is None:
+        claimant_confirmation = bool((claim.pipeline_state or {}).get("final_submission_confirmed")) or bool(
+            db.query(ClaimSubmissionConfirmation).filter(
+                ClaimSubmissionConfirmation.claim_id == claim.id,
+                ClaimSubmissionConfirmation.tenant_id == claim.tenant_id,
+                ClaimSubmissionConfirmation.claim_state_version == int(claim.state_version or 1),
+            ).first()
+        )
     return build_readiness(
         requirements=requirements,
         policy_verification=policy_verification,
         evidence_rows=evidence,
         exceptions=exceptions,
-        claimant_confirmation=claimant_confirmation,
+        claimant_confirmation=bool(claimant_confirmation),
     )
-
 
 def transition_claim_if_allowed(
     db: Session,
