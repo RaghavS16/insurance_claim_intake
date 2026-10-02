@@ -151,3 +151,18 @@ variable "ecs_cpu_alarm_threshold" {
   type    = number
   default = 80
 }
+
+variable "outbox_cpu" {
+  type    = number
+  default = 512
+}
+
+variable "outbox_memory" {
+  type    = number
+  default = 1024
+}
+
+variable "outbox_desired_count" {
+  type    = number
+  default = 1
+}
