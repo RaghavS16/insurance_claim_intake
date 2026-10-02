@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from src.config import settings
+from src.services.observability import record_ai_fallback
 from src.utils.logger import app_logger
 from src.services.ai_governance import assert_model_allowed
 
@@ -135,6 +136,7 @@ class _ResilientStructured(Generic[T]):
                 )
             ):
                 logger.warning("Primary structured LLM failed; using governed local fallback.")
+                record_ai_fallback(operation="structured")
                 fb = self.resilient_model.get_fallback()
                 return structured_output(fb, self.schema).invoke(prompt)
             raise
@@ -166,6 +168,7 @@ class ResilientChatModel:
                 )
             ):
                 logger.warning("Primary LLM invocation failed; using governed local fallback.")
+                record_ai_fallback(operation="sync")
                 return self.get_fallback().invoke(prompt, *args, **kwargs)
             raise
 
@@ -185,6 +188,7 @@ class ResilientChatModel:
                 )
             ):
                 logger.warning("Primary LLM ainvoke failed; using governed local fallback.")
+                record_ai_fallback(operation="async")
                 fb = self.get_fallback()
                 fb_ainvoke = getattr(fb, "ainvoke", None)
                 if callable(fb_ainvoke):
