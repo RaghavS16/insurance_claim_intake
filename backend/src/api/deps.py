@@ -226,6 +226,16 @@ def resolve_bearer_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: Role '{user.role}' is not permitted.",
         )
+    privileged = str(user.role).upper() in {"ADMIN", "ADJUSTER"}
+    if (
+        privileged
+        and settings.PRIVILEGED_PASSKEY_REQUIRED
+        and "webauthn" not in set(getattr(request.state, "auth_amr", []) or [])
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Phishing-resistant passkey authentication is required for this privileged operation.",
+        )
     return user
 
 
