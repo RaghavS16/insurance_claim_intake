@@ -137,7 +137,10 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             detail="Account is disabled. Please contact support.",
         )
 
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    user.last_login_at = datetime.now(timezone.utc)
+    user.session_version = int(getattr(user, "session_version", 1) or 1)
+    db.commit()
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version})
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -303,7 +306,7 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
             detail="This reset code has already been used or is no longer valid. Please restart the process.",
         )
 
-    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]
+    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
     # Revoke the reset token so it cannot be used again
     revoke_token(payload.reset_token)
