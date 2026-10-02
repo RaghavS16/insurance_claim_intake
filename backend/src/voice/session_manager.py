@@ -141,6 +141,7 @@ class VoiceSessionManager:
                     await self._release_lock(ticket_id, call_id)
                     return False
                 row = VoiceSession(
+                    tenant_id=str(getattr(claim, "tenant_id", "") or ""),
                     call_id=call_id,
                     claim_id=str(claim.id),
                     user_id=str(user_id),
