@@ -21,7 +21,7 @@ redis>=5.0.0
 # Orchestration & LLM
 langgraph>=0.2.0
 langchain>=0.2.0
-langchain-ollama>=0.1.0
+langchain-ollama>=1.1.0
 langchain-openai>=0.1.0
 
 # Real-time voice: Pipecat + Faster Whisper + WebRTC VAD + Piper TTS
