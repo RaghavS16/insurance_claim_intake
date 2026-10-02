@@ -114,6 +114,7 @@ class VoiceSessionManager:
         ticket_id: str,
         user_id: str,
         model: str,
+        tenant_id: str,
     ) -> bool:
         """Reserve a claim-scoped voice session and persist its lifecycle row."""
         async with self._lock:
@@ -136,7 +137,10 @@ class VoiceSessionManager:
 
             db = SessionLocal()
             try:
-                claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+                claim = db.query(Claim).filter(
+                    Claim.ticket_id == ticket_id,
+                    Claim.tenant_id == tenant_id,
+                ).first()
                 if not claim:
                     await self._release_lock(ticket_id, call_id)
                     return False
