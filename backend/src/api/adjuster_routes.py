@@ -20,6 +20,7 @@ from src.database.claim_workflow import transition_claim, build_submission_readi
 from src.database.session import get_db
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.retriever import KnowledgeRetriever
+from src.services.audit import append_system_audit
 
 router = APIRouter(prefix="/api/v1/adjuster", tags=["Adjuster"])
 
@@ -463,6 +464,21 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
             result_json=parsed,
             citations_json=source_rows,
         ))
+        append_system_audit(
+            db,
+            tenant_id=str(c.tenant_id or ""),
+            actor_user_id=str(user.id),
+            event_type="ai_recommendation",
+            resource_type="claim",
+            resource_id=str(c.id),
+            action="copilot_analysis",
+            payload={
+                "model": getattr(settings, "REASONING_LLM_MODEL", "configured"),
+                "prompt_version": "v3",
+                "citation_count": len(source_rows),
+                "recommendation": parsed,
+            },
+        )
         db.commit()
         return {"ticket_id": ticket_id, "analysis": parsed, "status": "ready", "sources": source_rows, "chat": state["copilot_chat"]}
     except Exception as exc:
