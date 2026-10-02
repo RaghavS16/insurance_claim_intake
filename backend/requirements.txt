@@ -46,3 +46,11 @@ fastembed>=0.8.0
 python-docx>=1.1.0
 pymupdf>=1.24.0
 rapidocr-onnxruntime>=1.2.0
+
+# Observability (OpenTelemetry)
+opentelemetry-api>=1.27.0,<2.0.0
+opentelemetry-sdk>=1.27.0,<2.0.0
+opentelemetry-instrumentation-fastapi>=0.48b0,<1.0.0
+opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1.0.0
+opentelemetry-instrumentation-redis>=0.48b0,<1.0.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0,<2.0.0
