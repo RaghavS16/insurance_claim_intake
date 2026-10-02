@@ -565,7 +565,7 @@ async def respond_to_evidence_request(
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
         try:
             content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
-            clean, scan_reason = scan_bytes(content)
+            clean, scan_reason = await asyncio.to_thread(scan_bytes, content)
             if not clean:
                 raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
         except ValueError as exc:
