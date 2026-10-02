@@ -41,11 +41,18 @@ class VoiceEventStore:
         payload = json.dumps(event, default=str)
         if self.redis is not None:
             try:
+                key = self._key(ticket_id)
                 await self.redis.xadd(
-                    self._key(ticket_id),
+                    key,
                     {"payload": payload},
                     maxlen=settings.VOICE_EVENT_STREAM_MAXLEN,
                     approximate=True,
+                )
+                # MAXLEN bounds memory; EXPIRE bounds retention and prevents
+                # sensitive conversation events from becoming indefinite Redis data.
+                await self.redis.expire(
+                    key,
+                    max(300, settings.VOICE_EVENT_RETENTION_SECONDS),
                 )
             except Exception:
                 logger.exception("Failed to publish voice event to Redis.")
