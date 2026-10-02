@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import User, PasswordResetOTP, RevokedToken
-from src.database.hardening_models import MFAChallenge, MFARecoveryCode
+from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant, TenantMembership
 from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
@@ -83,15 +83,22 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
 
     hashed_pwd = get_password_hash(payload.password)
+    tenant = Tenant(name=f"{clean_name}'s Workspace", status="active")
+    db.add(tenant)
+    db.flush()
     new_user = User(
         full_name=clean_name,
         email=clean_email,
         phone=clean_phone,
         password_hash=hashed_pwd,
-        role="CLAIMANT",  # Public signup always creates CLAIMANT role
+        role="CLAIMANT",
         status="active",
+        tenant_id=tenant.id,
     )
     db.add(new_user)
+    db.flush()
+    db.add(TenantMembership(tenant_id=str(tenant.id), user_id=str(new_user.id), role="CLAIMANT", status="active"))
+
     try:
         db.commit()
         db.refresh(new_user)
