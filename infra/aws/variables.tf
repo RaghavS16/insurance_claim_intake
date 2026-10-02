@@ -81,3 +81,13 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "voice_sticky_cookie_name" {
+  type    = string
+  default = "voice_worker_id"
+}
+
+variable "voice_sticky_cookie_duration_seconds" {
+  type    = number
+  default = 1800
+}
