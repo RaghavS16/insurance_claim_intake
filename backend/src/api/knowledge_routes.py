@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from src.api.deps import require_role
 from src.database.models import User
 from src.knowledge.store import ingest_document, search
+from src.utils.upload_limits import read_limited
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Knowledge text indexing failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Knowledge indexing failed: {exc}")
+        raise HTTPException(status_code=502, detail="Knowledge indexing is temporarily unavailable.")
 
 @router.post("/upload")
 async def upload_document(
@@ -55,7 +56,10 @@ async def upload_document(
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="A document file is required.")
-    raw = await file.read()
+    try:
+        raw = await read_limited(file, 150 * 1024 * 1024)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail="Knowledge document is too large.") from exc
     try:
         return await asyncio.to_thread(
             ingest_document,
