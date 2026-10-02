@@ -56,6 +56,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    email_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    mfa_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -124,6 +128,7 @@ class Claim(Base):
     status: Mapped[str] = mapped_column(String, default="draft", index=True)
     conversation_status: Mapped[str] = mapped_column(String, default="not_started")
     pipeline_state: Mapped[Dict[str, Any]] = _JSONB(default=dict)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -166,6 +171,7 @@ class ConversationTurn(Base):
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, default=None, index=True)
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
     speaker: Mapped[str] = mapped_column(String, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
