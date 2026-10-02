@@ -60,7 +60,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
     if not candidates:
         raise ValueError("No active adjuster is available")
     chosen = next((a for a in candidates if a.specialization == claim.insurance_type), candidates[0])
-    db.execute(update(Adjuster).where(Adjuster.id == chosen.id).values(
+    db.execute(update(Adjuster).where(Adjuster.id == chosen.id, Adjuster.tenant_id == claim.tenant_id).values(
         claims_assigned=Adjuster.claims_assigned + 1
     ))
     db.add(ClaimAssignment(
@@ -125,7 +125,7 @@ def persist_canonical_facts(
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     rows = {
         row.fact_key: row
-        for row in db.query(ClaimFact).filter(ClaimFact.claim_id == claim.id).all()
+        for row in db.query(ClaimFact).filter(ClaimFact.claim_id == claim.id, ClaimFact.tenant_id == claim.tenant_id).all()
     }
     for key, value in (facts or {}).items():
         if value in (None, "", "UNKNOWN"):
@@ -203,7 +203,7 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
     """Synchronize the current policy-derived manifest into durable requirement rows."""
     rows = {
         row.requirement_key: row
-        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
+        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id, ClaimRequirement.tenant_id == claim.tenant_id).all()
     }
     active_keys = set()
     authoritative = str((claim.pipeline_state or {}).get("rag_status") or "") == "OK"
