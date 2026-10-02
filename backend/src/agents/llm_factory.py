@@ -126,8 +126,15 @@ class _ResilientStructured(Generic[T]):
         try:
             return self._gemini_structured.invoke(prompt)
         except Exception as exc:
-            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
-                logger.warning("Primary structured LLM failed (%s); falling back to local Ollama.", exc)
+            if (
+                settings.AI_ALLOW_LOCAL_FALLBACK
+                and (
+                    is_transient_llm_error(exc)
+                    or "getaddrinfo" in str(exc).lower()
+                    or isinstance(exc, (LLMTransientError, OSError))
+                )
+            ):
+                logger.warning("Primary structured LLM failed; using governed local fallback.")
                 fb = self.resilient_model.get_fallback()
                 return structured_output(fb, self.schema).invoke(prompt)
             raise
@@ -150,8 +157,15 @@ class ResilientChatModel:
         try:
             return self.primary.invoke(prompt, *args, **kwargs)
         except Exception as exc:
-            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
-                logger.warning("Primary LLM invocation failed (%s); falling back to local Ollama.", exc)
+            if (
+                settings.AI_ALLOW_LOCAL_FALLBACK
+                and (
+                    is_transient_llm_error(exc)
+                    or "getaddrinfo" in str(exc).lower()
+                    or isinstance(exc, (LLMTransientError, OSError))
+                )
+            ):
+                logger.warning("Primary LLM invocation failed; using governed local fallback.")
                 return self.get_fallback().invoke(prompt, *args, **kwargs)
             raise
 
@@ -162,8 +176,15 @@ class ResilientChatModel:
                 return await ainvoke_fn(prompt, *args, **kwargs)
             return self.invoke(prompt, *args, **kwargs)
         except Exception as exc:
-            if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
-                logger.warning("Primary LLM ainvoke failed (%s); falling back to local Ollama.", exc)
+            if (
+                settings.AI_ALLOW_LOCAL_FALLBACK
+                and (
+                    is_transient_llm_error(exc)
+                    or "getaddrinfo" in str(exc).lower()
+                    or isinstance(exc, (LLMTransientError, OSError))
+                )
+            ):
+                logger.warning("Primary LLM ainvoke failed; using governed local fallback.")
                 fb = self.get_fallback()
                 fb_ainvoke = getattr(fb, "ainvoke", None)
                 if callable(fb_ainvoke):
