@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     AI_MAX_TURNS_PER_TENANT_PER_MINUTE: int = Field(120, ge=10, le=10000)
     AI_MAX_CONCURRENT_TURNS_PER_TENANT: int = Field(8, ge=1, le=100)
     AI_MAX_RAG_REQUESTS_PER_TENANT_PER_MINUTE: int = Field(120, ge=10, le=10000)
+    AI_MAX_ESTIMATED_TOKENS_PER_TENANT_PER_DAY: int = Field(200000, ge=1000, le=100000000)
     AI_ALLOWED_MODELS: str = ""  # optional comma-separated approved exact model identifiers
     AI_ALLOW_LOCAL_FALLBACK: bool = True
     AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION: bool = True
