@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     VOICE_STT_NO_SPEECH_PROB: float = Field(0.4, ge=0.0, le=1.0)
     VOICE_TTS_BASE_URL: str = "http://localhost:5001"
     VOICE_TTS_VOICE_ID: str = "en_US-ryan-high"
-    VOICE_WORKER_ID: str = Field(default_factory=lambda: os.getenv("VOICE_WORKER_ID") or socket.gethostname())
+    VOICE_WORKER_ID: str = Field(default_factory=lambda: os.getenv("VOICE_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}")
     VOICE_STICKY_COOKIE_NAME: str = "voice_worker_id"
     VOICE_ICE_SERVERS: str = ""  # comma-separated STUN/TURN URLs; production requires TURN
     VOICE_EVENT_RETENTION_SECONDS: int = Field(86400, ge=300, le=2592000)
