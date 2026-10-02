@@ -12,4 +12,8 @@ resource "aws_iam_role_policy" "app" {
     {Effect="Allow",Action=["secretsmanager:GetSecretValue"],Resource=var.secrets_manager_secret_arns}
   ]})
 }
-resource "aws_cloudwatch_log_group" "app" { name="/aws/${local.name}/app" retention_in_days=30 tags=local.tags }
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/aws/${local.name}/app"
+  retention_in_days = 30
+  tags              = local.tags
+}
