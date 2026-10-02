@@ -695,7 +695,7 @@ def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: S
     note = ClaimNote(claim_id=str(claim.id), tenant_id=str(claim.tenant_id or ""), author_user_id=str(current_user.id),
                      note=payload.note, visibility=payload.visibility)
     db.add(note)
-    db.add(ClaimAuditEvent(claim_id=str(claim.id), actor_user_id=str(current_user.id),
+    db.add(ClaimAuditEvent(claim_id=str(claim.id), tenant_id=str(claim.tenant_id or ""), actor_user_id=str(current_user.id),
                            event_type="note_added", new_value_json={"note_id": note.id}))
     db.commit()
     return {"id": note.id, "created_at": note.created_at.isoformat(), "visibility": note.visibility}
