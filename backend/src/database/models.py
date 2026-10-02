@@ -20,6 +20,7 @@ else:
     def _UUID(*args, **kw): return mapped_column(String(36), *args, **kw)
     def _JSONB(*args, **kw): return mapped_column(JSON, *args, **kw)
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -32,20 +33,36 @@ class KnowledgeDocument(Base):
     document_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     insurance_type: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    jurisdiction: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    document_version: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     uploaded_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True)
     metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    chunks: Mapped[list["KnowledgeChunk"]] = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
+    chunks: Mapped[list["KnowledgeChunk"]] = relationship(
+        "KnowledgeChunk", back_populates="document", cascade="all, delete-orphan"
+    )
+
 
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
     id: Mapped[str] = _UUID(primary_key=True)
-    document_id: Mapped[str] = _UUID(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[str] = _UUID(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(768), nullable=False)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    section_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    clause_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    citation_label: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     metadata_json: Mapped[Dict[str, Any]] = _JSONB(default=dict)
     document: Mapped["KnowledgeDocument"] = relationship("KnowledgeDocument", back_populates="chunks")
+
 
 class User(Base):
     __tablename__ = "users"
@@ -64,7 +81,10 @@ class User(Base):
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     mfa_secret_encrypted: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
 
 class Policy(Base):
     __tablename__ = "policies"
@@ -86,22 +106,27 @@ class Policy(Base):
     link_attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+
 class RevokedToken(Base):
     __tablename__ = "revoked_tokens"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     token_jti: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     user_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id"), nullable=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class PolicyLinkAudit(Base):
     __tablename__ = "policy_link_audit"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False, index=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     policy_number: Mapped[str] = mapped_column(String, nullable=False, index=True)
     outcome: Mapped[str] = mapped_column(String, nullable=False)
     ip_address: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class Adjuster(Base):
     __tablename__ = "adjusters"
@@ -113,6 +138,7 @@ class Adjuster(Base):
     specialization: Mapped[str] = mapped_column(String, nullable=False)
     claims_assigned: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
 
 class Claim(Base):
     __tablename__ = "claims"
@@ -136,14 +162,13 @@ class Claim(Base):
     pipeline_state: Mapped[Dict[str, Any]] = _JSONB(default=dict)
     state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-
-    turns: Mapped[list["ConversationTurn"]] = relationship(
-        "ConversationTurn",
-        back_populates="claim",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
+    turns: Mapped[list["ConversationTurn"]] = relationship(
+        "ConversationTurn", back_populates="claim", cascade="all, delete-orphan", passive_deletes=True
+    )
+
 
 class VoiceSession(Base):
     """Durable metadata for managed realtime voice sessions."""
@@ -161,17 +186,19 @@ class VoiceSession(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+
 class PasswordResetOTP(Base):
     __tablename__ = "password_reset_otps"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False)
-    otp_hash: Mapped[str] = mapped_column(String, nullable=False)
     purpose: Mapped[str] = mapped_column(String(40), nullable=False, default="password_reset")
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class ConversationTurn(Base):
     __tablename__ = "conversation_turns"
@@ -184,5 +211,4 @@ class ConversationTurn(Base):
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     attachment: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-
     claim: Mapped["Claim"] = relationship("Claim", back_populates="turns")
