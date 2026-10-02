@@ -10,7 +10,13 @@ from src.database.models import Adjuster, Claim, User
 
 def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None = None) -> None:
     role = str(current_user.role).upper()
+    claim_tenant = str(getattr(claim, "tenant_id", "") or "")
+    user_tenant = str(getattr(current_user, "tenant_id", "") or "")
+    if claim_tenant and user_tenant and claim_tenant != user_tenant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant boundary violation.")
     if role == "ADMIN":
+        if not user_tenant:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required.")
         return
     user_id = str(current_user.id)
     if role == "ADJUSTER":
