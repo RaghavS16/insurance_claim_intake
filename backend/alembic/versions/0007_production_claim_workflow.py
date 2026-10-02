@@ -5,6 +5,10 @@ import sqlalchemy as sa
 revision="0007"; down_revision="0006"; branch_labels=None; depends_on=None
 
 def upgrade():
+    # Fresh PostgreSQL databases are already materialized by 0000.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql" and bind.execute(sa.text("SELECT to_regclass('public.schema_baseline')")).scalar():
+        return
     op.create_table("claim_assignments",
         sa.Column("id",sa.String(36),primary_key=True),sa.Column("claim_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("claims.id",ondelete="CASCADE"),nullable=False),
         sa.Column("adjuster_id",postgresql.UUID(as_uuid=True),sa.ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False),sa.Column("assigned_by",postgresql.UUID(as_uuid=True),sa.ForeignKey("users.id",ondelete="SET NULL")),
