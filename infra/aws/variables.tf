@@ -96,8 +96,8 @@ variable "container_image" {
   type = string
 
   validation {
-    condition     = length(trimspace(var.container_image)) > 0
-    error_message = "container_image must point to an immutable published backend image."
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", trimspace(var.container_image)))
+    error_message = "container_image must use an immutable image digest (repository@sha256:<64-hex>)."
   }
 }
 
