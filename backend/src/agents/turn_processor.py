@@ -206,7 +206,7 @@ async def process_claimant_turn(
             if readiness.get("ready"):
                 try:
                     locked = db.execute(
-                        __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
+                        __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id, Claim.tenant_id == claim.tenant_id).with_for_update()
                     ).scalar_one()
                     existing_submission = db.query(ClaimSubmission).filter(
                         ClaimSubmission.claim_id == claim.id,
