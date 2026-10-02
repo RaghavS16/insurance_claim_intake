@@ -75,6 +75,21 @@ resource "aws_iam_role_policy" "execution_secrets" {
   })
 }
 
+resource "aws_iam_role_policy" "execution_kms" {
+  role = aws_iam_role.execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.data.arn
+      }
+    ]
+  })
+}
+
 resource "aws_ecs_task_definition" "app" {
   family                   = local.name
   network_mode             = "awsvpc"
