@@ -20,6 +20,7 @@ def upgrade() -> None:
             op.add_column(table, column)
 
     add_column("users", sa.Column("email_verified_at", sa.DateTime(timezone=True), nullable=True))
+    add_column("password_reset_otps", sa.Column("purpose", sa.String(length=40), nullable=False, server_default="password_reset"))
     add_column("users", sa.Column("session_version", sa.Integer(), nullable=False, server_default="1"))
     add_column("users", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True))
     add_column("users", sa.Column("mfa_required", sa.Boolean(), nullable=False, server_default=sa.false()))
