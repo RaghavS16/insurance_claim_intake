@@ -83,19 +83,40 @@ async def process_claimant_turn(
         **({"_workflow_event": workflow_event} if workflow_event else {}),
     }
 
-    # Fast-path intent first: classify only when the turn plausibly needs conversational
-    # RAG. Plain claim facts can go straight to the intake graph, avoiding an LLM call.
+    # All claimant-facing AI work for a turn shares one tenant quota/concurrency lease.
+    # This closes the pre-graph RAG path so classification/answer generation cannot bypass
+    # tenant quotas, daily budgets, or concurrency controls.
+    estimated_tokens = max(
+        256,
+        min(
+            8192,
+            512 + (
+                len(user_text or "")
+                + len(__import__("json").dumps(prior_state, default=str))
+            ) // 4,
+        ),
+    )
     rag_reply = {}
-    if user_text and not workflow_event:
-        from src.agents.rag_chat import _heuristic_intent
-        fast_intent = _heuristic_intent(user_text)
-        likely_question = bool(
+    from src.agents.rag_chat import _heuristic_intent
+    fast_intent = _heuristic_intent(user_text) if user_text and not workflow_event else None
+    likely_question = bool(
+        fast_intent
+        and (
             fast_intent.is_question
             or fast_intent.wants_to_file
             or fast_intent.wants_status
             or fast_intent.wants_policy_explanation
             or fast_intent.wants_human
         )
+    )
+
+    # LangChain sync work must stay off FastAPI event-loop threads, and all AI
+    # calls for the claimant turn must be covered by the tenant governance lease.
+    async with tenant_ai_guard(
+        str(claim.tenant_id),
+        operation="claim_turn",
+        estimated_tokens=estimated_tokens,
+    ):
         if likely_question:
             try:
                 from src.agents.rag_chat import classify_turn, build_claimant_response
@@ -111,20 +132,20 @@ async def process_claimant_turn(
                     rag_intent_obj,
                 )
             except Exception as exc:
-                # Preserve normal claim capture if conversational RAG is unavailable.
-                logger.warning("Claimant conversational RAG response failed: %s", exc)
+                logger.warning(
+                    "Claimant conversational RAG response failed: %s",
+                    type(exc).__name__,
+                )
 
-    # LangChain's sync invoke performs network/model work. Never run it on FastAPI's event loop.
-    async with tenant_ai_guard(str(claim.tenant_id), operation="claim_turn"):
         result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
-    extracted = result.get("extracted_data", {}) or {}
-    if rag_reply:
-        result["chat_intent"] = rag_reply.get("intent") or {}
-        result["chat_retrieval"] = rag_reply.get("retrieval") or {}
-        if rag_reply.get("answer"):
-            result["next_question"] = rag_reply["answer"]
-            result["message"] = rag_reply["answer"]
 
+    result["ai_governance"] = {
+        "prompt_version": settings.AI_PROMPT_VERSION,
+        "fast_model": settings.FAST_LLM_MODEL,
+        "reasoning_model": settings.REASONING_LLM_MODEL,
+        "local_fallback_allowed": settings.AI_ALLOW_LOCAL_FALLBACK,
+        "estimated_tokens_reserved": estimated_tokens,
+    }
     # Policy verification is triggered by complete baseline facts, not by a conversational
     # confirmation flag. The claimant can correct facts at any time; verification is rerun
     # after each correction before submission.
