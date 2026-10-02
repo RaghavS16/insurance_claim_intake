@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(True)
     SECRET_KEY: str = Field("dev-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(60, ge=5, le=1440)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, ge=1, le=90)
 
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
