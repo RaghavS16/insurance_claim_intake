@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
-from src.database.hardening_models import SystemAuditEvent
+from src.database.hardening_models import SystemAuditEvent, ClaimAuditEvent, ClaimDecision
 from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
 from src.utils.validators import (
@@ -122,17 +122,20 @@ def parse_date(value: str, field_name: str) -> date:
         )
 
 
-def _find_policy(db: Session, identifier: str) -> Optional[Policy]:
+def _find_policy(db: Session, identifier: str, tenant_id: str | None = None) -> Optional[Policy]:
     """Find policy safely by UUID id or policy_number without throwing Postgres UUID casting error."""
     clean_id = identifier.strip()
     try:
         val_uuid = uuid.UUID(clean_id)
-        pol = db.query(Policy).filter(Policy.id == str(val_uuid)).first()
+        pol = db.query(Policy).filter(Policy.id == str(val_uuid), *([Policy.tenant_id == tenant_id] if tenant_id else [])).first()
         if pol:
             return pol
     except (ValueError, AttributeError):
         pass
-    return db.query(Policy).filter(Policy.policy_number == clean_id.upper()).first()
+    query = db.query(Policy).filter(Policy.policy_number == clean_id.upper())
+    if tenant_id:
+        query = query.filter(Policy.tenant_id == tenant_id)
+    return query.first()
 
 
 def _adjuster_dict(a: Adjuster) -> Dict[str, Any]:
@@ -346,6 +349,7 @@ def add_adjuster(
 
     new_user = User(
         id=user_id,
+        tenant_id=str(current_user.tenant_id),
         full_name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -355,6 +359,7 @@ def add_adjuster(
     )
     new_adjuster = Adjuster(
         id=user_id,
+        tenant_id=str(current_user.tenant_id),
         name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -492,9 +497,9 @@ def reset_adjuster_password(
     """
     Reset an adjuster's password and generate a new temporary password.
     """
-    _require_admin(request, db)
+    current_user = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -535,9 +540,11 @@ def delete_adjuster(
     Delete an adjuster and their associated user record.
     Prevents deletion if active claims are assigned (suggests deactivation instead).
     """
-    _require_admin(request, db)
+    current_user = _require_admin(request, db)
 
-    adjuster = get_adjuster_or_404(db, adjuster_id)
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
+    if not adjuster:
+        raise HTTPException(status_code=404, detail="Adjuster not found.")
 
     if (adjuster.claims_assigned or 0) > 0:
         raise HTTPException(
@@ -566,14 +573,14 @@ def list_all_policies(
     db: Session = Depends(get_db),
 ):
     """Overview list of all policies in the system and their linking status."""
-    _require_admin(request, db)
+    current_user = _require_admin(request, db)
 
     if page < 1:
         page = 1
     if page_size < 1 or page_size > 200:
         page_size = 50
 
-    query = db.query(Policy).order_by(Policy.created_at.desc())
+    query = db.query(Policy).filter(Policy.tenant_id == current_user.tenant_id).order_by(Policy.created_at.desc())
     total = query.count()
     offset = (page - 1) * page_size
     policies = query.offset(offset).limit(page_size).all()
@@ -650,6 +657,7 @@ def create_policy(
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
+        tenant_id=str(current_user.tenant_id),
         tenant_id=str(current_user.tenant_id),
         policy_number=policy_num,
         customer_id=None,
@@ -799,3 +807,31 @@ def _audit(
         action=action,
         metadata_json=metadata or {},
     ))
+
+
+@router.get("/audit")
+def list_system_audit(
+    request: Request,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """Return tenant-scoped immutable administrative/security audit events."""
+    current_user = _require_admin(request, db)
+    limit = max(1, min(limit, 500))
+    rows = (
+        db.query(SystemAuditEvent)
+        .filter(SystemAuditEvent.tenant_id == current_user.tenant_id)
+        .order_by(SystemAuditEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [{
+        "id": str(row.id),
+        "event_type": row.event_type,
+        "resource_type": row.resource_type,
+        "resource_id": row.resource_id,
+        "action": row.action,
+        "metadata": row.metadata_json or {},
+        "actor_user_id": str(row.actor_user_id) if row.actor_user_id else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows]
