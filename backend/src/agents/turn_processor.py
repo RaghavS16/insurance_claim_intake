@@ -201,7 +201,10 @@ async def process_claimant_turn(
         elif readiness.get("ready"):
             try:
                 locked = db.execute(
-                    __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
+                    __import__("sqlalchemy").select(Claim).where(
+                        Claim.id == claim.id,
+                        Claim.tenant_id == claim.tenant_id,
+                    ).with_for_update()
                 ).scalar_one()
                 existing_submission = db.query(ClaimSubmission).filter(
                     ClaimSubmission.claim_id == claim.id,
@@ -219,7 +222,7 @@ async def process_claimant_turn(
                     # concurrently must invalidate the prior readiness result.
                     locked_state = dict(locked.pipeline_state or {})
                     locked_readiness = build_submission_readiness(db, locked, locked_state.get("policy_verification") or {})
-                    if not locked_readiness.get("ready"):
+                    if not locked_readiness.get("ready") or not bool(locked_state.get("final_submission_confirmed")):
                         raise ClaimTurnConflict("Claim changed while submission confirmation was being processed.")
                     assigned = assign_claim(db, locked, str(claim.claimant_id))
                     transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
