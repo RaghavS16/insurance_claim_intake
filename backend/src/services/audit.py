@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from src.database.hardening_models import SystemAuditEvent
@@ -28,6 +28,12 @@ def append_system_audit(
     tenant = str(tenant_id or "")
     if not tenant:
         raise ValueError("tenant_id is required for system audit events")
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"system-audit:{tenant}"},
+        )
 
     last = (
         db.query(SystemAuditEvent)
