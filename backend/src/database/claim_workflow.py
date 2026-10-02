@@ -93,11 +93,13 @@ def build_submission_readiness(db: Session, claim: Claim, policy_verification: d
         ClaimException.tenant_id == claim.tenant_id,
         ClaimException.status == "open",
     ).all()
+    claimant_confirmation = bool((claim.pipeline_state or {}).get("final_submission_confirmed"))
     return build_readiness(
         requirements=requirements,
         policy_verification=policy_verification,
         evidence_rows=evidence,
         exceptions=exceptions,
+        claimant_confirmation=claimant_confirmation,
     )
 
 
@@ -124,7 +126,10 @@ def persist_canonical_facts(
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     rows = {
         row.fact_key: row
-        for row in db.query(ClaimFact).filter(ClaimFact.claim_id == claim.id).all()
+        for row in db.query(ClaimFact).filter(
+            ClaimFact.claim_id == claim.id,
+            ClaimFact.tenant_id == claim.tenant_id,
+        ).all()
     }
     for key, value in (facts or {}).items():
         if value in (None, "", "UNKNOWN"):
@@ -132,6 +137,7 @@ def persist_canonical_facts(
         row = rows.get(str(key))
         if row is None:
             row = ClaimFact(
+                tenant_id=str(claim.tenant_id or ""),
                 claim_id=str(claim.id),
                 fact_key=str(key),
                 value_json={"value": value},
@@ -184,6 +190,7 @@ def record_exception(
         existing.blocking = blocking
         return existing
     row = ClaimException(
+        tenant_id=str(claim.tenant_id or ""),
         claim_id=str(claim.id),
         event_type=event_type,
         reason=reason,
@@ -200,7 +207,10 @@ def sync_claim_requirements(db: Session, claim: Claim, requirements: list[dict])
     """Synchronize the current policy-derived manifest into durable requirement rows."""
     rows = {
         row.requirement_key: row
-        for row in db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
+        for row in db.query(ClaimRequirement).filter(
+            ClaimRequirement.claim_id == claim.id,
+            ClaimRequirement.tenant_id == claim.tenant_id,
+        ).all()
     }
     active_keys = set()
     authoritative = str((claim.pipeline_state or {}).get("rag_status") or "") == "OK"
