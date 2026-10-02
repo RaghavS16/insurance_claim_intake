@@ -11,12 +11,14 @@ import hashlib
 import io
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.store import _extract_text
+from src.utils.document_safety import enforce_document_limits, enforce_extracted_text_limit
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,14 @@ def _extract_image_text(content: bytes, filename: str) -> str:
         image = Image.open(io.BytesIO(content)).convert("RGB")
         # RapidOCR accepts an ndarray/PIL-compatible image in supported versions.
         import numpy as np
-        result, _ = RapidOCR()(np.asarray(image))
+        def _run_ocr():
+            return RapidOCR()(np.asarray(image))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_ocr)
+            try:
+                result, _ = future.result(timeout=settings.MAX_OCR_SECONDS)
+            except FuturesTimeoutError as exc:
+                raise TimeoutError("Image OCR exceeded the configured time limit.") from exc
         if not result:
             return ""
         return " ".join(str(row[1]) for row in result if isinstance(row, (list, tuple)) and len(row) > 1).strip()
@@ -99,6 +108,20 @@ def verify_evidence(
     prevents an unavailable/uncertain model from satisfying a required document.
     """
     sha256 = hashlib.sha256(content).hexdigest()
+    try:
+        enforce_document_limits(content, filename)
+    except ValueError as exc:
+        return {
+            "verification_status": "REJECTED",
+            "detected_document_type": "unsafe_file",
+            "confidence": 1.0,
+            "reason": str(exc),
+            "extracted_fields": [],
+            "claim_consistency": "UNKNOWN",
+            "consistency_notes": [],
+            "sha256": sha256,
+            "extracted_text_length": 0,
+        }
     valid_file, file_reason = validate_evidence_file(content, filename)
     if not valid_file:
         return {
@@ -112,7 +135,7 @@ def verify_evidence(
             "sha256": sha256,
             "extracted_text_length": 0,
         }
-    text = extract_evidence_text(content, filename)
+    text = enforce_extracted_text_limit(extract_evidence_text(content, filename), filename)
     if len(text.strip()) < 20:
         ext = os.path.splitext(filename)[1].lower()
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
