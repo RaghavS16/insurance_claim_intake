@@ -143,10 +143,22 @@ def get_current_user(
     token_version = int(payload.get("sv", 1)) if token else 1
     if token and token_version != int(getattr(user, "session_version", 1) or 1):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid.")
+    request.state.authenticated_user_id = str(user.id)
+    request.state.authenticated_tenant_id = str(user.tenant_id or "")
     if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email verification is required.")
+    if (
+        settings.PRIVILEGED_PASSKEY_REQUIRED
+        and str(user.role).upper() in {"ADMIN", "ADJUSTER"}
+        and not request.url.path.startswith("/api/v1/auth/passkey/")
+    ):
+        amr = payload.get("amr", []) if token else []
+        if "webauthn" not in amr:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="A registered passkey is required for privileged access.",
+            )
     return user
-
 
 def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
     """Dependency helper to get the authenticated user ID string."""
