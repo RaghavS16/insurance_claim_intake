@@ -1,21 +1,21 @@
 resource "aws_lb" "app" {
-  name               = substr(replace("${local.name}-alb", "_", "-"), 0, 32)
-  load_balancer_type = "application"
-  internal           = false
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  name                       = substr(replace("${local.name}-alb", "_", "-"), 0, 32)
+  load_balancer_type         = "application"
+  internal                   = false
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = aws_subnet.public[*].id
   enable_deletion_protection = true
-  tags               = local.tags
+  tags                       = local.tags
 }
 
 resource "aws_lb_target_group" "api" {
-  name     = substr(replace("${local.name}-api", "_", "-"), 0, 32)
-  port     = var.app_container_port
-  protocol = "HTTP"
-  target_type = "ip"
-  vpc_id   = aws_vpc.main.id
+  name                 = substr(replace("${local.name}-api", "_", "-"), 0, 32)
+  port                 = var.app_container_port
+  protocol             = "HTTP"
+  target_type          = "ip"
+  vpc_id               = aws_vpc.main.id
   deregistration_delay = 30
-  tags     = local.tags
+  tags                 = local.tags
 
   health_check {
     path                = var.health_path
