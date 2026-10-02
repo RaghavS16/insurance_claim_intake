@@ -51,6 +51,7 @@ async def create_realtime_session(
         ticket_id=ticket_id,
         user_id=str(current_user.id),
         model=settings.VOICE_STT_MODEL,
+        tenant_id=str(current_user.tenant_id or ""),
     )
     if not ok:
         raise HTTPException(
