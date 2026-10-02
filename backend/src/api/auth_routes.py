@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from src.config import settings
 from src.database.session import get_db
@@ -237,6 +238,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         db.query(PasswordResetOTP)
         .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
         .order_by(PasswordResetOTP.created_at.desc())
+        .with_for_update()
         .first()
     )
     if not record:
