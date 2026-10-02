@@ -173,3 +173,25 @@ class ClaimSubmission(Base):
     submitted_by: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"))
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     result_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class OutboxEvent(Base):
+    """Durable transactional event for work that must survive process restarts."""
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_dispatch", "status", "next_attempt_at"),
+        UniqueConstraint("idempotency_key", name="uq_outbox_events_idempotency"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_type: Mapped[str] = mapped_column(String(150), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    payload_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
