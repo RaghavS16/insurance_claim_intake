@@ -38,12 +38,15 @@ resource "aws_iam_role_policy" "app" {
         Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
         Resource = aws_kms_key.data.arn
       },
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = var.secrets_manager_secret_arns
+      ]
+      dynamic "Statement" {
+        for_each = length(var.secrets_manager_secret_arns) > 0 ? [1] : []
+        content = {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = var.secrets_manager_secret_arns
+        }
       }
-    ]
   })
 }
 
