@@ -505,9 +505,13 @@ def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = No
 
 
 def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
+    tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
+        row = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.tenant_id == tenant_id,
+        ).first()
         if not row:
             return
         row.metadata_json = {
