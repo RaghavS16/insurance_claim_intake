@@ -777,3 +777,37 @@ def delete_policy(
         "deleted": True,
     }
 
+
+
+@router.get("/audit/events")
+def list_system_audit_events(
+    request: Request,
+    limit: int = 100,
+    event_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return tenant-scoped administrative/AI audit events."""
+    admin = _require_admin(request, db)
+    from src.database.hardening_models import SystemAuditEvent
+    q = db.query(SystemAuditEvent).filter(SystemAuditEvent.tenant_id == admin.tenant_id)
+    if event_type:
+        q = q.filter(SystemAuditEvent.event_type == event_type)
+    rows = q.order_by(SystemAuditEvent.sequence_no.desc()).limit(max(1, min(limit, 500))).all()
+    return {
+        "items": [
+            {
+                "id": str(row.id),
+                "sequence_no": row.sequence_no,
+                "event_type": row.event_type,
+                "resource_type": row.resource_type,
+                "resource_id": row.resource_id,
+                "action": row.action,
+                "actor_user_id": str(row.actor_user_id) if row.actor_user_id else None,
+                "payload": row.payload_json,
+                "previous_hash": row.previous_hash,
+                "event_hash": row.event_hash,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    }
