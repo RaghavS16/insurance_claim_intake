@@ -317,7 +317,7 @@ def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depe
 def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     """Allow claimant to discard their own draft session."""
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
@@ -645,6 +645,7 @@ async def respond_to_evidence_request(
         except ValueError as exc:
             raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
         evidence = ClaimEvidence(
+            tenant_id=str(claim.tenant_id or ""),
             claim_id=str(claim.id),
             uploaded_by=str(current_user.id),
             request_id=str(row.id),
@@ -676,6 +677,7 @@ async def respond_to_evidence_request(
         transition_claim(db, claim, "under_review", str(current_user.id), "Claimant submitted response to requested evidence")
 
     db.add(ClaimAuditEvent(
+        tenant_id=str(claim.tenant_id or ""),
         claim_id=str(claim.id),
         actor_user_id=str(current_user.id),
         event_type="evidence_request_responded",
@@ -756,7 +758,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
             content_type=file.content_type or "application/octet-stream",
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Evidence storage is unavailable: {exc}")
+        raise HTTPException(status_code=502, detail="Evidence storage is temporarily unavailable.")
 
     analyses = []
     for candidate in candidates:
@@ -842,6 +844,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
 
     db_evidence = ClaimEvidence(
         id=item_id,
+        tenant_id=str(claim.tenant_id or ""),
         claim_id=claim.id,
         uploaded_by=current_user.id,
         requirement_id=str(requirement_row.id) if requirement_row else None,
