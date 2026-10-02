@@ -10,7 +10,7 @@ class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
-    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None) -> dict:
+    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None) -> dict:
         facts = dict(claim_facts or {})
         incident_description = str(query or facts.get("event_description") or "").strip()
         searchable_facts = " ".join(
@@ -30,15 +30,15 @@ class KnowledgeRetriever:
         # Document-level compilation is authoritative when available, but a DB/cache
         # outage must not disable the existing retrieval path.
         try:
-            policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date)
+            policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
             policy_docs_found = bool(policy_docs)
             for doc in policy_docs:
-                cached = get_cached_requirement_manifest(doc["document_id"])
+                cached = get_cached_requirement_manifest(doc["document_id"], tenant_id)
                 if not cached:
-                    chunks = get_document_chunks(doc["document_id"])
+                    chunks = get_document_chunks(doc["document_id"], tenant_id)
                     try:
                         cached = compile_policy_requirements(document_id=doc["document_id"], insurance_type=insurance_type, chunks=chunks)
-                        if cached: save_requirement_manifest(doc["document_id"], cached)
+                        if cached: save_requirement_manifest(doc["document_id"], cached, tenant_id)
                     except Exception:
                         cached = []
                 manifest.extend(cached)
@@ -70,12 +70,16 @@ class KnowledgeRetriever:
                         policy_number=policy_number,
                         document_types=["policy_wording"],
                         incident_date=incident_date,
+                        tenant_id=tenant_id,
+                        jurisdiction=jurisdiction,
                     ),
                     "regulations": search(
                         q,
                         insurance_type=insurance_type,
                         document_types=["regulation", "guideline", "claim_requirement"],
                         incident_date=incident_date,
+                        tenant_id=tenant_id,
+                        jurisdiction=jurisdiction,
                     ),
                     "authoritative": True,
                     "planning_model": "policy_manifest",
@@ -295,6 +299,8 @@ class KnowledgeRetriever:
         incident_date: date | None = None,
         claim_facts: dict | None = None,
         top_k: int = 6,
+        tenant_id: str | None = None,
+        jurisdiction: str | None = None,
     ) -> dict:
         """Answer an arbitrary claimant question from retrieved policy/guidance evidence.
 
@@ -338,6 +344,8 @@ class KnowledgeRetriever:
                 document_types=document_types,
                 incident_date=incident_date,
                 limit=max(top_k * 2, 8),
+                tenant_id=tenant_id,
+                jurisdiction=jurisdiction,
             )
         except Exception:
             rows = []
@@ -371,6 +379,12 @@ class KnowledgeRetriever:
                     "insurance_type",
                     "score",
                     "rerank_score",
+                    "page_number",
+                    "section_number",
+                    "clause_number",
+                    "citation_label",
+                    "jurisdiction",
+                    "document_version",
                     "text",
                 )
                 if row.get(key) is not None
@@ -392,8 +406,8 @@ class KnowledgeRetriever:
 
         evidence_text = "\n\n".join(
             (
-                f"[SOURCE {idx}] {row.get('source_name') or 'Unknown source'} "
-                f"({row.get('document_type') or 'guidance'})\n"
+                f"[SOURCE {idx}] {row.get("source_name") or "Unknown source"} "
+                f"({row.get("document_type") or "guidance"}; {row.get("citation_label") or "citation unavailable"})\n"
                 f"{str(row.get('text') or '')[:2500]}"
             )
             for idx, row in enumerate(sources, 1)
@@ -412,7 +426,7 @@ Rules:
 - If the evidence does not establish a policy-specific answer, explicitly say that the indexed sources do not establish it.
 - Do not copy the claimant's missing-field list into the answer.
 - Keep the response clear and voice-friendly, normally 2 to 6 sentences.
-- You may mention the source name when useful.
+- Every policy/coverage/deadline/evidence assertion must cite at least one supplied source using its citation_label. If citation_label is unavailable, explicitly say exact clause/page provenance is unavailable and do not present the statement as clause-supported.
 - Intake collection is parallel work. Do not ask for claim details unless the question itself is about filing/processing
   or the caller is clearly continuing a claim; when you do ask, ask for only one useful next detail.
 
