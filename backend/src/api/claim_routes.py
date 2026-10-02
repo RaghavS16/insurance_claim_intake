@@ -262,7 +262,7 @@ def track_claims(request: Request, db: Session = Depends(get_db)):
     items = []
     for claim in claims:
         payload = _claim_payload(claim)
-        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id, ClaimEvidenceRequest.tenant_id == claim.tenant_id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
         payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
         payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
         payload["conversation"] = _conversation_payload(db, claim)
@@ -282,7 +282,7 @@ def get_conversation_history(ticket_id: str, request: Request, db: Session = Dep
 def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     """Export formatted conversation transcript and extracted claim dossier."""
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
@@ -665,6 +665,9 @@ async def respond_to_evidence_request(
     # Check if there are other remaining open requests for this claim
     remaining_open = db.query(ClaimEvidenceRequest).filter(
         ClaimEvidenceRequest.claim_id == claim.id,
+        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
+        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
+        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
         ClaimEvidenceRequest.tenant_id == claim.tenant_id,
         ClaimEvidenceRequest.status == "open",
         ClaimEvidenceRequest.id != row.id
