@@ -6,7 +6,7 @@ import uuid
 
 def make_event(event_type: str, ticket_id: str, **payload: Any) -> Dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "event_id": str(uuid.uuid4()),
         "event_type": event_type,
         "ticket_id": ticket_id,
