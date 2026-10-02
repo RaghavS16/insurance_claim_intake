@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
     REDIS_URL: Optional[str] = None
 
+    # OpenTelemetry is enabled explicitly in production/staging when an OTLP endpoint is configured.
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "insurance-claim-intake"
+    OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
+    OTEL_EXPORTER_OTLP_HEADERS: Optional[str] = None
+
     LLM_PROVIDER: str = "huggingface"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
