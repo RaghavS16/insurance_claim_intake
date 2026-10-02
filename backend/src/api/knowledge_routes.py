@@ -4,7 +4,9 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from src.api.deps import require_role
-from src.database.models import User
+from src.database.models import User, KnowledgeDocument
+from src.database.session import get_db
+from sqlalchemy.orm import Session
 from src.knowledge.store import ingest_document, search
 from src.utils.upload_limits import read_limited
 
@@ -102,3 +104,22 @@ async def retrieve(
         logger.exception("Knowledge search failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Knowledge retrieval failed: {exc}")
 
+
+
+@router.post("/documents/{document_id}/publish")
+def publish_document(
+    document_id: str,
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    meta = dict(doc.metadata_json or {})
+    meta["publication_status"] = "published"
+    meta["published_by"] = str(user.id)
+    from datetime import datetime, timezone
+    meta["published_at"] = datetime.now(timezone.utc).isoformat()
+    doc.metadata_json = meta
+    db.commit()
+    return {"document_id": str(doc.id), "publication_status": "published"}
