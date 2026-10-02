@@ -279,9 +279,9 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
 @router.post("/claims/{ticket_id}/assign")
 def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
-    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.is_active.is_(True)).first()
+    active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.tenant_id==c.tenant_id,ClaimAssignment.is_active.is_(True)).first()
     if active:
-        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id).first()
+        aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id,Adjuster.tenant_id==c.tenant_id).first()
         return {"success":True,"already_assigned":True,"claim":_item(c,aa)}
     from src.database.claim_workflow import assign_claim as assign_claim_tx
     try:
