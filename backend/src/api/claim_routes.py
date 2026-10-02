@@ -272,7 +272,7 @@ def track_claims(request: Request, db: Session = Depends(get_db)):
 @router.get("/{ticket_id}/conversation")
 def get_conversation_history(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == current_user.tenant_id).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     return _conversation_payload(db, claim)
@@ -441,7 +441,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     enforce_claim_ownership(claim, current_user)
 
     if claim.status in {"submitted", "assigned", "under_review", "pending_evidence", "approved", "partially_approved", "rejected", "closed"}:
-        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id).first()
+        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id, ClaimSubmission.tenant_id == claim.tenant_id).first()
         return {
             **_claim_payload(claim),
             "submission": {
@@ -453,6 +453,12 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
 
     state = dict(claim.pipeline_state or {})
     extracted = dict(state.get("extracted_data") or {})
+    if payload is None or payload.confirmed is not True:
+        state["awaiting_submission_confirmation"] = True
+        state["final_submission_confirmed"] = False
+        claim.pipeline_state = state
+        db.commit()
+        return {**_claim_payload(claim), "submission": None, "message": "Please explicitly confirm that the claim summary is correct before submission."}
     verification = verify_policy_for_claim(
         policy_id=extracted.get("policy_id"),
         event_date_str=extracted.get("event_date"),
@@ -488,7 +494,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
         locked = db.execute(
             select(Claim).where(Claim.id == claim.id).with_for_update()
         ).scalar_one()
-        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == locked.id).first()
+        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == locked.id, ClaimSubmission.tenant_id == locked.tenant_id).first()
         if existing:
             db.commit()
             return {
