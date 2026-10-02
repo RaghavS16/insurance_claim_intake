@@ -125,6 +125,7 @@ def calculate_readiness(
     policy_verification: Optional[dict[str, Any]] = None,
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
+    submission_confirmation: bool = False,
 ) -> ReadinessResult:
     requirements_list = list(requirements)
     evidence_list = list(evidence_rows)
@@ -182,6 +183,7 @@ def calculate_readiness(
         and verification["policy"] == "PASS"
         and verification["identity"] == "PASS"
         and not blocking_exceptions
+        and submission_confirmation
     )
     return ReadinessResult(
         ready=ready,

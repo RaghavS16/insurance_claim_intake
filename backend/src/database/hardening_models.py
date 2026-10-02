@@ -13,6 +13,7 @@ class ClaimAssignment(Base):
     __tablename__="claim_assignments"
     __table_args__=(Index("ix_claim_assignments_active","claim_id","is_active"),Index("ix_claim_assignments_adjuster","adjuster_id","is_active"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
     adjuster_id: Mapped[str]=_UUID(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
     assigned_by: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
@@ -25,6 +26,7 @@ class ClaimRequirement(Base):
     __tablename__="claim_requirements"
     __table_args__=(UniqueConstraint("claim_id","requirement_key",name="uq_claim_requirement_key"),)
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
     requirement_key: Mapped[str]=mapped_column(String(150),nullable=False)
     label: Mapped[str]=mapped_column(String(500),nullable=False)
@@ -41,6 +43,7 @@ class ClaimEvidence(Base):
     __tablename__="claim_evidence"
     __table_args__=(Index("ix_claim_evidence_claim","claim_id"),Index("ix_claim_evidence_status","status"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
     uploaded_by: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
     requirement_id: Mapped[Optional[str]]=mapped_column(ForeignKey("claim_requirements.id",ondelete="SET NULL"))
@@ -64,6 +67,7 @@ class ClaimEvidenceRequest(Base):
     __tablename__="claim_evidence_requests"
     __table_args__=(Index("ix_claim_evidence_requests_claim","claim_id"), Index("ix_claim_evidence_requests_status","status"))
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
     adjuster_id: Mapped[str]=_UUID(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
     request_text: Mapped[str]=mapped_column(Text,nullable=False)
@@ -75,6 +79,7 @@ class ClaimEvidenceRequest(Base):
 class ClaimDecision(Base):
     __tablename__="claim_decisions"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     adjuster_id: Mapped[str]=mapped_column(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
     decision: Mapped[str]=mapped_column(String(40),nullable=False)
@@ -86,6 +91,7 @@ class ClaimDecision(Base):
 class ClaimNote(Base):
     __tablename__="claim_notes"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     author_user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="RESTRICT"),nullable=False)
     note: Mapped[str]=mapped_column(Text,nullable=False)
@@ -95,6 +101,7 @@ class ClaimNote(Base):
 class ClaimAuditEvent(Base):
     __tablename__="claim_audit_events"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     actor_user_id: Mapped[Optional[str]]=_UUID(ForeignKey("users.id",ondelete="SET NULL"))
     event_type: Mapped[str]=mapped_column(String(100),nullable=False,index=True)
@@ -106,6 +113,7 @@ class ClaimAuditEvent(Base):
 class CopilotAnalysis(Base):
     __tablename__="copilot_analyses"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str]=mapped_column(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False,index=True)
     claim_version: Mapped[int]=mapped_column(Integer,nullable=False,default=1)
     knowledge_version: Mapped[str]=mapped_column(String(200),nullable=False,default="unknown")
@@ -126,6 +134,7 @@ class ClaimFact(Base):
         Index("ix_claim_facts_state", "state"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     fact_key: Mapped[str] = mapped_column(String(150), nullable=False)
     value_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -146,6 +155,7 @@ class ClaimException(Base):
         Index("ix_claim_exceptions_claim", "claim_id", "blocking", "status"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     severity: Mapped[str] = mapped_column(String(30), nullable=False, default="medium")
@@ -167,6 +177,7 @@ class ClaimSubmission(Base):
         UniqueConstraint("idempotency_key", name="uq_claim_submission_idempotency"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="accepted")
@@ -183,6 +194,7 @@ class OutboxEvent(Base):
         UniqueConstraint("idempotency_key", name="uq_outbox_events_idempotency"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(150), nullable=False)
     aggregate_type: Mapped[str] = mapped_column(String(100), nullable=False)
     aggregate_id: Mapped[str] = mapped_column(String(150), nullable=False)
@@ -205,6 +217,7 @@ class MFAChallenge(Base):
         Index("ix_mfa_challenges_user_expires", "user_id", "expires_at"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     challenge_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -221,6 +234,7 @@ class MFARecoveryCode(Base):
         Index("ix_mfa_recovery_user", "user_id", "consumed"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
