@@ -267,6 +267,8 @@ class Settings(BaseSettings):
             raise RuntimeError("AI_ALLOWED_MODELS must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ORIGIN.startswith("https://"):
             raise RuntimeError("PASSKEY_ORIGIN must use HTTPS when privileged passkeys are required in production/staging.")
+        if self.ENVIRONMENT == "production" and not self.PRIVILEGED_PASSKEY_REQUIRED:
+            raise RuntimeError("PRIVILEGED_PASSKEY_REQUIRED must be true in production. Privileged accounts require phishing-resistant authentication.")
 
 
 settings = Settings()
