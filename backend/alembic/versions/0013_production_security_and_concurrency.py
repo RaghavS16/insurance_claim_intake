@@ -42,6 +42,9 @@ def upgrade() -> None:
             if_not_exists=True,
         )
 
+    if "knowledge_documents" in inspector.get_table_names():
+        op.create_index("uq_knowledge_documents_content_sha256", "knowledge_documents", ["content_sha256"], unique=True, if_not_exists=True)
+
     if "users" in inspector.get_table_names():
         op.create_index(
             "idx_users_status_role",
@@ -78,6 +81,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "knowledge_documents" in inspector.get_table_names():
+        op.drop_index("uq_knowledge_documents_content_sha256", table_name="knowledge_documents", if_exists=True)
     if "conversation_turns" in inspector.get_table_names():
         op.drop_index("idx_conversation_turns_claim_created", table_name="conversation_turns", if_exists=True)
         op.drop_index("uq_conversation_turn_event_id", table_name="conversation_turns", if_exists=True)
