@@ -216,7 +216,6 @@ class OutboxEvent(Base):
     processed_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]]=mapped_column(Text)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
-    last_error: Mapped[Optional[str]]=mapped_column(Text)
 
 class MFAChallenge(Base):
     __tablename__="mfa_challenges"
@@ -252,6 +251,7 @@ class RefreshToken(Base):
     used_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[Optional[datetime]]=mapped_column(DateTime(timezone=True))
     replaced_by: Mapped[Optional[str]]=mapped_column(String(36))
+    auth_context_json: Mapped[Dict[str,Any]]=mapped_column(JSON,nullable=False,default=dict)
 
 class ClaimSubmissionConfirmation(Base):
     __tablename__="claim_submission_confirmations"
