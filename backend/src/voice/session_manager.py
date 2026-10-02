@@ -117,6 +117,9 @@ class VoiceSessionManager:
         tenant_id: str,
     ) -> bool:
         """Reserve a claim-scoped voice session and persist its lifecycle row."""
+        if settings.VOICE_WORKER_DRAINING:
+            return False
+        worker_id = settings.VOICE_WORKER_ID
         async with self._lock:
             active = self._active_call_by_ticket.get(ticket_id)
             if active and active != call_id:
@@ -153,6 +156,8 @@ class VoiceSessionManager:
                     model=model,
                     status="connecting",
                     started_at=datetime.now(timezone.utc),
+                    worker_id=worker_id,
+                    lease_expires_at=datetime.now(timezone.utc),
                 )
                 db.add(row)
                 db.commit()
@@ -197,6 +202,7 @@ class VoiceSessionManager:
         ticket_id: str,
         user_id: str,
         connection: Any,
+        tenant_id: str,
     ) -> None:
         """Attach a negotiated WebRTC connection to the reserved voice session."""
         async with self._lock:
@@ -212,6 +218,7 @@ class VoiceSessionManager:
                     ticket_id=ticket_id,
                     user_id=user_id,
                     connection=connection,
+                    tenant_id=tenant_id,
                 ),
                 name=f"pipecat-voice-{call_id}",
             )
@@ -224,6 +231,7 @@ class VoiceSessionManager:
         ticket_id: str,
         user_id: str,
         connection: Any,
+        tenant_id: str,
     ) -> None:
         from src.voice.pipecat import run_voice_pipeline
 
@@ -245,6 +253,7 @@ class VoiceSessionManager:
                     ticket_id=ticket_id,
                     call_id=call_id,
                     user_id=user_id,
+                    tenant_id=tenant_id,
                     events=self.events,
                 ),
                 timeout=settings.MAX_VOICE_SESSION_SECONDS,
