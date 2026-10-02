@@ -362,7 +362,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 
     record = (
         db.query(PasswordResetOTP)
-        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
         .order_by(PasswordResetOTP.created_at.desc())
         .with_for_update()
         .first()
@@ -434,7 +434,8 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
             detail="This reset code has already been used or is no longer valid. Please restart the process.",
         )
 
-    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
+    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]
+    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
     db.query(RefreshToken).filter(
         RefreshToken.user_id == user.id,
