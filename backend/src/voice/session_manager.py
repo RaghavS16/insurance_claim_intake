@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import redis.asyncio as redis
@@ -164,7 +164,7 @@ class VoiceSessionManager:
                     status="connecting",
                     started_at=datetime.now(timezone.utc),
                     worker_id=worker_id,
-                    lease_expires_at=datetime.now(timezone.utc),
+                    lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.MAX_VOICE_SESSION_SECONDS + 60),
                 )
                 db.add(row)
                 db.commit()
@@ -274,7 +274,7 @@ class VoiceSessionManager:
             if row:
                 row.status = "active"
                 row.worker_id = settings.VOICE_WORKER_ID
-                row.lease_expires_at = datetime.now(timezone.utc)
+                row.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.MAX_VOICE_SESSION_SECONDS + 60)
                 db.commit()
 
             await asyncio.wait_for(
@@ -371,7 +371,7 @@ class VoiceSessionManager:
                 VoiceSession.tenant_id.is_not(None),
             ).first()
             if row:
-                row.lease_expires_at = datetime.now(timezone.utc)
+                row.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.MAX_VOICE_SESSION_SECONDS + 60)
                 db.commit()
         except Exception:
             db.rollback()
