@@ -69,7 +69,7 @@ async def create_realtime_session(
     })
     response.set_cookie(
         settings.VOICE_STICKY_COOKIE_NAME,
-        settings.VOICE_WORKER_ID,
+        voice_session_manager.worker_id(),
         httponly=True,
         secure=settings.ENVIRONMENT in {"production", "staging"},
         samesite="lax",
@@ -109,7 +109,7 @@ async def create_realtime_offer(
 
     _validate_claim_access(db, ticket_id, current_user)
     worker_cookie = request.cookies.get(settings.VOICE_STICKY_COOKIE_NAME)
-    if worker_cookie and worker_cookie != settings.VOICE_WORKER_ID:
+    if worker_cookie and worker_cookie != voice_session_manager.worker_id():
         raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
     session_row = db.query(VoiceSession).filter(
         VoiceSession.call_id == call_id,
@@ -117,7 +117,7 @@ async def create_realtime_offer(
     ).first()
     if not session_row:
         raise HTTPException(status_code=404, detail="Voice session not found.")
-    if session_row.worker_id != settings.VOICE_WORKER_ID:
+    if session_row.worker_id != voice_session_manager.worker_id():
         raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
     active_call = await voice_session_manager.active_call(ticket_id)
     if active_call != call_id:
