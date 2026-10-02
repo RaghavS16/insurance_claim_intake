@@ -8,6 +8,7 @@ insurance business action.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,11 +38,12 @@ logger = app_logger
 class ClaimVoiceProcessor(FrameProcessor):
     """Convert final local-STT turns into authoritative claim-agent replies."""
 
-    def __init__(self, *, ticket_id: str, call_id: str, user_id: str, events: Any) -> None:
+    def __init__(self, *, ticket_id: str, call_id: str, user_id: str, events: Any, tenant_id: str | None = None) -> None:
         super().__init__()
         self.ticket_id = ticket_id
         self.call_id = call_id
         self.user_id = user_id
+        self.tenant_id = tenant_id
         self.events = events
         self._turn_lock = asyncio.Lock()
         self._turn_count = 0
@@ -58,6 +60,7 @@ class ClaimVoiceProcessor(FrameProcessor):
         )
 
     async def _process_transcript(self, transcript: str) -> str:
+        started = time.perf_counter()
         transcript = " ".join(transcript.split()).strip()
         if not transcript:
             return ""
@@ -73,7 +76,11 @@ class ClaimVoiceProcessor(FrameProcessor):
         async with self._turn_lock:
             db = SessionLocal()
             try:
-                claim = db.query(Claim).filter(Claim.ticket_id == self.ticket_id).first()
+                claim = db.query(Claim).filter(
+                    Claim.ticket_id == self.ticket_id,
+                    Claim.claimant_id == self.user_id,
+                    Claim.tenant_id == self.tenant_id,
+                ).first()
                 if not claim:
                     raise RuntimeError("Claim session no longer exists.")
 
@@ -106,6 +113,13 @@ class ClaimVoiceProcessor(FrameProcessor):
                     or ""
                 ).strip()
 
+                latency_ms = round((time.perf_counter() - started) * 1000)
+                await self._publish(
+                    "voice.turn.metrics",
+                    latency_ms=latency_ms,
+                    target_ms=settings.VOICE_LATENCY_TARGET_MS,
+                    within_target=latency_ms <= settings.VOICE_LATENCY_TARGET_MS,
+                )
                 if response_text:
                     await self._publish("voice.agent.final", text=response_text)
                 return response_text
@@ -153,6 +167,7 @@ async def build_voice_pipeline(
     call_id: str,
     user_id: str,
     events: Any,
+    tenant_id: str | None = None,
 ):
     """Build the local-only media → STT → claim-agent → TTS → media path."""
     http_session = aiohttp.ClientSession()
@@ -191,6 +206,7 @@ async def build_voice_pipeline(
             call_id=call_id,
             user_id=user_id,
             events=events,
+            tenant_id=tenant_id,
         )
 
         pipeline = Pipeline(
@@ -228,6 +244,7 @@ async def run_voice_pipeline(
     call_id: str,
     user_id: str,
     events: Any,
+    tenant_id: str | None = None,
 ) -> None:
     """Run one isolated pipeline and clean all resources on termination."""
     transport = None
