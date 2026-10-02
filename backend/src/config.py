@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = Field(10, ge=0, le=100)
     DB_POOL_RECYCLE: int = Field(3600, ge=60)
     REDIS_URL: Optional[str] = None
+    OUTBOX_MAX_ATTEMPTS: int = Field(12, ge=1, le=100)
 
     # OpenTelemetry is enabled explicitly in production/staging when an OTLP endpoint is configured.
     OTEL_ENABLED: bool = False
@@ -120,6 +121,7 @@ class Settings(BaseSettings):
     VOICE_STICKY_COOKIE_NAME: str = "voice_worker_id"
     VOICE_ICE_SERVERS: str = ""  # comma-separated STUN/TURN URLs; production requires TURN
     VOICE_EVENT_RETENTION_SECONDS: int = Field(86400, ge=300, le=2592000)
+    VOICE_MAX_EVENT_TEXT_CHARS: int = Field(4000, ge=0, le=50000)
     VOICE_WORKER_DRAINING: bool = False
     VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS: int = Field(60, ge=10, le=300)
     VOICE_PIPELINE_IDLE_TIMEOUT_SECONDS: int = Field(300, ge=30, le=3600)
