@@ -477,7 +477,7 @@ async def confirm_claim(
         claim_id=claim.id,
     )
     state["policy_verification"] = verification
-    readiness = build_submission_readiness(db, claim, verification)
+    readiness = build_submission_readiness(db, claim, verification, claimant_confirmation=True)
     readiness["verification"]["claimant_confirmation"] = "PASS"
     state["submission_readiness"] = readiness
     claim.pipeline_state = state
@@ -518,7 +518,7 @@ async def confirm_claim(
             db=db,
             claim_id=locked.id,
         )
-        current_readiness = build_submission_readiness(db, locked, current_verification)
+        current_readiness = build_submission_readiness(db, locked, current_verification, claimant_confirmation=True)
         current_readiness["verification"]["claimant_confirmation"] = "PASS"
         if not current_readiness.get("ready"):
             raise ValueError("Claim changed while confirmation was being processed.")
