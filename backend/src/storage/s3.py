@@ -83,3 +83,42 @@ def presigned_put(*,prefix:str,filename:str,content_type:str="application/octet-
         "Bucket":settings.S3_BUCKET,"Key":key,"ContentType":content_type,
         "ServerSideEncryption":settings.S3_SERVER_SIDE_ENCRYPTION},ExpiresIn=ttl)
     return {"bucket":settings.S3_BUCKET,"key":key,"url":url,"expires_in":ttl}
+
+
+def quarantine_bytes(content: bytes, *, ticket_id: str, filename: str, content_type: str | None = None) -> dict:
+    """Store untrusted evidence only under a private quarantine prefix."""
+    return put_bytes(
+        content,
+        prefix=f"quarantine/claims/{_safe_key(ticket_id)}",
+        filename=filename,
+        content_type=content_type,
+        metadata={"quarantine": "true", "scan_status": "pending"},
+    )
+
+
+def promote_quarantined(source_key: str, *, ticket_id: str, filename: str, content_type: str | None = None) -> dict:
+    """Promote only a successfully scanned object into the private claim prefix."""
+    source_key = _safe_key(source_key)
+    suffix = Path(filename).suffix.lower()
+    destination = f"{settings.S3_EVIDENCE_PREFIX}/{_safe_key(ticket_id)}/{uuid.uuid4().hex}{suffix}"
+    if source_key.startswith("quarantine/") and settings.S3_BUCKET:
+        client = _client()
+        client.copy_object(
+            Bucket=settings.S3_BUCKET,
+            CopySource={"Bucket": settings.S3_BUCKET, "Key": source_key},
+            Key=destination,
+            ContentType=content_type or "application/octet-stream",
+            ServerSideEncryption=settings.S3_SERVER_SIDE_ENCRYPTION,
+            MetadataDirective="REPLACE",
+            Metadata={"quarantine": "false", "scan_status": "clean"},
+        )
+        client.delete_object(Bucket=settings.S3_BUCKET, Key=source_key)
+        return {"bucket": settings.S3_BUCKET, "key": destination, "uri": f"s3://{settings.S3_BUCKET}/{destination}"}
+    source = Path(source_key)
+    if source.exists() and source.is_file():
+        local_dir = Path("uploads") / settings.S3_EVIDENCE_PREFIX / _safe_key(ticket_id)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        target = local_dir / f"{uuid.uuid4().hex}{suffix}"
+        source.replace(target)
+        return {"bucket": "local", "key": str(target), "uri": target.as_uri()}
+    raise RuntimeError("Quarantined object was not found.")
