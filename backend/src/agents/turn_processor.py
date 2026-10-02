@@ -38,8 +38,8 @@ async def process_claimant_turn(
         logical_turn = (prior_turns // 2) + 1
         agent_reply = f"Your claim #{claim.ticket_id} has been submitted and is currently being processed by our adjusters."
         try:
-            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text))
-            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_reply))
+            db.add(ConversationTurn(claim_id=claim.id, tenant_id=str(claim.tenant_id), turn_number=logical_turn, speaker="user", text=user_text))
+            db.add(ConversationTurn(claim_id=claim.id, tenant_id=str(claim.tenant_id), turn_number=logical_turn, speaker="agent", text=agent_reply))
             db.commit()
         except Exception:
             db.rollback()
@@ -76,6 +76,7 @@ async def process_claimant_turn(
         **prior_state,
         "claim_text": "" if workflow_event else user_text,
         "ticket_id": claim.ticket_id,
+        "tenant_id": str(claim.tenant_id),
         "input_mode": input_mode,
         **({"_workflow_event": workflow_event} if workflow_event else {}),
     }
@@ -208,6 +209,7 @@ async def process_claimant_turn(
                     transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
                     idempotency_key = f"claim:{claim.id}:submission:v1"
                     db.add(ClaimSubmission(
+                        tenant_id=str(locked.tenant_id),
                         claim_id=locked.id,
                         idempotency_key=idempotency_key,
                         submitted_by=str(claim.claimant_id),
