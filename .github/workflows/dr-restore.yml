@@ -1,0 +1,48 @@
+name: PostgreSQL Disaster Recovery Drill
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 3 * * 0"
+  push:
+    branches: [production-grade-hardening-2026-10]
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: insurance_claims
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d insurance_claims"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DEBUG: "true"
+      SECRET_KEY: test-secret-key-at-least-32-characters-long
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/insurance_claims
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install database dependencies
+        run: pip install -r requirements.txt
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+      - name: Apply schema
+        run: alembic upgrade head
+      - name: Execute restore drill
+        run: python scripts/restore_drill.py
+      - name: Upload measured DR report
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-dr-report-${{ github.sha }}
+          path: /tmp/insurance_claims_dr_report.json
