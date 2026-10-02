@@ -12,7 +12,7 @@ from src.api.deps import get_current_user
 from src.config import settings
 from src.database.models import Claim, User
 from src.database.session import SessionLocal, get_db
-from src.utils.auth import verify_token
+from src.utils.production_security import authenticate_token
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.voice.pipecat import SmallWebRTCConnection
@@ -96,7 +96,7 @@ async def create_realtime_offer(
         raise HTTPException(status_code=400, detail="Only WebRTC offer SDP is accepted.")
 
     _validate_claim_access(db, ticket_id, current_user)
-    active_call = voice_session_manager._active_call_by_ticket.get(ticket_id)
+    active_call = await voice_session_manager.active_call(ticket_id)
     if active_call != call_id:
         raise HTTPException(status_code=409, detail="Voice session is not active.")
 
@@ -138,6 +138,10 @@ async def create_realtime_offer(
 @router.websocket("/events/{ticket_id}")
 async def voice_events(websocket: WebSocket, ticket_id: str):
     """Authenticated claim-scoped application event stream; media stays WebRTC-only."""
+    origin = websocket.headers.get("origin")
+    if origin and origin not in settings.allowed_origins_list:
+        await websocket.close(code=1008, reason="Origin not allowed")
+        return
     await websocket.accept()
     try:
         raw = await websocket.receive_text()
@@ -147,16 +151,12 @@ async def voice_events(websocket: WebSocket, ticket_id: str):
             return
 
         token = str(message.get("token") or "")
-        payload = verify_token(token)
-        if not payload or not payload.get("sub"):
-            await websocket.close(code=1008, reason="Invalid or expired token")
-            return
-
         db = SessionLocal()
         try:
-            user = db.query(User).filter(User.id == payload["sub"]).first()
-            if not user:
-                await websocket.close(code=1008, reason="User not found")
+            try:
+                user = authenticate_token(token, db)
+            except HTTPException:
+                await websocket.close(code=1008, reason="Invalid or expired token")
                 return
             _validate_claim_access(db, ticket_id, user)
         finally:
@@ -172,7 +172,8 @@ async def voice_events(websocket: WebSocket, ticket_id: str):
                 }
             )
         )
-        await voice_session_manager.events.subscribe(websocket, ticket_id)
+        last_event_id = str(message.get("last_event_id") or "") or None
+        await voice_session_manager.events.subscribe(websocket, ticket_id, last_event_id=last_event_id)
     except WebSocketDisconnect:
         return
     except Exception:
