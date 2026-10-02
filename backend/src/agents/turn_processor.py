@@ -11,7 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
-from src.database.hardening_models import ClaimSubmission
+from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfirmation
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -74,6 +74,7 @@ async def process_claimant_turn(
 
     graph_input = {
         **prior_state,
+        "tenant_id": str(getattr(claim, "tenant_id", "") or ""),
         "claim_text": "" if workflow_event else user_text,
         "ticket_id": claim.ticket_id,
         "input_mode": input_mode,
@@ -218,7 +219,6 @@ async def process_claimant_turn(
                     # concurrently must invalidate the prior readiness result.
                     locked_state = dict(locked.pipeline_state or {})
                     locked_readiness = build_submission_readiness(db, locked, locked_state.get("policy_verification") or {})
-                    locked_readiness["verification"]["claimant_confirmation"] = "PASS"
                     if not locked_readiness.get("ready"):
                         raise ClaimTurnConflict("Claim changed while submission confirmation was being processed.")
                     assigned = assign_claim(db, locked, str(claim.claimant_id))
@@ -230,13 +230,19 @@ async def process_claimant_turn(
                         "dynamic_requirements": locked_state.get("dynamic_requirements") or [],
                         "evidence": locked_state.get("evidence") or [],
                     }, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-                    db.add(ClaimSubmissionConfirmation(
-                        claim_id=locked.id,
-                        tenant_id=str(locked.tenant_id or ""),
-                        confirmed_by=str(claim.claimant_id),
-                        claim_state_version=int(locked.state_version or 1),
-                        summary_sha256=summary_hash,
-                    ))
+                    existing_confirmation = db.query(ClaimSubmissionConfirmation).filter(
+                        ClaimSubmissionConfirmation.claim_id == locked.id,
+                        ClaimSubmissionConfirmation.tenant_id == locked.tenant_id,
+                        ClaimSubmissionConfirmation.claim_state_version == int(locked.state_version or 1),
+                    ).first()
+                    if not existing_confirmation:
+                        db.add(ClaimSubmissionConfirmation(
+                            claim_id=locked.id,
+                            tenant_id=str(locked.tenant_id or ""),
+                            confirmed_by=str(claim.claimant_id),
+                            claim_state_version=int(locked.state_version or 1),
+                            summary_sha256=summary_hash,
+                        ))
                     db.add(ClaimSubmission(
                         claim_id=locked.id,
                         tenant_id=str(locked.tenant_id or ""),
