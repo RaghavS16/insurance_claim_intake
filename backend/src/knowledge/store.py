@@ -350,6 +350,7 @@ def ingest_document(
             db.add(
                 KnowledgeChunk(
                     id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
                     document_id=doc.id,
                     chunk_index=idx,
                     text=chunk,
@@ -489,7 +490,7 @@ def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = No
 def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return
         row.metadata_json = {
