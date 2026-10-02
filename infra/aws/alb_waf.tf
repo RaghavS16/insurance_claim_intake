@@ -87,8 +87,8 @@ resource "aws_wafv2_web_acl" "api" {
 
     visibility_config {
       cloudwatch_metrics_enabled = true
-      metric_name                 = "${local.name}-common"
-      sampled_requests_enabled    = true
+      metric_name                = "${local.name}-common"
+      sampled_requests_enabled   = true
     }
   }
 
@@ -109,15 +109,15 @@ resource "aws_wafv2_web_acl" "api" {
 
     visibility_config {
       cloudwatch_metrics_enabled = true
-      metric_name                 = "${local.name}-bad-inputs"
-      sampled_requests_enabled    = true
+      metric_name                = "${local.name}-bad-inputs"
+      sampled_requests_enabled   = true
     }
   }
 
   visibility_config {
     cloudwatch_metrics_enabled = true
-    metric_name                 = "${local.name}-waf"
-    sampled_requests_enabled    = true
+    metric_name                = "${local.name}-waf"
+    sampled_requests_enabled   = true
   }
 
   tags = local.tags
