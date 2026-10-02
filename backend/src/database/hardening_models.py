@@ -195,3 +195,33 @@ class OutboxEvent(Base):
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class MFAChallenge(Base):
+    """Short-lived server-side MFA challenge issued after password verification."""
+    __tablename__ = "mfa_challenges"
+    __table_args__ = (
+        UniqueConstraint("challenge_token_hash", name="uq_mfa_challenge_token_hash"),
+        Index("ix_mfa_challenges_user_expires", "user_id", "expires_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    challenge_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class MFARecoveryCode(Base):
+    """One-time recovery code stored only as a hash."""
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_mfa_recovery_user_code"),
+        Index("ix_mfa_recovery_user", "user_id", "consumed"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
