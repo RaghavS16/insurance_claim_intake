@@ -254,7 +254,7 @@ class VoiceSessionManager:
         final_reason = "session_ended"
 
         try:
-            row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id).first()
+            row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id, VoiceSession.tenant_id == tenant_id).first()
             if row:
                 row.status = "active"
                 row.worker_id = settings.VOICE_WORKER_ID
@@ -295,7 +295,7 @@ class VoiceSessionManager:
         finally:
             if row is None:
                 try:
-                    row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id).first()
+                    row = db.query(VoiceSession).filter(VoiceSession.call_id == call_id, VoiceSession.tenant_id == tenant_id).first()
                 except Exception:
                     row = None
 
