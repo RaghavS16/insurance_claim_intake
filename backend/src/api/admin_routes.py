@@ -257,7 +257,7 @@ async def import_policies_csv(
         if phone:
             clean_phone = "".join(filter(str.isdigit, phone))
 
-        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == current_user.tenant_id).first()
 
         if existing_policy:
             # Update policy fields WITHOUT overwriting customer_id or linked_at
@@ -332,7 +332,7 @@ def add_adjuster(
             detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}",
         )
 
-    existing_user = db.query(User).filter(User.email == clean_email).first()
+    existing_user = db.query(User).filter(User.email == clean_email, User.tenant_id == current_user.tenant_id).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -381,7 +381,7 @@ def list_adjusters(
     """List all registered adjusters and their assigned claims count."""
     _require_admin(request, db)
 
-    adjusters = db.query(Adjuster).order_by(Adjuster.name.asc()).all()
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == current_user.tenant_id).order_by(Adjuster.name.asc()).all()
     return [_adjuster_dict(a) for a in adjusters]
 
 
@@ -411,14 +411,14 @@ def update_adjuster(
     """
     _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == current_user.tenant_id).first()
 
     if payload.name is not None:
         try:
@@ -570,7 +570,7 @@ def list_all_policies(
     if page_size < 1 or page_size > 200:
         page_size = 50
 
-    query = db.query(Policy).order_by(Policy.created_at.desc())
+    query = db.query(Policy).filter(Policy.tenant_id == current_user.tenant_id).order_by(Policy.created_at.desc())
     total = query.count()
     offset = (page - 1) * page_size
     policies = query.offset(offset).limit(page_size).all()
