@@ -106,6 +106,8 @@ def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
                 query=text,
                 intake_channel="claimant_chat",
                 claim_facts=facts,
+                tenant_id=state.get("tenant_id"),
+                jurisdiction=state.get("jurisdiction"),
             )
         except Exception:
             return {
@@ -119,11 +121,29 @@ def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
     # Before type is known, do pure semantic retrieval from the user's question.
     try:
         from src.knowledge.store import search
-        policy = search(text, document_types=["policy_wording"], limit=8)
+        tenant_id = state.get("tenant_id")
+        jurisdiction = state.get("jurisdiction")
+        if not tenant_id:
+            return {
+                "available": False,
+                "status": "TENANT_CONTEXT_REQUIRED",
+                "requirements": [],
+                "policy": [],
+                "regulations": [],
+            }
+        policy = search(
+            text,
+            document_types=["policy_wording"],
+            limit=8,
+            tenant_id=tenant_id,
+            jurisdiction=jurisdiction,
+        )
         guidance = search(
             text,
             document_types=["regulation", "guideline", "claim_requirement"],
             limit=8,
+            tenant_id=tenant_id,
+            jurisdiction=jurisdiction,
         )
         return {
             "available": bool(policy or guidance),
@@ -158,6 +178,12 @@ def answer_claimant_question(
                 "source_name": row.get("source_name"),
                 "document_type": row.get("document_type"),
                 "score": row.get("score"),
+                "page_number": row.get("page_number"),
+                "section_number": row.get("section_number"),
+                "clause_number": row.get("clause_number"),
+                "citation_label": row.get("citation_label"),
+                "document_version": row.get("document_version"),
+                "jurisdiction": row.get("jurisdiction"),
                 "text": _clean(row.get("text"), 2600),
             })
 
