@@ -273,9 +273,15 @@ def readiness_check():
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        if settings.ENVIRONMENT in ("production", "staging") and not settings.S3_BUCKET:
-            raise RuntimeError("S3_BUCKET is not configured")
-        return {"status": "ready", "database": "ok", "storage": "configured"}
+        if settings.ENVIRONMENT in ("production", "staging"):
+            if not settings.S3_BUCKET:
+                raise RuntimeError("S3_BUCKET is not configured")
+            if settings.REQUIRE_REDIS_IN_PRODUCTION:
+                if not settings.REDIS_URL:
+                    raise RuntimeError("REDIS_URL is not configured")
+                import redis
+                redis.Redis.from_url(settings.REDIS_URL, socket_timeout=1.5, socket_connect_timeout=1.5).ping()
+        return {"status": "ready", "database": "ok", "storage": "configured", "redis": "ok" if settings.REDIS_URL else "not_required"}
     except Exception as exc:
         logger.exception("Readiness check failed: %s", type(exc).__name__)
         return JSONResponse(status_code=503, content={"status": "not_ready", "reason": "dependency_unavailable"})
