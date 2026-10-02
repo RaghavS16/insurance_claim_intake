@@ -67,8 +67,9 @@ def get_bytes(key:str)->bytes:
     try:
         response=_client().get_object(Bucket=settings.S3_BUCKET,Key=_safe_key(key))
         return response["Body"].read()
-    except Exception:
-        # Fallback to local file read
+    except Exception as exc:
+        if settings.ENVIRONMENT in {"production", "staging"} and settings.REQUIRE_S3_IN_PRODUCTION:
+            raise RuntimeError("Production object storage read failed.") from exc
         p = Path(key)
         if p.exists() and p.is_file():
             return p.read_bytes()
@@ -80,6 +81,12 @@ def presigned_get(key:str,expires:int|None=None)->str:
     return _client().generate_presigned_url("get_object",Params={"Bucket":settings.S3_BUCKET,"Key":_safe_key(key)},ExpiresIn=ttl)
 
 def presigned_put(*,prefix:str,filename:str,content_type:str="application/octet-stream",expires:int|None=None)->dict:
+    if (
+        settings.ENVIRONMENT in {"production", "staging"}
+        and settings.S3_SERVER_SIDE_ENCRYPTION == "aws:kms"
+        and not settings.S3_KMS_KEY_ID
+    ):
+        raise RuntimeError("S3_KMS_KEY_ID is required for production presigned uploads.")
     ttl=expires if expires is not None else settings.S3_PRESIGNED_URL_EXPIRE_SECONDS
     ttl=max(60,min(ttl,3600))
     suffix=Path(filename).suffix.lower()
