@@ -728,8 +728,8 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
         state["extraction_confidence"] = round(sum(confidences) / len(confidences), 2)
     else:
         state["extraction_confidence"] = 0.0
-    # Facts are accepted continuously. No mandatory confirmation checkpoint exists.
-    # Policy verification and submission readiness are deterministic backend decisions.
+    # Baseline facts are confirmed naturally. Final submission confirmation is separate
+    # and is never inferred from the baseline field-completeness state.
     state["awaiting_confirmation"] = False
     if state.get("_rejection_active"):
         state["conversation_status"] = "collecting"
