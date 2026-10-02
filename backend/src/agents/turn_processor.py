@@ -15,6 +15,7 @@ from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfir
 from src.services.audit import append_system_audit
 from src.utils.logger import app_logger
 from src.services.ai_governance import tenant_ai_guard
+from src.services.observability import record_claim_submission, record_claim_turn, record_rag_answer
 
 logger = app_logger
 
@@ -297,6 +298,7 @@ async def process_claimant_turn(
                         f"{assigned.name}. You can track its progress from Track Claim."
                     )
                     result["message"] = result["next_question"]
+                    record_claim_submission(outcome="accepted")
                     append_system_audit(
                         db,
                         tenant_id=str(locked.tenant_id or ""),
@@ -314,6 +316,7 @@ async def process_claimant_turn(
             except Exception as exc:
                 db.rollback()
                 logger.exception("Exactly-once claim submission failed")
+                record_claim_submission(outcome="failed")
                 result["submission_error"] = type(exc).__name__
                 result["next_question"] = (
                     "I couldn't complete the submission safely just now. Your claim details are saved; "
@@ -352,6 +355,15 @@ async def process_claimant_turn(
         logger.debug("Gap analysis / phase mapping error: %s", exc)
 
     result.pop("_workflow_event", None)
+    record_claim_turn(
+        input_mode=input_mode,
+        outcome=str(result.get("conversation_status") or result.get("status") or "processed"),
+    )
+    if rag_reply.get("answer"):
+        record_rag_answer(
+            status=str((result.get("chat_retrieval") or {}).get("status") or "ok"),
+            grounded=bool((result.get("chat_retrieval") or {}).get("grounded", True)),
+        )
 
     # Durable requirements were synchronized before submission/readiness evaluation.
     # The claimant-facing answer is authoritative when the turn was a question.
