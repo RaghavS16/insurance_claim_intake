@@ -356,6 +356,7 @@ def add_adjuster(
     )
     new_adjuster = Adjuster(
         id=user_id,
+        user_id=user_id,
         tenant_id=str(admin.tenant_id or ""),
         name=clean_name,
         email=clean_email,
