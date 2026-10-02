@@ -24,6 +24,7 @@ class IngestRequest(BaseModel):
     effective_from: str | None = None
     effective_to: str | None = None
     policy_version: str | None = None
+    jurisdiction: str | None = Field(None, max_length=120)
 
 @router.post("/documents")
 async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER"]))):
@@ -39,6 +40,8 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             effective_to=payload.effective_to,
             policy_version=payload.policy_version,
             uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=payload.jurisdiction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -55,6 +58,7 @@ async def upload_document(
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
     policy_version: str | None = Form(None),
+    jurisdiction: str | None = Form(None),
     user: User = Depends(require_role(["ADJUSTER"])),
 ):
     if not file.filename:
@@ -78,12 +82,14 @@ async def upload_document(
             effective_to=effective_to,
             policy_version=policy_version,
             uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Knowledge document upload failed for '%s': %s", file.filename, exc)
-        raise HTTPException(status_code=502, detail=f"Knowledge indexing failed: {exc}")
+        raise HTTPException(status_code=502, detail="Knowledge indexing is temporarily unavailable.")
 
 @router.get("/search")
 async def retrieve(
@@ -93,6 +99,7 @@ async def retrieve(
     document_type: str | None = None,
     policy_number: str | None = None,
     incident_date: str | None = None,
+    jurisdiction: str | None = None,
 ):
     try:
         items = await asyncio.to_thread(
@@ -102,11 +109,13 @@ async def retrieve(
             document_types=[document_type] if document_type else None,
             policy_number=policy_number,
             incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction,
         )
         return {"items": items, "query": q}
     except Exception as exc:
         logger.exception("Knowledge search failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Knowledge retrieval failed: {exc}")
+        raise HTTPException(status_code=502, detail="Knowledge retrieval is temporarily unavailable.")
 
 
 
@@ -116,7 +125,7 @@ def publish_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, KnowledgeDocument.tenant_id == user.tenant_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
     meta = dict(doc.metadata_json or {})
