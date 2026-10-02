@@ -159,6 +159,24 @@ def _single_intake_follow_up(state: ClaimState) -> str:
     return ""
 
 
+def _confirmation_summary(data: dict[str, Any]) -> str:
+    """Produce a compact deterministic summary for explicit claimant confirmation."""
+    labels = {
+        "policy_id": "policy number",
+        "event_date": "incident date",
+        "insurance_type": "insurance type",
+        "event_description": "what happened",
+        "event_location": "incident location",
+        "estimated_claim_amount": "estimated loss",
+    }
+    parts = [
+        f"{labels[key]}: {value}"
+        for key, value in data.items()
+        if key in labels and value not in (None, "", "UNKNOWN")
+    ]
+    return "Here is the claim summary: " + "; ".join(parts[:6]) + "." if parts else "Here is the current claim summary."
+
+
 def _rag_question_responder(state: ClaimState) -> ClaimState:
     state["rag_answer"] = ""
     state["rag_answer_sources"] = []
@@ -190,6 +208,8 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
             policy_number=data.get("policy_id"),
             incident_date=incident_date,
             claim_facts=data,
+            tenant_id=state.get("tenant_id"),
+            jurisdiction=state.get("jurisdiction"),
         )
         state["rag_answer"] = str(result.get("answer") or "").strip()
         state["rag_answer_sources"] = list(result.get("sources") or [])
