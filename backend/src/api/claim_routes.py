@@ -759,17 +759,30 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         raise HTTPException(status_code=502, detail="Evidence storage is temporarily unavailable.")
 
     analyses = []
-    for candidate in candidates:
-        candidate_analysis = await asyncio.to_thread(
-            verify_evidence,
-            content=content,
-            filename=file.filename,
-            requested_evidence=candidate,
-            claim_context=claim_context,
-        )
-        candidate_analysis["_candidate_key"] = candidate.get("key")
-        candidate_analysis["_candidate"] = candidate
-        analyses.append(candidate_analysis)
+    estimated_tokens = min(
+        20000,
+        max(
+            1024,
+            len(content) // 8 + len(str(claim_context)) // 2 + len(candidates) * 512,
+        ),
+    )
+    async with tenant_ai_guard(
+        str(claim.tenant_id or ""),
+        operation="evidence_verification",
+        max_requests=settings.AI_MAX_TURNS_PER_TENANT_PER_MINUTE,
+        estimated_tokens=estimated_tokens,
+    ):
+        for candidate in candidates:
+            candidate_analysis = await asyncio.to_thread(
+                verify_evidence,
+                content=content,
+                filename=file.filename,
+                requested_evidence=candidate,
+                claim_context=claim_context,
+            )
+            candidate_analysis["_candidate_key"] = candidate.get("key")
+            candidate_analysis["_candidate"] = candidate
+            analyses.append(candidate_analysis)
 
     # Prefer a high-confidence verified match; otherwise preserve the strongest
     # diagnostic result for claimant feedback without ever treating upload presence
