@@ -31,6 +31,7 @@ from src.database.models import Claim
 from src.database.session import SessionLocal
 from src.utils.logger import app_logger
 from src.voice.events import make_event
+from src.services.observability import record_voice_turn
 
 logger = app_logger
 
@@ -122,6 +123,7 @@ class ClaimVoiceProcessor(FrameProcessor):
                 )
                 if response_text:
                     await self._publish("voice.agent.final", text=response_text)
+                record_voice_turn(outcome="processed", latency_ms=latency_ms)
                 return response_text
             finally:
                 db.close()
@@ -142,6 +144,7 @@ class ClaimVoiceProcessor(FrameProcessor):
                     )
                     await self._publish("voice.state", state="speaking")
             except Exception as exc:
+                record_voice_turn(outcome="failed")
                 logger.exception("Claim voice turn failed for %s", self.ticket_id)
                 await self._publish(
                     "voice.error",
