@@ -86,10 +86,11 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
 def build_submission_readiness(db: Session, claim: Claim, policy_verification: dict | None = None) -> dict:
     """Return deterministic readiness from durable requirements, evidence and exceptions."""
     from src.domain.readiness import build_readiness
-    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id).all()
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()
+    requirements = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id == claim.id, ClaimRequirement.tenant_id == claim.tenant_id).all()
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id, ClaimEvidence.tenant_id == claim.tenant_id).all()
     exceptions = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
+        ClaimException.tenant_id == claim.tenant_id,
         ClaimException.status == "open",
     ).all()
     return build_readiness(
