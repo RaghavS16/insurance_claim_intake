@@ -2,12 +2,12 @@ resource "aws_iam_role" "app" {
   name = "${local.name}-app-role"
 
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
+    Version            = "2012-10-17"
+    Statement          = [
       {
-        Effect = "Allow"
+        Effect    = "Allow"
         Principal = {
-          Service = "ecs-tasks.amazonaws.com"
+          Service   = "ecs-tasks.amazonaws.com"
         }
         Action = "sts:AssumeRole"
       }
@@ -20,8 +20,8 @@ resource "aws_iam_role" "app" {
 resource "aws_iam_role_policy" "app" {
   role = aws_iam_role.app.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
+  policy    = jsonencode({
+    Version   = "2012-10-17"
     Statement = concat(
       [
         {
