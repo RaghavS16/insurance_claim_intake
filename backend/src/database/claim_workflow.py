@@ -91,7 +91,6 @@ def build_submission_readiness(db: Session, claim: Claim, policy_verification: d
     exceptions = db.query(ClaimException).filter(
         ClaimException.claim_id == claim.id,
         ClaimException.tenant_id == claim.tenant_id,
-        ClaimException.tenant_id == claim.tenant_id,
         ClaimException.status == "open",
     ).all()
     return build_readiness(
