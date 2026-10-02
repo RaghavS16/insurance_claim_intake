@@ -181,7 +181,7 @@ async def import_policies_csv(
     Import policies from a CSV file.
     Upserts policy details. For existing policies, NEVER overwrites customer_id or linked_at.
     """
-    _require_admin(request, db)
+    current_user = _require_admin(request, db)
 
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(
@@ -261,7 +261,7 @@ async def import_policies_csv(
         if phone:
             clean_phone = "".join(filter(str.isdigit, phone))
 
-        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == current_user.tenant_id).first()
 
         if existing_policy:
             # Update policy fields WITHOUT overwriting customer_id or linked_at
@@ -281,6 +281,7 @@ async def import_policies_csv(
             # Create new unlinked policy
             new_policy = Policy(
                 id=str(uuid.uuid4()),
+                tenant_id=str(current_user.tenant_id),
                 policy_number=policy_num,
                 customer_id=None,
                 policy_type=policy_type,
@@ -426,7 +427,7 @@ def update_adjuster(
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == current_user.tenant_id).first()
 
     if payload.name is not None:
         try:
