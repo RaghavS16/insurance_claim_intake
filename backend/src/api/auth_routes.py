@@ -65,7 +65,7 @@ class MFAVerifyRequest(BaseModel):
 
 
 class MFASetupVerifyRequest(BaseModel):
-    code: str = Field(..., pattern=r"^\\d{6}$")
+    code: str = Field(..., pattern=r"^\d{6}$")
 
 
 class ResetPasswordRequest(BaseModel):
@@ -97,8 +97,14 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
     expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
     if row.revoked_at or row.used_at or expires <= now:
         if row.used_at and not row.revoked_at:
-            db.query(RefreshToken).filter(RefreshToken.family_id == row.family_id).update({RefreshToken.revoked_at: now}, synchronize_session=False)
-        db.rollback()
+            db.query(RefreshToken).filter(
+                RefreshToken.family_id == row.family_id,
+                RefreshToken.tenant_id == row.tenant_id,
+                RefreshToken.revoked_at.is_(None),
+            ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
+            db.commit()
+        else:
+            db.rollback()
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
     user = db.query(User).filter(User.id == row.user_id, User.tenant_id == row.tenant_id, User.status == "active").first()
     if not user:
