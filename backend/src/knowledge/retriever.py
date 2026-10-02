@@ -464,6 +464,34 @@ Claimant question:
             else:
                 answer = str(content or "").strip()
             if answer:
+                policy_specific = bool(
+                    insurance_type
+                    or policy_number
+                    or any(
+                        token in question.lower()
+                        for token in (
+                            "cover", "coverage", "exclude", "exclusion", "deductible",
+                            "limit", "waiting", "deadline", "reimburse", "eligible",
+                            "required document", "evidence",
+                        )
+                    )
+                )
+                missing_citation = policy_specific and not all(
+                    source.get("citation_label") and str(source.get("citation_label")) in answer
+                    for source in sources[:1]
+                )
+                if missing_citation:
+                    answer = (
+                        "I found relevant material, but the retrieved source does not provide "
+                        "a verifiable clause or page citation for that statement. I won't present "
+                        "it as a policy-supported answer."
+                    )
+                    return {
+                        "answer": answer,
+                        "grounded": False,
+                        "sources": sources,
+                        "status": "CITATION_REQUIRED",
+                    }
                 return {
                     "answer": answer,
                     "grounded": True,
