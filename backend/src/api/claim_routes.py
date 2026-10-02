@@ -9,7 +9,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -133,13 +133,15 @@ def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
 
 @router.get("")
 @router.get("/")
-def list_user_claims(request: Request, db: Session = Depends(get_db)):
+def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0)):
     """List all claims belonging to the authenticated claimant, newest first."""
     current_user = _resolve_user(request, db)
     claims = (
         db.query(Claim)
         .filter(Claim.claimant_id == current_user.id)
         .order_by(Claim.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
     result = []
@@ -156,7 +158,8 @@ def list_user_claims(request: Request, db: Session = Depends(get_db)):
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
         payload["turn_count"] = turn_count
         result.append(payload)
-    return {"items": result, "total": len(result)}
+    total = db.query(Claim).filter(Claim.claimant_id == current_user.id).count()
+    return {"items": result, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/new-session")
