@@ -37,7 +37,7 @@ def _backfill_from_claim(table: str) -> None:
     bind = op.get_bind()
     bind.execute(sa.text(
         f"UPDATE {table} t SET tenant_id = c.tenant_id "
-        "FROM claims c WHERE t.claim_id = c.id AND (t.tenant_id IS NULL OR t.tenant_id = '')"
+        "FROM claims c WHERE t.claim_id::text = c.id::text AND (t.tenant_id IS NULL OR t.tenant_id = '')"
     ))
 
 
@@ -66,7 +66,7 @@ def upgrade() -> None:
     if inspector.has_table("outbox_events"):
         op.get_bind().execute(sa.text(
             "UPDATE outbox_events o SET tenant_id = c.tenant_id "
-            "FROM claims c WHERE o.aggregate_type = 'claim' AND o.aggregate_id = c.id "
+            "FROM claims c WHERE o.aggregate_type = 'claim' AND o.aggregate_id::text = c.id::text "
             "AND (o.tenant_id IS NULL OR o.tenant_id = '')"
         ))
 
