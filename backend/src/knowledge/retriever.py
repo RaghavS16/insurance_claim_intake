@@ -412,8 +412,8 @@ class KnowledgeRetriever:
 
         evidence_text = "\n\n".join(
             (
-                f"[SOURCE {idx}] {row.get("source_name") or "Unknown source"} "
-                f"({row.get("document_type") or "guidance"}; {row.get("citation_label") or "citation unavailable"})\n"
+                f"[SOURCE {idx}] {row.get('source_name') or 'Unknown source'} "
+                f"({row.get('document_type') or 'guidance'}; {row.get('citation_label') or 'citation unavailable'})\n"
                 f"{str(row.get('text') or '')[:2500]}"
             )
             for idx, row in enumerate(sources, 1)
