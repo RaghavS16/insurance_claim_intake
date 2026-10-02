@@ -36,6 +36,8 @@ def build_dynamic_context(state: ClaimState | dict[str, Any]) -> dict[str, Any]:
         intake_channel="insurer_web_portal",
         intake_started_at=str(state.get("claim_created_at") or state.get("created_at") or "") or None,
         claim_facts=data,
+        tenant_id=state.get("tenant_id"),
+        jurisdiction=state.get("jurisdiction"),
     )
 
 def is_evidence_req(r: dict[str, Any]) -> bool:
