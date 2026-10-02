@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import zipfile
+from pypdf import PdfReader
 from PIL import Image
 from src.config import settings
 
@@ -21,6 +22,17 @@ def enforce_document_limits(content: bytes, filename: str) -> None:
             raise
         except Exception as exc:
             raise ValueError("Image payload is not safely readable.") from exc
+    if ext == ".pdf":
+        try:
+            reader = PdfReader(io.BytesIO(content), strict=False)
+            if len(reader.pages) > settings.MAX_PDF_PAGES:
+                raise ValueError(
+                    f"PDF exceeds the configured maximum of {settings.MAX_PDF_PAGES} pages."
+                )
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("PDF payload is not safely readable.") from exc
     if ext in ZIP_EXTENSIONS:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
