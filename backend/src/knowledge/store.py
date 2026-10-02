@@ -123,9 +123,66 @@ def _extract_text(content: bytes, filename: str) -> str:
     
     return content.decode("utf-8", errors="replace")
 
-def _chunks(text: str, size: int = 450, overlap: int = 75) -> list[str]:
-    words = re.findall(r"\S+", text)
-    return [part for i in range(0, len(words), max(1, size - overlap)) if (part := " ".join(words[i : i + size]).strip())]
+def _structure_aware_chunks(text: str, *, page_number: int | None = None) -> list[dict[str, Any]]:
+    """Split by visible section/clause boundaries first, then bound chunk size.
+
+    Each returned row carries provenance that is persisted with the vector and can
+    be rendered as an exact citation. This intentionally prefers smaller semantic
+    units over a large flat sliding window.
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    section_no: str | None = None
+    clause_no: str | None = None
+    rows: list[dict[str, Any]] = []
+    buffer: list[str] = []
+
+    section_re = re.compile(r"^(?:section|sec\.?)[\s:.-]*([0-9]+(?:\.[0-9]+)*)\b", re.I)
+    clause_re = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s*[.)-]?\s+", re.I)
+    heading_re = re.compile(r"^(?:[A-Z][A-Z0-9 /,&'()-]{3,}|[0-9]+(?:\.[0-9]+)*\s+.+)$")
+
+    def flush() -> None:
+        nonlocal buffer
+        if not buffer:
+            return
+        words = re.findall(r"\S+", " ".join(buffer))
+        size, overlap = 330, 50
+        step = max(1, size - overlap)
+        for i in range(0, len(words), step):
+            part = " ".join(words[i:i + size]).strip()
+            if not part:
+                continue
+            rows.append({
+                "text": part,
+                "page_number": page_number,
+                "section_number": section_no,
+                "clause_number": clause_no,
+                "citation_label": ".".join(
+                    x for x in (
+                        f"page {page_number}" if page_number else None,
+                        f"section {section_no}" if section_no else None,
+                        f"clause {clause_no}" if clause_no else None,
+                    ) if x
+                ) or None,
+            })
+        buffer = []
+
+    for line in lines:
+        sec = section_re.match(line)
+        clause = clause_re.match(line)
+        if sec:
+            flush()
+            section_no = sec.group(1)
+            clause_no = None
+        elif clause:
+            flush()
+            clause_no = clause.group(1)
+        elif heading_re.match(line) and len(line) <= 180:
+            flush()
+            section_no = section_no or line[:120]
+        buffer.append(line)
+    flush()
+    return rows
+
 
 def ingest_document(
     *,
@@ -138,6 +195,8 @@ def ingest_document(
     effective_to: str | None = None,
     policy_version: str | None = None,
     uploaded_by: str | None = None,
+    tenant_id: str | None = None,
+    jurisdiction: str | None = None,
 ) -> dict:
     t0 = time.time()
     size_mb = len(content) / (1024 * 1024)
@@ -161,7 +220,7 @@ def ingest_document(
     
     db = SessionLocal()
     try:
-        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256).first()
+        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256, KnowledgeDocument.tenant_id == tenant_id).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
             if any(value not in (None, "") for value in (policy_number, effective_from, effective_to, policy_version)):
@@ -198,8 +257,9 @@ def ingest_document(
     finally:
         db.close()
 
-    chunks = _chunks(text)
-    logger.info("[Knowledge] Document partitioned into %d semantic chunks. Generating embeddings...", len(chunks))
+    chunk_rows = _structure_aware_chunks(text)
+    chunks = [row["text"] for row in chunk_rows]
+    logger.info("[Knowledge] Document partitioned into %d structure-aware chunks. Generating embeddings...", len(chunks))
     
     # Process embeddings in batches of 64 with progress logging
     vectors: list[list[float]] = []
@@ -231,6 +291,9 @@ def ingest_document(
             document_type=document_type or meta.document_type or "unknown",
             insurance_type=insurance_type,
             content_sha256=content_sha256,
+            tenant_id=tenant_id,
+            jurisdiction=jurisdiction,
+            document_version=policy_version,
             uploaded_by=uploaded_by,
             metadata_json={
                 "title": meta.title,
@@ -239,6 +302,7 @@ def ingest_document(
                 "effective_from": effective_from,
                 "effective_to": effective_to,
                 "policy_version": policy_version,
+                "jurisdiction": jurisdiction,
                 "uploaded_by": uploaded_by,
                 "publication_status": "pending_review",
             },
@@ -246,7 +310,7 @@ def ingest_document(
         db.add(doc)
         db.flush()
         
-        for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        for idx, (chunk, vector, provenance) in enumerate(zip(chunks, vectors, chunk_rows)):
             db.add(
                 KnowledgeChunk(
                     id=str(uuid.uuid4()),
@@ -254,7 +318,12 @@ def ingest_document(
                     chunk_index=idx,
                     text=chunk,
                     embedding=vector,
-                    metadata_json={"source_name": filename},
+                    tenant_id=tenant_id,
+                    page_number=provenance.get("page_number"),
+                    section_number=provenance.get("section_number"),
+                    clause_number=provenance.get("clause_number"),
+                    citation_label=provenance.get("citation_label"),
+                    metadata_json={"source_name": filename, **provenance},
                 )
             )
         db.commit()
@@ -278,14 +347,18 @@ def list_policy_documents(
     insurance_type: str | None = None,
     policy_number: str | None = None,
     incident_date: date | None = None,
+    tenant_id: str | None = None,
+    jurisdiction: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return candidate policy-wording documents for document-level compilation."""
     db = SessionLocal()
     try:
-        conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording"]
+        conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording", KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [KnowledgeDocument.document_type == "policy_wording"]
         # Newly ingested policy wording is untrusted until an authorized reviewer publishes it.
         publication_status = KnowledgeDocument.metadata_json["publication_status"].as_string()
         conditions.append((publication_status.is_(None)) | (publication_status == "published"))
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append(
                 (KnowledgeDocument.insurance_type == insurance_type)
@@ -337,7 +410,7 @@ def list_policy_documents(
                 "source_name": row.source_name,
                 "source_uri": row.source_uri,
                 "insurance_type": row.insurance_type,
-                "metadata": dict(row.metadata_json or {}),
+                "metadata": {**dict(row.metadata_json or {}), "page_number": row.page_number, "section_number": row.section_number, "clause_number": row.clause_number, "citation_label": row.citation_label},
                 "policy_version": (row.metadata_json or {}).get("policy_version"),
             }
             for row in rows
@@ -346,13 +419,13 @@ def list_policy_documents(
         db.close()
 
 
-def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
+def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     """Load every indexed chunk for a document in original order."""
     db = SessionLocal()
     try:
         rows = db.execute(
             select(KnowledgeChunk)
-            .where(KnowledgeChunk.document_id == document_id)
+            .where(KnowledgeChunk.document_id == document_id, *([KnowledgeChunk.tenant_id == tenant_id] if tenant_id else []))
             .order_by(KnowledgeChunk.chunk_index.asc())
         ).scalars().all()
         return [
@@ -368,10 +441,10 @@ def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
+def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return []
         manifest = (row.metadata_json or {}).get("requirement_manifest")
@@ -380,10 +453,10 @@ def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]]) -> None:
+def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return
         row.metadata_json = {
@@ -402,11 +475,17 @@ def search(
     document_types: list[str] | None = None,
     incident_date: date | None = None,
     limit: int = 12,
+    tenant_id: str | None = None,
+    jurisdiction: str | None = None,
 ) -> list[dict]:
     vector = embed_documents([query])[0]
     db = SessionLocal()
     try:
         conditions: list[Any] = []
+        if tenant_id:
+            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append((KnowledgeDocument.insurance_type == insurance_type) | (KnowledgeDocument.insurance_type.is_(None)))
         if document_types:
@@ -443,7 +522,13 @@ def search(
                 "source_uri": d.source_uri,
                 "document_type": d.document_type,
                 "insurance_type": d.insurance_type,
-                "policy_version": (d.metadata_json or {}).get("policy_version"),
+                "policy_version": (d.metadata_json or {}).get("policy_version") or d.document_version,
+                "jurisdiction": d.jurisdiction,
+                "document_version": d.document_version,
+                "page_number": c.page_number,
+                "section_number": c.section_number,
+                "clause_number": c.clause_number,
+                "citation_label": c.citation_label,
                 "effective_from": (d.metadata_json or {}).get("effective_from"),
                 "effective_to": (d.metadata_json or {}).get("effective_to"),
                 "score": round(1 - float(dist), 6),
