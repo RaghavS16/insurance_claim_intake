@@ -125,7 +125,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
     if payload.password != payload.confirm_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
 
-    existing_user = db.query(User).filter(User.email == clean_email).first()
+    existing_user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if existing_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
 
@@ -189,7 +189,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             detail="Invalid email or password.",
         )
 
-    user = db.query(User).filter(User.email == clean_email).first()
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user or not verify_password(payload.password, str(user.password_hash)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -237,12 +237,12 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
         clean_email = validate_email(payload.email)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid email or verification code.")
-    user = db.query(User).filter(User.email == clean_email).first()
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user:
         raise HTTPException(status_code=400, detail="Invalid email or verification code.")
     record = (
         db.query(PasswordResetOTP)
-        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
         .order_by(PasswordResetOTP.created_at.desc())
         .with_for_update()
         .first()
@@ -283,7 +283,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
     generic_response = {"message": "If an account with that email exists, a reset code has been sent."}
 
-    user = db.query(User).filter(User.email == clean_email).first()
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user or user.status != "active":
         return generic_response
 
@@ -291,7 +291,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     if settings.ENVIRONMENT not in ("development", "test"):
         recent = (
             db.query(PasswordResetOTP)
-            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
+            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
             .order_by(PasswordResetOTP.created_at.desc())
             .first()
         )
@@ -342,7 +342,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         detail="Invalid or expired code. Please request a new one.",
     )
 
-    user = db.query(User).filter(User.email == clean_email).first()
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user:
         raise generic_invalid
 
@@ -410,10 +410,10 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
     user_id = token_payload.get("sub")
     otp_id = token_payload.get("otp_id")
     user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    if not user or not getattr(user, "tenant_id", None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid reset token.")
 
-    record = db.query(PasswordResetOTP).filter(PasswordResetOTP.id == otp_id).first()
+    record = db.query(PasswordResetOTP).filter(PasswordResetOTP.id == otp_id, PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id).first()
     if not record or not record.verified or record.consumed:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
