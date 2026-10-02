@@ -154,7 +154,7 @@ def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int
             .order_by(ConversationTurn.turn_number.desc(), ConversationTurn.created_at.desc())
             .first()
         )
-        turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id).count()
+        turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id, ConversationTurn.tenant_id == c.tenant_id).count()
         payload["last_message"] = last_turn.text if last_turn else None
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
         payload["turn_count"] = turn_count
@@ -263,7 +263,7 @@ def track_claims(request: Request, db: Session = Depends(get_db)):
     items = []
     for claim in claims:
         payload = _claim_payload(claim)
-        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+        rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == claim.id, ClaimEvidenceRequest.tenant_id == claim.tenant_id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
         payload["evidence_requests"] = [_request_payload(row, db) for row in rows]
         payload["open_request_count"] = sum(1 for row in rows if row.status == "open")
         payload["conversation"] = _conversation_payload(db, claim)
@@ -326,7 +326,7 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail="Submitted claims cannot be deleted.")
     
     # Delete associated conversation turns first
-    db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()
+    db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id, ConversationTurn.tenant_id == claim.tenant_id).delete()
     db.delete(claim)
     try:
         db.commit()
@@ -350,13 +350,13 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     current_user = _resolve_user(request, db)
     claim = None
     if payload.ticket_id:
-        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id).first()
+        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id, Claim.tenant_id == current_user.tenant_id).first()
         if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
         enforce_claim_ownership(claim, current_user)
     if claim is None:
         claim = Claim(ticket_id=f"CLAIM-{uuid.uuid4().hex[:8].upper()}", tenant_id=str(current_user.tenant_id), claimant_id=current_user.id, customer_id=str(current_user.id), input_mode=payload.input_mode, status="draft")
         db.add(claim); db.flush()
-    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id, ConversationTurn.tenant_id == claim.tenant_id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.claim_text, payload.input_mode, prior_turns // 2 + 1)
     except ClaimTurnConflict as exc:
@@ -442,7 +442,7 @@ async def confirm_claim(ticket_id: str, request: Request, payload: Optional[Clai
     enforce_claim_ownership(claim, current_user)
 
     if claim.status in {"submitted", "assigned", "under_review", "pending_evidence", "approved", "partially_approved", "rejected", "closed"}:
-        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id).first()
+        existing = db.query(ClaimSubmission).filter(ClaimSubmission.claim_id == claim.id, ClaimSubmission.tenant_id == claim.tenant_id).first()
         return {
             **_claim_payload(claim),
             "submission": {
