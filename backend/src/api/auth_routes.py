@@ -119,7 +119,7 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
 
 def _auth_response(user: User, refresh_token: str, *, amr: list[str] | None = None, mfa_authenticated: bool = False) -> dict:
     return {
-        "access_token": create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": mfa_authenticated, "amr": amr or []}),
+        "access_token": create_access_token(data={"sub": str(user.id), "tenant_id": str(user.tenant_id or ""), "role": user.role, "sv": user.session_version, "mfa": mfa_authenticated, "amr": amr or []}),
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {"id": str(user.id), "full_name": user.full_name, "email": user.email, "role": user.role},
@@ -238,7 +238,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     auth_context = {"mfa": False, "amr": ["pwd"]}
     refresh_token = _issue_refresh_token(db, user, auth_context=auth_context)
     db.commit()
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, **auth_context})
+    access_token = create_access_token(data={"sub": str(user.id), "tenant_id": str(user.tenant_id or ""), "role": user.role, "sv": user.session_version, **auth_context})
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
