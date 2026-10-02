@@ -18,6 +18,7 @@ from src.config import settings
 from src.database.session import get_db
 from src.database.models import Claim, ConversationTurn, User
 from src.api.voice_ws import process_claimant_turn
+from src.agents.turn_processor import ClaimTurnConflict
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.utils.upload_limits import read_limited
@@ -352,9 +353,11 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.claim_text, payload.input_mode, prior_turns // 2 + 1)
+    except ClaimTurnConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Claim conversation processing failed")
-        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+        raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {**_claim_payload(claim), "message": result.get("next_question") or result.get("message", "")}
 
 
@@ -369,9 +372,11 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.text, "text", prior_turns // 2 + 1)
+    except ClaimTurnConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Text turn processing failed")
-        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+        raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {**_claim_payload(claim), "agent_message": result.get("next_question") or result.get("message", "")}
 
 
