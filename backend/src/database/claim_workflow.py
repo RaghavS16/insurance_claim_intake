@@ -53,7 +53,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
     if active:
         raise ValueError("Claim already has an active assignment")
     candidates = list(db.execute(
-        select(Adjuster).where(Adjuster.is_active.is_(True)).order_by(
+        select(Adjuster).where(Adjuster.is_active.is_(True), Adjuster.tenant_id == claim.tenant_id).order_by(
             Adjuster.claims_assigned.asc(), Adjuster.id.asc()
         )
     ).scalars())
@@ -69,6 +69,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         reason="specialization_then_load",
     ))
     db.add(ClaimAuditEvent(
+        tenant_id=claim.tenant_id,
         claim_id=claim.id, actor_user_id=actor_user_id, event_type="assigned",
         new_value_json={"adjuster_id": chosen.id, "reason": "specialization_then_load"},
     ))
