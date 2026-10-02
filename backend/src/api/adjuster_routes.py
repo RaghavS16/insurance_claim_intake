@@ -163,24 +163,29 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
         "closed",
     ]
     if status and status.lower() != "all":
-        q = db.query(Claim).filter(Claim.status == status.lower())
+        q = db.query(Claim).filter(Claim.tenant_id == user.tenant_id, Claim.status == status.lower())
     else:
-        q = db.query(Claim).filter(Claim.status.in_(valid_queue_statuses))
+        q = db.query(Claim).filter(Claim.tenant_id == user.tenant_id, Claim.status.in_(valid_queue_statuses))
 
     claims = q.order_by(Claim.updated_at.desc()).all()
+    claims = [c for c in claims if str(c.tenant_id) == str(user.tenant_id)]
     if user.role == "ADJUSTER":
-        adjuster = db.query(Adjuster).filter(Adjuster.email == user.email).first()
+        adjuster = db.query(Adjuster).filter(
+            Adjuster.email == user.email,
+            Adjuster.tenant_id == user.tenant_id,
+        ).first()
         assigned_ids = set()
         if adjuster:
             assigned_ids = {
                 str(x.claim_id)
                 for x in db.query(ClaimAssignment).filter(
-                    ClaimAssignment.adjuster_id == adjuster.id
+                    ClaimAssignment.adjuster_id == adjuster.id,
+                    ClaimAssignment.tenant_id == user.tenant_id,
+                    ClaimAssignment.is_active.is_(True),
                 ).all()
             }
         claims = [
-            c
-            for c in claims
+            c for c in claims
             if str(c.id) in assigned_ids
             or (adjuster and str((c.pipeline_state or {}).get("assigned_adjuster_id")) in {str(adjuster.id), str(user.id)})
             or str((c.pipeline_state or {}).get("assigned_adjuster_id")) == str(user.id)
@@ -190,6 +195,8 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
 @router.get("/claims/{ticket_id}")
 def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
+    if str(c.tenant_id) != str(user.tenant_id):
+        raise HTTPException(status_code=404, detail="Claim not found.")
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state=dict(c.pipeline_state or {})
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
@@ -217,6 +224,8 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
 @router.post("/claims/{ticket_id}/exceptions/{exception_id}/resolve")
 def resolve_exception(ticket_id: str, exception_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):
     claim = get_claim_or_404(db, ticket_id)
+    if str(claim.tenant_id) != str(user.tenant_id):
+        raise HTTPException(status_code=404, detail="Claim not found.")
     current_user = _resolve_adjuster(request, db)
     _ensure_assigned_adjuster(claim, current_user, db)
     row = db.query(ClaimException).filter(ClaimException.id == exception_id, ClaimException.claim_id == claim.id, ClaimException.status == "open").first()
@@ -588,7 +597,7 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
 def list_evidence_requests(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     _ensure_assigned_adjuster(c, user, db)
-    rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == c.id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
+    rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
     return [_request_payload(row, db) for row in rows]
 
 class DecisionRequest(BaseModel):
