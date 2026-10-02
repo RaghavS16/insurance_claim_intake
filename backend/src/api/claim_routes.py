@@ -9,7 +9,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -18,8 +18,11 @@ from src.config import settings
 from src.database.session import get_db
 from src.database.models import Claim, ConversationTurn, User
 from src.api.voice_ws import process_claimant_turn
+from src.agents.turn_processor import ClaimTurnConflict
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
+from src.utils.upload_limits import read_limited
+from src.utils.clamav import scan_bytes
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
 from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact
@@ -131,13 +134,15 @@ def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
 
 @router.get("")
 @router.get("/")
-def list_user_claims(request: Request, db: Session = Depends(get_db)):
+def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0)):
     """List all claims belonging to the authenticated claimant, newest first."""
     current_user = _resolve_user(request, db)
     claims = (
         db.query(Claim)
         .filter(Claim.claimant_id == current_user.id)
         .order_by(Claim.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
     result = []
@@ -154,7 +159,8 @@ def list_user_claims(request: Request, db: Session = Depends(get_db)):
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
         payload["turn_count"] = turn_count
         result.append(payload)
-    return {"items": result, "total": len(result)}
+    total = db.query(Claim).filter(Claim.claimant_id == current_user.id).count()
+    return {"items": result, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/new-session")
@@ -351,9 +357,11 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.claim_text, payload.input_mode, prior_turns // 2 + 1)
+    except ClaimTurnConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Claim conversation processing failed")
-        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+        raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {**_claim_payload(claim), "message": result.get("next_question") or result.get("message", "")}
 
 
@@ -368,9 +376,11 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
         result = await process_claimant_turn(db, claim, payload.text, "text", prior_turns // 2 + 1)
+    except ClaimTurnConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Text turn processing failed")
-        raise HTTPException(status_code=503, detail=f"Claim processing temporarily unavailable ({type(exc).__name__}).")
+        raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {**_claim_payload(claim), "agent_message": result.get("next_question") or result.get("message", "")}
 
 
@@ -553,9 +563,13 @@ async def respond_to_evidence_request(
         ext = Path(file.filename).suffix.lower()
         if ext not in {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt"}:
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
-        content = await file.read()
-        if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Evidence file is too large.")
+        try:
+            content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+            clean, scan_reason = await asyncio.to_thread(scan_bytes, content)
+            if not clean:
+                raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
         s3 = put_bytes(
             content,
             prefix=f"{settings.S3_EVIDENCE_PREFIX}/{ticket_id}/adjuster-requests/{request_id}",
@@ -627,9 +641,13 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     ext = Path(file.filename).suffix.lower()
     if ext not in allowed:
         raise HTTPException(status_code=400, detail="Unsupported evidence format.")
-    content = await file.read()
-    if len(content) > settings.MAX_EVIDENCE_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Evidence file is too large.")
+    try:
+        content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+        clean, scan_reason = scan_bytes(content)
+        if not clean:
+            raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
     valid_file, file_reason = validate_evidence_file(content, file.filename)
     if not valid_file:
         raise HTTPException(status_code=400, detail=file_reason)

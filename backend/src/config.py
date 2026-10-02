@@ -175,6 +175,10 @@ class Settings(BaseSettings):
                 raise RuntimeError("DATABASE_URL still contains a development/example credential.")
         if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_MALWARE_SCAN and not self.CLAMAV_HOST:
+            raise RuntimeError("CLAMAV_HOST is required when malware scanning is enabled.")
+        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_EMAIL_VERIFICATION and not self.SMTP_HOST:
+            raise RuntimeError("SMTP_HOST is required when email verification is enabled.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.LLM_PROVIDER == "gemini" and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):

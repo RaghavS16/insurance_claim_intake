@@ -101,6 +101,15 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             detail="Account creation failed. Please try again.",
         )
 
+    if settings.REQUIRE_EMAIL_VERIFICATION:
+        verification_code = generate_otp()
+        db.add(PasswordResetOTP(user_id=new_user.id, otp_hash=hash_otp(verification_code), purpose="email_verification", expires_at=otp_expiry(), attempts=0, verified=False, consumed=False))
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Account verification setup failed.")
+        send_otp_email(new_user.email, verification_code, full_name=new_user.full_name, purpose="email_verification")
     return {
         "id": str(new_user.id),
         "full_name": new_user.full_name,
@@ -137,7 +146,12 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             detail="Account is disabled. Please contact support.",
         )
 
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    user.last_login_at = datetime.now(timezone.utc)
+    user.session_version = int(getattr(user, "session_version", 1) or 1)
+    db.commit()
+    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version})
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -148,6 +162,42 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "role": user.role,
         },
     }
+
+
+
+@router.post("/verify-email")
+def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="verify_email", max_requests=10, window_seconds=60)
+    try:
+        clean_email = validate_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid email or verification code.")
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid email or verification code.")
+    record = (
+        db.query(PasswordResetOTP)
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
+        .order_by(PasswordResetOTP.created_at.desc())
+        .with_for_update()
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    now = datetime.now(timezone.utc)
+    expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
+    if now > expires or (record.attempts or 0) >= settings.OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    if hash_otp(payload.otp.strip()) != record.otp_hash:
+        record.attempts = (record.attempts or 0) + 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    record.verified = True
+    record.consumed = True
+    user.email_verified_at = now
+    db.commit()
+    return {"message": "Email verified successfully. You can now sign in."}
+
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +284,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         db.query(PasswordResetOTP)
         .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
         .order_by(PasswordResetOTP.created_at.desc())
+        .with_for_update()
         .first()
     )
     if not record:
@@ -303,7 +354,7 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
             detail="This reset code has already been used or is no longer valid. Please restart the process.",
         )
 
-    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]
+    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
     # Revoke the reset token so it cannot be used again
     revoke_token(payload.reset_token)
@@ -326,19 +377,14 @@ def logout(request: Request, db: Session = Depends(get_db)):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        revoke_token(token)
-        # Optionally persist revoked token to DB if valid payload exists
         try:
-            payload = verify_token(token)
-            jti = payload.get("jti") if payload else token
-            exp_ts = payload.get("exp") if payload else None
+            import jwt as _jwt
+            payload = _jwt.decode(token, options={"verify_signature": False})
+            revoke_token(token)
+            jti = payload.get("jti") or token
+            exp_ts = payload.get("exp")
             exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
-            revoked = RevokedToken(
-                token_jti=jti or token,
-                user_id=payload.get("sub") if payload else None,
-                expires_at=exp_dt,
-            )
-            db.add(revoked)
+            db.add(RevokedToken(token_jti=jti, user_id=payload.get("sub"), expires_at=exp_dt))
             db.commit()
         except Exception:
             db.rollback()

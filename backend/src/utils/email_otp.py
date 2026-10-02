@@ -34,17 +34,18 @@ def otp_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
 
 
-def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> bool:
+def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None, purpose: str = "password_reset") -> bool:
     """
     Send the OTP via SMTP. If SMTP is not configured or fails, logs the OTP instead
     (dev/test convenience — mirrors TTSError fallback pattern elsewhere).
     Returns True if an email was actually sent, False if it fell back to logging.
     """
-    subject = "Your InsureClaimAI password reset code"
+    subject = "Verify your InsureClaimAI email" if purpose == "email_verification" else "Your InsureClaimAI password reset code"
     greeting = f"Hi {full_name}," if full_name else "Hi,"
+    label = "email verification" if purpose == "email_verification" else "password reset verification"
     body = (
         f"{greeting}\n\n"
-        f"Your password reset verification code is: {otp}\n\n"
+        f"Your {label} code is: {otp}\n\n"
         f"This code expires in {settings.OTP_EXPIRY_MINUTES} minutes. "
         f"If you didn't request this, you can safely ignore this email.\n"
     )
@@ -82,6 +83,5 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None) -> 
         return True
     except Exception:
         logger.exception("Failed to send OTP email to %s", to_email)
-        logger.info("OTP for %s (SMTP send failed, fallback log): %s", to_email, otp)
         return False
 

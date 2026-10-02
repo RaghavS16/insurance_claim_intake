@@ -110,7 +110,7 @@ def get_current_user(
                 detail="Authentication required.",
             )
 
-    # Fetch user from DB
+    # Fetch user from DB and enforce current account/session state.
     user = db.query(User).filter(User.id == uid).first()
     if not user:
         if settings.ENVIRONMENT == "test":
@@ -134,6 +134,13 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required: User not found.",
         )
+    if str(user.status).lower() != "active":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
+    token_version = int(payload.get("sv", 1)) if token else 1
+    if token and token_version != int(getattr(user, "session_version", 1) or 1):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid.")
+    if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email verification is required.")
     return user
 
 

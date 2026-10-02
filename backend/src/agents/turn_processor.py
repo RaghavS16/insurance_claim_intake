@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict
 
@@ -14,6 +15,9 @@ from src.database.hardening_models import ClaimSubmission
 from src.utils.logger import app_logger
 
 logger = app_logger
+
+class ClaimTurnConflict(RuntimeError):
+    """Raised when another request committed a newer claim state while this turn was processing."""
 
 
 async def process_claimant_turn(
@@ -42,6 +46,7 @@ async def process_claimant_turn(
         state = dict(getattr(claim, "pipeline_state", None) or {})
         return {**state, "next_question": agent_reply, "message": agent_reply, "conversation_status": "submitted"}
 
+    expected_state_version = int(getattr(claim, "state_version", 1) or 1)
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     logical_turn = (prior_turns // 2) + 1
     prior_state = dict(getattr(claim, "pipeline_state", None) or {})
@@ -287,8 +292,15 @@ async def process_claimant_turn(
         db.rollback()
         return result
     try:
+        from sqlalchemy import select
+        locked_claim = db.execute(select(Claim).where(Claim.id == claim.id).with_for_update()).scalar_one()
+        if int(getattr(locked_claim, "state_version", 1) or 1) != expected_state_version:
+            db.rollback()
+            raise ClaimTurnConflict("Claim changed while the turn was being processed. Please retry.")
+        locked_claim.state_version = expected_state_version + 1
+        event_id = uuid.uuid4().hex
         if not workflow_event:
-            user_turn = ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="user", text=user_text)
+            user_turn = ConversationTurn(claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:u", speaker="user", text=user_text)
             if attachment:
                 user_turn.attachment = dict(attachment)
             db.add(user_turn)
@@ -296,13 +308,14 @@ async def process_claimant_turn(
             user_turn = ConversationTurn(
                 claim_id=claim.id,
                 turn_number=logical_turn,
+                event_id=f"{event_id}:u",
                 speaker="user",
                 text=f"Uploaded evidence: {attachment.get('name') or 'evidence file'}",
             )
             user_turn.attachment = dict(attachment)
             db.add(user_turn)
         if agent_text:
-            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, speaker="agent", text=agent_text))
+            db.add(ConversationTurn(claim_id=claim.id, turn_number=logical_turn, event_id=f"{event_id}:a", speaker="agent", text=agent_text))
         db.commit()
     except Exception:
         db.rollback()
