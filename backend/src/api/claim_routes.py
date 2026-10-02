@@ -338,7 +338,7 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
 @router.get("/{ticket_id}")
 def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
@@ -349,7 +349,7 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     current_user = _resolve_user(request, db)
     claim = None
     if payload.ticket_id:
-        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id).first()
+        claim = db.query(Claim).filter(Claim.ticket_id == payload.ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
         if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
         enforce_claim_ownership(claim, current_user)
     if claim is None:
@@ -369,7 +369,7 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
 @router.post("/{ticket_id}/text-turn")
 async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     if _is_post_submission_status(claim.status):
@@ -402,7 +402,7 @@ def _verification_failure_message(reason: str) -> str:
 @router.post("/{ticket_id}/verify")
 def verify_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     state = dict(claim.pipeline_state or {})
@@ -603,7 +603,7 @@ async def respond_to_evidence_request(
     db: Session = Depends(get_db)
 ):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
@@ -667,9 +667,6 @@ async def respond_to_evidence_request(
     remaining_open = db.query(ClaimEvidenceRequest).filter(
         ClaimEvidenceRequest.claim_id == claim.id,
         ClaimEvidenceRequest.tenant_id == claim.tenant_id,
-        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
-        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
-        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
         ClaimEvidenceRequest.status == "open",
         ClaimEvidenceRequest.id != row.id
     ).count()
@@ -701,7 +698,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     verified as the requested evidence before missing_evidence() considers it complete.
     """
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
@@ -935,7 +932,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
     """Apply a claimant correction and invalidate dependent verification/RAG state."""
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
