@@ -54,6 +54,19 @@ class VerifyOtpRequest(BaseModel):
     otp: str = Field(..., min_length=4, max_length=8)
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=20, max_length=512)
+
+
+class MFAVerifyRequest(BaseModel):
+    challenge_token: str = Field(..., min_length=20, max_length=512)
+    code: str = Field(..., pattern=r"^\\d{6}$")
+
+
+class MFASetupVerifyRequest(BaseModel):
+    code: str = Field(..., pattern=r"^\\d{6}$")
+
+
 class ResetPasswordRequest(BaseModel):
     reset_token: str = Field(..., min_length=10)
     new_password: str = Field(..., min_length=8, max_length=128)
@@ -436,8 +449,8 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
 
 @router.post("/refresh")
-def refresh_access_token(payload: dict, db: Session = Depends(get_db)):
-    raw = str(payload.get("refresh_token") or "").strip()
+def refresh_access_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
+    raw = payload.refresh_token.strip()
     if not raw:
         raise HTTPException(status_code=401, detail="Refresh token is required.")
     user, replacement = _rotate_refresh_token(db, raw)
@@ -445,10 +458,60 @@ def refresh_access_token(payload: dict, db: Session = Depends(get_db)):
     return _auth_response(user, replacement)
 
 
+@router.post("/mfa/setup")
+def mfa_setup(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Start TOTP setup without enabling MFA until the first code is verified."""
+    secret = new_totp_secret()
+    current_user.mfa_secret_encrypted = encrypt_secret(secret)
+    current_user.mfa_enabled = False
+    db.commit()
+    return {
+        "secret": secret,
+        "provisioning_uri": provisioning_uri(secret, current_user.email),
+    }
+
+
+@router.post("/mfa/enable")
+def mfa_enable(payload: MFASetupVerifyRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Verify TOTP enrollment and issue one-time recovery codes."""
+    if not current_user.mfa_secret_encrypted:
+        raise HTTPException(status_code=400, detail="MFA setup has not been started.")
+    if not verify_totp(decrypt_secret(current_user.mfa_secret_encrypted), payload.code):
+        raise HTTPException(status_code=401, detail="Invalid MFA code.")
+    current_user.mfa_enabled = True
+    current_user.mfa_required = True
+    recovery_codes = new_recovery_codes()
+    for recovery_code in recovery_codes:
+        db.add(MFARecoveryCode(
+            user_id=str(current_user.id),
+            tenant_id=str(current_user.tenant_id or ""),
+            code_hash=hash_recovery_code(recovery_code),
+        ))
+    current_user.session_version = int(current_user.session_version or 1) + 1
+    db.commit()
+    return {"mfa_enabled": True, "recovery_codes": recovery_codes}
+
+
+@router.post("/mfa/disable")
+def mfa_disable(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Disable MFA and invalidate current sessions."""
+    current_user.mfa_enabled = False
+    current_user.mfa_required = False
+    current_user.mfa_secret_encrypted = None
+    db.query(MFARecoveryCode).filter(
+        MFARecoveryCode.user_id == current_user.id,
+        MFARecoveryCode.tenant_id == current_user.tenant_id,
+        MFARecoveryCode.consumed.is_(False),
+    ).update({MFARecoveryCode.consumed: True}, synchronize_session=False)
+    current_user.session_version = int(current_user.session_version or 1) + 1
+    db.commit()
+    return {"mfa_enabled": False}
+
+
 @router.post("/mfa/verify")
-def verify_mfa(payload: dict, db: Session = Depends(get_db)):
-    token = str(payload.get("challenge_token") or "").strip()
-    code = str(payload.get("code") or "").strip()
+def verify_mfa(payload: MFAVerifyRequest, db: Session = Depends(get_db)):
+    token = payload.challenge_token.strip()
+    code = payload.code.strip()
     if not token or not code:
         raise HTTPException(status_code=400, detail="MFA challenge and code are required.")
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
