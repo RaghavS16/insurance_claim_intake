@@ -240,6 +240,7 @@ def ingest_document(
                 "effective_to": effective_to,
                 "policy_version": policy_version,
                 "uploaded_by": uploaded_by,
+                "publication_status": "pending_review",
             },
         )
         db.add(doc)
@@ -282,6 +283,9 @@ def list_policy_documents(
     db = SessionLocal()
     try:
         conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording"]
+        # Newly ingested policy wording is untrusted until an authorized reviewer publishes it.
+        publication_status = KnowledgeDocument.metadata_json["publication_status"].as_string()
+        conditions.append((publication_status.is_(None)) | (publication_status == "published"))
         if insurance_type:
             conditions.append(
                 (KnowledgeDocument.insurance_type == insurance_type)
