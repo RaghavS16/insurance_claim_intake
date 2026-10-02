@@ -143,6 +143,9 @@ def get_current_user(
     token_version = int(payload.get("sv", 1)) if token else 1
     if token and token_version != int(getattr(user, "session_version", 1) or 1):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid.")
+    token_tenant = str(payload.get("tenant_id") or "") if token else str(user.tenant_id or "")
+    if token and token_tenant != str(user.tenant_id or ""):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session tenant context is no longer valid.")
     request.state.authenticated_user_id = str(user.id)
     request.state.authenticated_tenant_id = str(user.tenant_id or "")
     if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
