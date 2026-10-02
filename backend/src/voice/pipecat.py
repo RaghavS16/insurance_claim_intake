@@ -267,7 +267,7 @@ async def run_voice_pipeline(
 
         @transport.event_handler("on_client_connected")
         async def _on_connected(_transport, _client):
-            await self._set_session_status(call_id, "active")
+            await _set_session_status(call_id, "active")
             await events.publish(
                 ticket_id,
                 make_event(
