@@ -610,7 +610,6 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
         transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
     db.add(ClaimAuditEvent(
         claim_id=str(c.id),
-        tenant_id=str(c.tenant_id or ""),
         tenant_id=str(c.tenant_id or ""), actor_user_id=str(user.id), event_type="evidence_requested",
         new_value_json={"request_id": str(row.id), "request_text": row.request_text}, reason=row.request_text
     ))
