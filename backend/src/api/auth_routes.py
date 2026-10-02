@@ -75,7 +75,7 @@ class ResetPasswordRequest(BaseModel):
     confirm_password: str = Field(..., min_length=8, max_length=128)
 
 
-def _issue_refresh_token(db: Session, user: User, family_id: str | None = None) -> str:
+def _issue_refresh_token(db: Session, user: User, family_id: str | None = None, *, auth_context: dict | None = None) -> str:
     """Create an opaque refresh token; only its SHA-256 hash is persisted."""
     raw = secrets.token_urlsafe(48)
     db.add(RefreshToken(
@@ -84,6 +84,7 @@ def _issue_refresh_token(db: Session, user: User, family_id: str | None = None) 
         token_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         family_id=family_id or str(uuid.uuid4()),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        auth_context_json=auth_context or {"mfa": False, "amr": ["pwd"]},
     ))
     return raw
 
@@ -111,7 +112,7 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
     row.used_at = now
-    replacement = _issue_refresh_token(db, user, row.family_id)
+    replacement = _issue_refresh_token(db, user, row.family_id, auth_context=dict(row.auth_context_json or {"mfa": False, "amr": ["pwd"]}))
     db.flush()
     return user, replacement
 
@@ -234,9 +235,10 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         db.add(challenge)
         db.commit()
         return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
-    refresh_token = _issue_refresh_token(db, user)
+    auth_context = {"mfa": False, "amr": ["pwd"]}
+    refresh_token = _issue_refresh_token(db, user, auth_context=auth_context)
     db.commit()
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, "mfa": False, "amr": ["pwd"]})
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role, "sv": user.session_version, **auth_context})
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -507,7 +509,7 @@ def passkey_authentication_verify(
         raise HTTPException(status_code=401, detail="Invalid passkey authentication.")
     user.last_login_at = datetime.now(timezone.utc)
     user.session_version = int(getattr(user, "session_version", 1) or 1)
-    refresh = _issue_refresh_token(db, user)
+    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["webauthn"]})
     db.commit()
     return _auth_response(user, refresh, amr=["webauthn"], mfa_authenticated=True)
 
@@ -584,7 +586,8 @@ def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Ses
         raise HTTPException(status_code=401, detail="Refresh token is required.")
     user, replacement = _rotate_refresh_token(db, raw)
     db.commit()
-    return _auth_response(user, replacement)
+    context = dict((db.query(RefreshToken).filter(RefreshToken.token_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()).first() or {}).auth_context_json or {"mfa": False, "amr": ["pwd"]})
+    return _auth_response(user, replacement, amr=list(context.get("amr") or []), mfa_authenticated=bool(context.get("mfa")))
 
 
 @router.post("/mfa/setup")
@@ -671,7 +674,7 @@ def verify_mfa(payload: MFAVerifyRequest, request: Request, db: Session = Depend
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid MFA code.")
     challenge.consumed = True
-    refresh = _issue_refresh_token(db, user)
+    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["pwd", "totp"]})
     db.commit()
     return _auth_response(user, refresh, amr=["pwd", "totp"], mfa_authenticated=True)
 
@@ -708,7 +711,7 @@ def mfa_recover(payload: dict, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid recovery code.")
     match.consumed = True
     challenge.consumed = True
-    refresh = _issue_refresh_token(db, user)
+    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["pwd", "recovery_code"]})
     db.commit()
     return _auth_response(user, refresh, amr=["pwd", "recovery_code"], mfa_authenticated=True)
 
