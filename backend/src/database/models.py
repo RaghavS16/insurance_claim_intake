@@ -131,6 +131,7 @@ class PolicyLinkAudit(Base):
 class Adjuster(Base):
     __tablename__ = "adjusters"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[Optional[str]] = _UUID(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, unique=True, index=True)
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
@@ -185,6 +186,8 @@ class VoiceSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    worker_id: Mapped[str] = mapped_column(String(120), nullable=False, default=lambda: settings.VOICE_WORKER_ID, index=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PasswordResetOTP(Base):
