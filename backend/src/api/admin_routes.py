@@ -507,7 +507,7 @@ def reset_adjuster_password(
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == current_user.tenant_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -658,7 +658,6 @@ def create_policy(
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
-        tenant_id=str(current_user.tenant_id),
         tenant_id=str(current_user.tenant_id),
         policy_number=policy_num,
         customer_id=None,
