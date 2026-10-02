@@ -27,9 +27,14 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
             db.query(ClaimAssignment)
             .filter(
                 ClaimAssignment.claim_id == claim.id,
+                ClaimAssignment.tenant_id == user_tenant,
                 ClaimAssignment.is_active.is_(True),
                 ClaimAssignment.adjuster_id.in_(
-                    db.query(Adjuster.id).filter(Adjuster.email == current_user.email)
+                    db.query(Adjuster.id).filter(
+                        Adjuster.user_id == user_id,
+                        Adjuster.tenant_id == user_tenant,
+                        Adjuster.is_active.is_(True),
+                    )
                 ),
             )
             .first()
