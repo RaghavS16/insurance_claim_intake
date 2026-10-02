@@ -108,6 +108,7 @@ resource "aws_ecs_task_definition" "app" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
+            REDIS_URL                    = "rediss://" + aws_elasticache_replication_group.redis.primary_endpoint_address + ":6379/0"
             VOICE_PROVIDER              = "pipecat_local"
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
@@ -138,7 +139,7 @@ resource "aws_ecs_task_definition" "app" {
       healthCheck = {
         command     = [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen(\'http://localhost:${var.app_container_port}${var.health_path}\', timeout=3)\""
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${var.app_container_port}${var.health_path}\', timeout=3)\""
         ]
         interval    = 30
         timeout     = 10
@@ -220,6 +221,7 @@ resource "aws_ecs_task_definition" "outbox" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
+            REDIS_URL                    = "rediss://" + aws_elasticache_replication_group.redis.primary_endpoint_address + ":6379/0"
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
           },
