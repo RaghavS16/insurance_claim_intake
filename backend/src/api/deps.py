@@ -129,11 +129,15 @@ def get_current_user(
                 db.add(user)
                 db.commit()
                 db.refresh(user)
+            if not getattr(user, "tenant_id", None):
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant context is unavailable.")
             return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required: User not found.",
         )
+    if not getattr(user, "tenant_id", None):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant membership is required.")
     if str(user.status).lower() != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
     token_version = int(payload.get("sv", 1)) if token else 1
