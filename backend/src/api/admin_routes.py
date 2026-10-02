@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
+from src.database.hardening_models import SystemAuditEvent
 from src.database.models import Adjuster, Policy, User
 from src.utils.auth import get_password_hash
 from src.utils.validators import (
@@ -379,9 +380,9 @@ def list_adjusters(
     db: Session = Depends(get_db),
 ):
     """List all registered adjusters and their assigned claims count."""
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
-    adjusters = db.query(Adjuster).order_by(Adjuster.name.asc()).all()
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == current_user.tenant_id).order_by(Adjuster.name.asc()).all()
     return [_adjuster_dict(a) for a in adjusters]
 
 
@@ -392,9 +393,11 @@ def get_adjuster(
     db: Session = Depends(get_db),
 ):
     """Retrieve details of a single adjuster."""
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
-    adjuster = get_adjuster_or_404(db, adjuster_id)
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
+    if not adjuster:
+        raise HTTPException(status_code=404, detail="Adjuster not found.")
     return _adjuster_dict(adjuster)
 
 
@@ -409,9 +412,9 @@ def update_adjuster(
     Update an adjuster's information (name, email, phone, specialization, active status).
     Synchronizes the corresponding User account.
     """
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == current_user.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -620,10 +623,10 @@ def create_policy(
     db: Session = Depends(get_db),
 ):
     """Create a single new policy record with validation."""
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
     policy_num = payload.policy_number.strip().upper()
-    existing = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+    existing = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == current_user.tenant_id).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -647,6 +650,7 @@ def create_policy(
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
+        tenant_id=str(current_user.tenant_id),
         policy_number=policy_num,
         customer_id=None,
         policy_type=policy_type,
@@ -680,9 +684,9 @@ def update_policy(
     db: Session = Depends(get_db),
 ):
     """Update existing policy details safely."""
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number)
+    policy = _find_policy(db, policy_id_or_number, str(current_user.tenant_id))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -749,9 +753,9 @@ def delete_policy(
     db: Session = Depends(get_db),
 ):
     """Delete a policy by ID or policy number."""
-    _require_admin(request, db)
+    current_user = _current_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number)
+    policy = _find_policy(db, policy_id_or_number, str(current_user.tenant_id))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -770,3 +774,28 @@ def delete_policy(
         "deleted": True,
     }
 
+
+
+def _current_admin(request: Request, db: Session) -> User:
+    return resolve_bearer_user(request, db, ["ADMIN"])
+
+
+def _audit(
+    db: Session,
+    user: User,
+    *,
+    event_type: str,
+    resource_type: str,
+    resource_id: str | None,
+    action: str,
+    metadata: Dict[str, Any] | None = None,
+) -> None:
+    db.add(SystemAuditEvent(
+        tenant_id=str(user.tenant_id),
+        actor_user_id=str(user.id),
+        event_type=event_type,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        action=action,
+        metadata_json=metadata or {},
+    ))
