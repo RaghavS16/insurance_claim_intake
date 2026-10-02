@@ -25,6 +25,7 @@ def upgrade() -> None:
     # revisions are retained for upgrade provenance but become no-ops on a
     # database created by this baseline.
     from src.database.models import Base
+    from src.database import hardening_models  # noqa: F401
     Base.metadata.create_all(bind=bind)
 
     inspector = sa.inspect(bind)
