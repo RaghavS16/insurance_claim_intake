@@ -41,6 +41,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             policy_version=payload.policy_version,
             jurisdiction=payload.jurisdiction,
             uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -56,7 +57,7 @@ async def upload_document(
     policy_number: str | None = Form(None),
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
-    policy_version: str | None = Form(None)
+    policy_version: str | None = Form(None),
     jurisdiction: str | None = Form(None),
     user: User = Depends(require_role(["ADJUSTER"])),
 ):
@@ -82,6 +83,7 @@ async def upload_document(
             policy_version=policy_version,
             jurisdiction=jurisdiction,
             uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -106,6 +108,8 @@ async def retrieve(
             document_types=[document_type] if document_type else None,
             policy_number=policy_number,
             incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
+            tenant_id=str(user.tenant_id),
+            jurisdiction=None,
         )
         return {"items": items, "query": q}
     except Exception as exc:
@@ -120,7 +124,7 @@ def publish_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, KnowledgeDocument.tenant_id == user.tenant_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
     meta = dict(doc.metadata_json or {})
