@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.database.hardening_models import OutboxEvent
+from src.config import settings
 
 def enqueue(
     db: Session,
@@ -27,8 +28,12 @@ def retry_delay(attempts:int)->int:
 
 def mark_retry(row:OutboxEvent,error:Exception)->None:
     row.attempts=int(row.attempts or 0)+1
-    row.status="pending"
-    row.next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=retry_delay(row.attempts))
+    if row.attempts >= settings.OUTBOX_MAX_ATTEMPTS:
+        row.status="dead_letter"
+        row.processed_at=datetime.now(timezone.utc)
+    else:
+        row.status="pending"
+        row.next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=retry_delay(row.attempts))
     row.last_error=type(error).__name__+":"+str(error)[:1000]
 
 def mark_processed(row:OutboxEvent)->None:
