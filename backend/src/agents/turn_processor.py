@@ -209,7 +209,8 @@ async def process_claimant_turn(
                         __import__("sqlalchemy").select(Claim).where(Claim.id == claim.id).with_for_update()
                     ).scalar_one()
                     existing_submission = db.query(ClaimSubmission).filter(
-                        ClaimSubmission.claim_id == claim.id
+                        ClaimSubmission.claim_id == claim.id,
+                        ClaimSubmission.tenant_id == claim.tenant_id,
                     ).first()
                     if existing_submission:
                         result["conversation_status"] = "submitted"
@@ -223,6 +224,7 @@ async def process_claimant_turn(
                         transition_claim(db, locked, "submitted", str(claim.claimant_id), "explicit claimant submission")
                         idempotency_key = f"claim:{claim.id}:submission:v1"
                         db.add(ClaimSubmission(
+                            tenant_id=locked.tenant_id,
                             claim_id=locked.id,
                             idempotency_key=idempotency_key,
                             submitted_by=str(claim.claimant_id),
@@ -321,6 +323,7 @@ async def process_claimant_turn(
             db.add(user_turn)
         elif attachment:
             user_turn = ConversationTurn(
+                tenant_id=claim.tenant_id,
                 claim_id=claim.id,
                 turn_number=logical_turn,
                 event_id=f"{event_id}:u",
