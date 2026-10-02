@@ -60,7 +60,7 @@ class RefreshTokenRequest(BaseModel):
 
 class MFAVerifyRequest(BaseModel):
     challenge_token: str = Field(..., min_length=20, max_length=512)
-    code: str = Field(..., pattern=r"^\\d{6}$")
+    code: str = Field(..., pattern=r"^\d{6}$")
 
 
 class MFASetupVerifyRequest(BaseModel):
@@ -449,7 +449,8 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
 
 @router.post("/refresh")
-def refresh_access_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
+def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="refresh", max_requests=30, window_seconds=60)
     raw = payload.refresh_token.strip()
     if not raw:
         raise HTTPException(status_code=401, detail="Refresh token is required.")
@@ -509,7 +510,8 @@ def mfa_disable(current_user: User = Depends(get_current_user), db: Session = De
 
 
 @router.post("/mfa/verify")
-def verify_mfa(payload: MFAVerifyRequest, db: Session = Depends(get_db)):
+def verify_mfa(payload: MFAVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="mfa_verify", max_requests=10, window_seconds=60)
     token = payload.challenge_token.strip()
     code = payload.code.strip()
     if not token or not code:
