@@ -6,7 +6,7 @@ assigned to them. Administrators have global claim access.
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.database.models import Claim, User
+from src.database.models import Adjuster, Claim, User
 
 def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None = None) -> None:
     role = str(current_user.role).upper()
@@ -23,8 +23,7 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
                 ClaimAssignment.claim_id == claim.id,
                 ClaimAssignment.is_active.is_(True),
                 ClaimAssignment.adjuster_id.in_(
-                    db.query(__import__("src.database.models", fromlist=["Adjuster"]).Adjuster.id)
-                    .filter(__import__("src.database.models", fromlist=["Adjuster"]).Adjuster.email == current_user.email)
+                    db.query(Adjuster.id).filter(Adjuster.email == current_user.email)
                 ),
             )
             .first()
