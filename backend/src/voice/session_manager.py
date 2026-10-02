@@ -311,6 +311,18 @@ class VoiceSessionManager:
                 ),
             )
 
+    async def heartbeat(self, *, ticket_id: str, call_id: str) -> bool:
+        """Renew the distributed voice lease only when this process owns the fencing token."""
+        if self.events.redis is None:
+            return self._active_call_by_ticket.get(ticket_id) == call_id
+        key = f"voice:lock:{ticket_id}"
+        script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
+        result = await self.events.redis.eval(script, 1, key, call_id, str(settings.MAX_VOICE_SESSION_SECONDS + 60))
+        if int(result or 0) != 1:
+            return False
+        await self.events.redis.set(f"voice:active:{ticket_id}", call_id, ex=settings.MAX_VOICE_SESSION_SECONDS + 60)
+        return True
+
     async def close(self, call_id: str) -> None:
         """Cancel the pipeline and tear down its WebRTC connection."""
         task = self._tasks.get(call_id)
