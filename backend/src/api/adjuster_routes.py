@@ -99,7 +99,7 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
     adj = db.query(Adjuster).filter(Adjuster.email == user.email, Adjuster.tenant_id == claim.tenant_id).first()
     if adj and (str(assigned_id) in {str(adj.id), str(user.id)}):
         return adj
-    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
+    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id, ClaimAssignment.tenant_id == claim.tenant_id).first():
         return adj
     if str(assigned_id) == str(user.id):
         a = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
@@ -237,7 +237,7 @@ def resolve_exception(ticket_id: str, exception_id: str, request: Request, user:
 
 @router.get("/claims/{ticket_id}/package")
 def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    c = get_claim_or_404(db, ticket_id)
+    c = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
     package = state.get("submission_package")
@@ -287,7 +287,7 @@ def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Dep
 
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
 def evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(user.tenant_id))
     if not _can_access_claim(claim,user,db): raise HTTPException(status_code=403,detail="This claim is not assigned to you.")
     state=dict(claim.pipeline_state or {})
     item=next((e for e in state.get("evidence",[]) if str(e.get("id"))==evidence_id),None)
@@ -446,6 +446,7 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
         state["copilot_chat"] = existing_chat
         c.pipeline_state = state
         db.add(CopilotAnalysis(
+            tenant_id=c.tenant_id,
             claim_id=str(c.id),
             claim_version=1,
             knowledge_version="retrieval-current",
@@ -609,7 +610,7 @@ class NoteRequest(BaseModel):
 @router.get("/claims/{ticket_id}/assignment")
 def get_normalized_assignment(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
     a = db.execute(select(ClaimAssignment).where(
         ClaimAssignment.claim_id == claim.id, ClaimAssignment.is_active.is_(True)
@@ -622,7 +623,7 @@ def get_normalized_assignment(ticket_id: str, request: Request, db: Session = De
 @router.post("/claims/{ticket_id}/decision")
 def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     adjuster = _ensure_assigned_adjuster(claim, current_user, db)
     decision_map = {
         "approve": "approved", "partial_approve": "partially_approved",
