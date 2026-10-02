@@ -42,9 +42,10 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None, pur
     """
     subject = "Verify your InsureClaimAI email" if purpose == "email_verification" else "Your InsureClaimAI password reset code"
     greeting = f"Hi {full_name}," if full_name else "Hi,"
+    label = "email verification" if purpose == "email_verification" else "password reset verification"
     body = (
         f"{greeting}\n\n"
-        f"Your email verification code is: {otp}\n\n" if purpose == "email_verification" else f"Your password reset verification code is: {otp}\n\n"
+        f"Your {label} code is: {otp}\n\n"
         f"This code expires in {settings.OTP_EXPIRY_MINUTES} minutes. "
         f"If you didn't request this, you can safely ignore this email.\n"
     )
