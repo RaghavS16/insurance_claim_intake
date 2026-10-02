@@ -52,7 +52,7 @@ def _is_post_submission_status(status: str | None) -> bool:
     return str(status or "") in {"submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"}
 
 def _request_payload(row: ClaimEvidenceRequest, db: Session) -> Dict[str, Any]:
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id).order_by(ClaimEvidence.created_at.desc()).first()
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id).order_by(ClaimEvidence.created_at.desc()).first()
     return {
         "id": str(row.id), "claim_id": str(row.claim_id), "adjuster_id": str(row.adjuster_id),
         "request_text": row.request_text, "status": row.status, "response_note": row.response_note,
@@ -272,7 +272,7 @@ def track_claims(request: Request, db: Session = Depends(get_db)):
 @router.get("/{ticket_id}/conversation")
 def get_conversation_history(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     return _conversation_payload(db, claim)
@@ -353,7 +353,7 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
         if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
         enforce_claim_ownership(claim, current_user)
     if claim is None:
-        claim = Claim(ticket_id=f"CLAIM-{uuid.uuid4().hex[:8].upper()}", claimant_id=current_user.id, customer_id=str(current_user.id), input_mode=payload.input_mode, status="draft")
+        claim = Claim(ticket_id=f"CLAIM-{uuid.uuid4().hex[:8].upper()}", tenant_id=str(current_user.tenant_id or ""), claimant_id=current_user.id, customer_id=str(current_user.id), input_mode=payload.input_mode, status="draft")
         db.add(claim); db.flush()
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
     try:
@@ -606,6 +606,7 @@ async def respond_to_evidence_request(
     # Check if there are other remaining open requests for this claim
     remaining_open = db.query(ClaimEvidenceRequest).filter(
         ClaimEvidenceRequest.claim_id == claim.id,
+        ClaimEvidenceRequest.tenant_id == claim.tenant_id,
         ClaimEvidenceRequest.status == "open",
         ClaimEvidenceRequest.id != row.id
     ).count()
@@ -731,6 +732,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     try:
         requirement_row = db.query(ClaimRequirement).filter(
             ClaimRequirement.claim_id == claim.id,
+            ClaimRequirement.tenant_id == claim.tenant_id,
             ClaimRequirement.requirement_key == str(evidence_key),
         ).first()
     except Exception:
