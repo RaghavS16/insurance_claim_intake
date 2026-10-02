@@ -10,7 +10,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from src.config import settings
 from src.database.session import get_db
