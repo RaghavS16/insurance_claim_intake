@@ -137,7 +137,9 @@ def ingest_document(
     effective_from: str | None = None,
     effective_to: str | None = None,
     policy_version: str | None = None,
+    jurisdiction: str | None = None,
     uploaded_by: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     t0 = time.time()
     size_mb = len(content) / (1024 * 1024)
@@ -161,7 +163,7 @@ def ingest_document(
     
     db = SessionLocal()
     try:
-        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256).first()
+        existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
             if any(value not in (None, "") for value in (policy_number, effective_from, effective_to, policy_version)):
@@ -226,6 +228,8 @@ def ingest_document(
     try:
         doc = KnowledgeDocument(
             id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            jurisdiction=jurisdiction,
             source_name=filename,
             source_uri=s3["uri"],
             document_type=document_type or meta.document_type or "unknown",
@@ -241,6 +245,7 @@ def ingest_document(
                 "policy_version": policy_version,
                 "uploaded_by": uploaded_by,
                 "publication_status": "pending_review",
+                "jurisdiction": jurisdiction,
             },
         )
         db.add(doc)
@@ -254,7 +259,7 @@ def ingest_document(
                     chunk_index=idx,
                     text=chunk,
                     embedding=vector,
-                    metadata_json={"source_name": filename},
+                    metadata_json={"source_name": filename, "jurisdiction": jurisdiction, "policy_version": policy_version},
                 )
             )
         db.commit()
@@ -278,14 +283,20 @@ def list_policy_documents(
     insurance_type: str | None = None,
     policy_number: str | None = None,
     incident_date: date | None = None,
+    jurisdiction: str | None = None,
+    tenant_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return candidate policy-wording documents for document-level compilation."""
     db = SessionLocal()
     try:
         conditions: list[Any] = [KnowledgeDocument.document_type == "policy_wording"]
+        if tenant_id:
+            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
         # Newly ingested policy wording is untrusted until an authorized reviewer publishes it.
         publication_status = KnowledgeDocument.metadata_json["publication_status"].as_string()
         conditions.append((publication_status.is_(None)) | (publication_status == "published"))
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append(
                 (KnowledgeDocument.insurance_type == insurance_type)
@@ -346,13 +357,13 @@ def list_policy_documents(
         db.close()
 
 
-def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
+def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     """Load every indexed chunk for a document in original order."""
     db = SessionLocal()
     try:
         rows = db.execute(
             select(KnowledgeChunk)
-            .where(KnowledgeChunk.document_id == document_id)
+            .where(KnowledgeChunk.document_id == document_id, *([KnowledgeChunk.tenant_id == tenant_id] if tenant_id else []))
             .order_by(KnowledgeChunk.chunk_index.asc())
         ).scalars().all()
         return [
@@ -368,10 +379,10 @@ def get_document_chunks(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
+def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
         if not row:
             return []
         manifest = (row.metadata_json or {}).get("requirement_manifest")
@@ -380,7 +391,7 @@ def get_cached_requirement_manifest(document_id: str) -> list[dict[str, Any]]:
         db.close()
 
 
-def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]]) -> None:
+def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
     db = SessionLocal()
     try:
         row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
@@ -401,12 +412,18 @@ def search(
     policy_number: str | None = None,
     document_types: list[str] | None = None,
     incident_date: date | None = None,
+    jurisdiction: str | None = None,
+    tenant_id: str | None = None,
     limit: int = 12,
 ) -> list[dict]:
     vector = embed_documents([query])[0]
     db = SessionLocal()
     try:
         conditions: list[Any] = []
+        if tenant_id:
+            conditions.append(KnowledgeDocument.tenant_id == tenant_id)
+        if jurisdiction:
+            conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
             conditions.append((KnowledgeDocument.insurance_type == insurance_type) | (KnowledgeDocument.insurance_type.is_(None)))
         if document_types:
@@ -446,6 +463,13 @@ def search(
                 "policy_version": (d.metadata_json or {}).get("policy_version"),
                 "effective_from": (d.metadata_json or {}).get("effective_from"),
                 "effective_to": (d.metadata_json or {}).get("effective_to"),
+                "jurisdiction": d.jurisdiction or (d.metadata_json or {}).get("jurisdiction"),
+                "section_number": (c.metadata_json or {}).get("section_number"),
+                "section_title": (c.metadata_json or {}).get("section_title"),
+                "clause_number": (c.metadata_json or {}).get("clause_number"),
+                "page_number": (c.metadata_json or {}).get("page_number"),
+                "page_start": (c.metadata_json or {}).get("page_start"),
+                "page_end": (c.metadata_json or {}).get("page_end"),
                 "score": round(1 - float(dist), 6),
             }
             for c, d, dist in rows
