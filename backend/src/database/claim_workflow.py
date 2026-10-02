@@ -47,22 +47,32 @@ def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: 
     return claim
 
 def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) -> Adjuster:
+    # Serialize assignment decisions on the claim row so concurrent submissions
+    # cannot create multiple active assignments or allocate the same load snapshot.
+    locked_claim = db.execute(
+        select(Claim).where(Claim.id == claim.id, Claim.tenant_id == claim.tenant_id).with_for_update()
+    ).scalar_one()
     active = db.execute(select(ClaimAssignment).where(
-        ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.is_active.is_(True)
+        ClaimAssignment.claim_id == locked_claim.id,
+        ClaimAssignment.tenant_id == locked_claim.tenant_id,
+        ClaimAssignment.is_active.is_(True),
     )).scalar_one_or_none()
     if active:
         raise ValueError("Claim already has an active assignment")
     candidates = list(db.execute(
-        select(Adjuster).where(Adjuster.is_active.is_(True), Adjuster.tenant_id == claim.tenant_id).order_by(
-            Adjuster.claims_assigned.asc(), Adjuster.id.asc()
-        )
+        select(Adjuster).where(
+            Adjuster.is_active.is_(True),
+            Adjuster.tenant_id == locked_claim.tenant_id,
+        ).order_by(Adjuster.claims_assigned.asc(), Adjuster.id.asc()).limit(50).with_for_update(skip_locked=True)
     ).scalars())
     if not candidates:
         raise ValueError("No active adjuster is available")
-    chosen = next((a for a in candidates if a.specialization == claim.insurance_type), candidates[0])
-    db.execute(update(Adjuster).where(Adjuster.id == chosen.id).values(
-        claims_assigned=Adjuster.claims_assigned + 1
-    ))
+    chosen = next((a for a in candidates if a.specialization == locked_claim.insurance_type), candidates[0])
+    db.execute(update(Adjuster).where(
+        Adjuster.id == chosen.id,
+        Adjuster.tenant_id == locked_claim.tenant_id,
+    ).values(claims_assigned=Adjuster.claims_assigned + 1))
+    claim = locked_claim
     db.add(ClaimAssignment(
         tenant_id=str(claim.tenant_id or ""), claim_id=claim.id, adjuster_id=chosen.id, assigned_by=actor_user_id,
         reason="specialization_then_load",
