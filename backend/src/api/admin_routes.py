@@ -121,17 +121,17 @@ def parse_date(value: str, field_name: str) -> date:
         )
 
 
-def _find_policy(db: Session, identifier: str) -> Optional[Policy]:
+def _find_policy(db: Session, identifier: str, tenant_id: str) -> Optional[Policy]:
     """Find policy safely by UUID id or policy_number without throwing Postgres UUID casting error."""
     clean_id = identifier.strip()
     try:
         val_uuid = uuid.UUID(clean_id)
-        pol = db.query(Policy).filter(Policy.id == str(val_uuid)).first()
+        pol = db.query(Policy).filter(Policy.id == str(val_uuid), Policy.tenant_id == tenant_id).first()
         if pol:
             return pol
     except (ValueError, AttributeError):
         pass
-    return db.query(Policy).filter(Policy.policy_number == clean_id.upper()).first()
+    return db.query(Policy).filter(Policy.policy_number == clean_id.upper(), Policy.tenant_id == tenant_id).first()
 
 
 def _adjuster_dict(a: Adjuster) -> Dict[str, Any]:
@@ -177,7 +177,7 @@ async def import_policies_csv(
     Import policies from a CSV file.
     Upserts policy details. For existing policies, NEVER overwrites customer_id or linked_at.
     """
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(
@@ -257,7 +257,7 @@ async def import_policies_csv(
         if phone:
             clean_phone = "".join(filter(str.isdigit, phone))
 
-        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num).first()
+        existing_policy = db.query(Policy).filter(Policy.policy_number == policy_num, Policy.tenant_id == admin.tenant_id).first()
 
         if existing_policy:
             # Update policy fields WITHOUT overwriting customer_id or linked_at
@@ -277,6 +277,7 @@ async def import_policies_csv(
             # Create new unlinked policy
             new_policy = Policy(
                 id=str(uuid.uuid4()),
+                tenant_id=str(admin.tenant_id or ""),
                 policy_number=policy_num,
                 customer_id=None,
                 policy_type=policy_type,
@@ -314,7 +315,7 @@ def add_adjuster(
     Create a new Adjuster user account and associated adjuster profile.
     Generates a secure temporary password for initial access.
     """
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
     try:
         clean_name = validate_full_name(payload.name)
@@ -332,7 +333,7 @@ def add_adjuster(
             detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}",
         )
 
-    existing_user = db.query(User).filter(User.email == clean_email).first()
+    existing_user = db.query(User).filter(User.email == clean_email, User.tenant_id == admin.tenant_id).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -345,6 +346,7 @@ def add_adjuster(
 
     new_user = User(
         id=user_id,
+        tenant_id=str(admin.tenant_id or ""),
         full_name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -354,6 +356,7 @@ def add_adjuster(
     )
     new_adjuster = Adjuster(
         id=user_id,
+        tenant_id=str(admin.tenant_id or ""),
         name=clean_name,
         email=clean_email,
         phone=clean_phone,
@@ -379,9 +382,9 @@ def list_adjusters(
     db: Session = Depends(get_db),
 ):
     """List all registered adjusters and their assigned claims count."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjusters = db.query(Adjuster).order_by(Adjuster.name.asc()).all()
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == admin.tenant_id).order_by(Adjuster.name.asc()).all()
     return [_adjuster_dict(a) for a in adjusters]
 
 
@@ -392,9 +395,10 @@ def get_adjuster(
     db: Session = Depends(get_db),
 ):
     """Retrieve details of a single adjuster."""
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = get_adjuster_or_404(db, adjuster_id)
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
+    if not adjuster: raise HTTPException(status_code=404, detail="Adjuster not found.")
     return _adjuster_dict(adjuster)
 
 
@@ -409,16 +413,16 @@ def update_adjuster(
     Update an adjuster's information (name, email, phone, specialization, active status).
     Synchronizes the corresponding User account.
     """
-    _require_admin(request, db)
+    admin = _require_admin(request, db)
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Adjuster not found.",
         )
 
-    user = db.query(User).filter(User.id == adjuster_id).first()
+    user = db.query(User).filter(User.id == adjuster_id, User.tenant_id == admin.tenant_id).first()
 
     if payload.name is not None:
         try:
@@ -433,7 +437,7 @@ def update_adjuster(
         try:
             clean_email = validate_email(payload.email)
             if clean_email != adjuster.email:
-                existing = db.query(User).filter(User.email == clean_email, User.id != adjuster_id).first()
+                existing = db.query(User).filter(User.email == clean_email, User.id != adjuster_id, User.tenant_id == admin.tenant_id).first()
                 if existing:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -682,7 +686,7 @@ def update_policy(
     """Update existing policy details safely."""
     _require_admin(request, db)
 
-    policy = _find_policy(db, policy_id_or_number)
+    policy = _find_policy(db, policy_id_or_number, str(admin.tenant_id or ""))
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
