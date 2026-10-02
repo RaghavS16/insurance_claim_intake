@@ -159,6 +159,8 @@ class VoiceSessionManager:
                 db.close()
 
             self._active_call_by_ticket[ticket_id] = call_id
+            if self.events.redis is not None:
+                await self.events.redis.set(f"voice:active:{ticket_id}", call_id, ex=settings.MAX_VOICE_SESSION_SECONDS + 60)
 
         await self.events.publish(
             ticket_id,
@@ -171,6 +173,17 @@ class VoiceSessionManager:
             ),
         )
         return True
+
+    async def active_call(self, ticket_id: str) -> str | None:
+        if self.events.redis is not None:
+            try:
+                value = await self.events.redis.get(f"voice:active:{ticket_id}")
+                if value:
+                    return str(value)
+            except Exception:
+                logger.exception("Voice active-session lookup failed.")
+        async with self._lock:
+            return self._active_call_by_ticket.get(ticket_id)
 
     async def attach(
         self,
@@ -277,6 +290,13 @@ class VoiceSessionManager:
             self._tasks.pop(call_id, None)
             if self._active_call_by_ticket.get(ticket_id) == call_id:
                 self._active_call_by_ticket.pop(ticket_id, None)
+            if self.events.redis is not None:
+                try:
+                    key = f"voice:active:{ticket_id}"
+                    script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+                    await self.events.redis.eval(script, 1, key, call_id)
+                except Exception:
+                    logger.debug("Failed to clear distributed voice session registry.", exc_info=True)
 
             await self._release_lock(ticket_id, call_id)
             await self.events.publish(
