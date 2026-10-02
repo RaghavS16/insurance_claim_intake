@@ -102,16 +102,17 @@ async def retrieve(
     jurisdiction: str | None = None,
 ):
     try:
-        items = await asyncio.to_thread(
-            search,
-            query=q,
+        async with tenant_ai_guard(str(user.tenant_id or ""), operation="rag_search"):
+            items = await asyncio.to_thread(
+                search,
+                query=q,
             insurance_type=insurance_type,
             document_types=[document_type] if document_type else None,
             policy_number=policy_number,
             incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
             tenant_id=str(user.tenant_id or ""),
-            jurisdiction=jurisdiction,
-        )
+                jurisdiction=jurisdiction,
+            )
         return {"items": items, "query": q}
     except Exception as exc:
         logger.exception("Knowledge search failed: %s", exc)
