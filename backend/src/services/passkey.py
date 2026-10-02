@@ -98,6 +98,7 @@ def registration_options(db: Session, user: User) -> dict[str, Any]:
     if AuthenticatorSelectionCriteria is not None and ResidentKeyRequirement is not None:
         kwargs["authenticator_selection"] = AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
         )
     options = generate_registration_options(**kwargs)
     row = _challenge_row(db, user=user, purpose="registration", challenge=challenge)
