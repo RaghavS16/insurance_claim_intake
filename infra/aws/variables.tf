@@ -91,3 +91,63 @@ variable "voice_sticky_cookie_duration_seconds" {
   type    = number
   default = 1800
 }
+
+variable "container_image" {
+  type = string
+
+  validation {
+    condition     = length(trimspace(var.container_image)) > 0
+    error_message = "container_image must point to an immutable published backend image."
+  }
+}
+
+variable "app_cpu" {
+  type    = number
+  default = 2048
+}
+
+variable "app_memory" {
+  type    = number
+  default = 4096
+}
+
+variable "app_desired_count" {
+  type    = number
+  default = 2
+}
+
+variable "app_min_running_tasks" {
+  type    = number
+  default = 2
+}
+
+variable "ecs_cpu_architecture" {
+  type    = string
+  default = "X86_64"
+
+  validation {
+    condition     = contains(["X86_64", "ARM64"], var.ecs_cpu_architecture)
+    error_message = "ecs_cpu_architecture must be X86_64 or ARM64."
+  }
+}
+
+variable "app_environment" {
+  type    = map(string)
+  default = {}
+}
+
+variable "secret_environment" {
+  type    = map(string)
+  sensitive = true
+  default = {}
+}
+
+variable "alb_5xx_alarm_threshold" {
+  type    = number
+  default = 5
+}
+
+variable "ecs_cpu_alarm_threshold" {
+  type    = number
+  default = 80
+}
