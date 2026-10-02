@@ -17,6 +17,12 @@ resource "aws_lb_target_group" "api" {
   deregistration_delay = 30
   tags                 = local.tags
 
+  stickiness {
+    type            = "app_cookie"
+    cookie_name     = var.voice_sticky_cookie_name
+    cookie_duration = var.voice_sticky_cookie_duration_seconds
+  }
+
   health_check {
     path                = var.health_path
     matcher             = "200"
