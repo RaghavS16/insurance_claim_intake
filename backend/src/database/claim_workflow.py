@@ -68,7 +68,7 @@ def assign_claim(db: Session, claim: Claim, actor_user_id: str | None = None) ->
         reason="specialization_then_load",
     ))
     db.add(ClaimAuditEvent(
-        claim_id=claim.id, actor_user_id=actor_user_id, event_type="assigned",
+        tenant_id=str(claim.tenant_id), claim_id=claim.id, actor_user_id=actor_user_id, event_type="assigned",
         new_value_json={"adjuster_id": chosen.id, "reason": "specialization_then_load"},
     ))
     enqueue(
