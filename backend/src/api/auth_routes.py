@@ -496,6 +496,11 @@ def mfa_enable(payload: MFASetupVerifyRequest, current_user: User = Depends(get_
             code_hash=hash_recovery_code(recovery_code),
         ))
     current_user.session_version = int(current_user.session_version or 1) + 1
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == current_user.id,
+        RefreshToken.tenant_id == current_user.tenant_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
     db.commit()
     return {"mfa_enabled": True, "recovery_codes": recovery_codes}
 
@@ -512,6 +517,11 @@ def mfa_disable(current_user: User = Depends(get_current_user), db: Session = De
         MFARecoveryCode.consumed.is_(False),
     ).update({MFARecoveryCode.consumed: True}, synchronize_session=False)
     current_user.session_version = int(current_user.session_version or 1) + 1
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == current_user.id,
+        RefreshToken.tenant_id == current_user.tenant_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
     db.commit()
     return {"mfa_enabled": False}
 
@@ -545,6 +555,43 @@ def verify_mfa(payload: MFAVerifyRequest, request: Request, db: Session = Depend
     return _auth_response(user, refresh)
 
 
+@router.post("/mfa/recover")
+def mfa_recover(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Complete MFA using a one-time recovery code."""
+    enforce_rate_limit(request, action="mfa_recover", max_requests=5, window_seconds=60)
+    token = str(payload.get("challenge_token") or "").strip()
+    recovery_code = str(payload.get("recovery_code") or "").strip()
+    if not token or not recovery_code:
+        raise HTTPException(status_code=400, detail="MFA challenge and recovery code are required.")
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    challenge = db.query(MFAChallenge).filter(
+        MFAChallenge.challenge_token_hash == digest,
+    ).with_for_update().first()
+    now = datetime.now(timezone.utc)
+    if not challenge or challenge.consumed or challenge.expires_at <= now:
+        raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge.")
+    user = db.query(User).filter(
+        User.id == challenge.user_id,
+        User.tenant_id == challenge.tenant_id,
+        User.status == "active",
+    ).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid MFA challenge.")
+    codes = db.query(MFARecoveryCode).filter(
+        MFARecoveryCode.user_id == user.id,
+        MFARecoveryCode.tenant_id == user.tenant_id,
+        MFARecoveryCode.consumed.is_(False),
+    ).with_for_update().all()
+    match = next((code for code in codes if verify_recovery_hash(recovery_code, code.code_hash)), None)
+    if not match:
+        raise HTTPException(status_code=401, detail="Invalid recovery code.")
+    match.consumed = True
+    challenge.consumed = True
+    refresh = _issue_refresh_token(db, user)
+    db.commit()
+    return _auth_response(user, refresh)
+
+
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
     """
@@ -560,7 +607,20 @@ def logout(request: Request, db: Session = Depends(get_db)):
             jti = payload.get("jti") or token
             exp_ts = payload.get("exp")
             exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
-            db.add(RevokedToken(token_jti=jti, user_id=payload.get("sub"), expires_at=exp_dt))
+            user_id = str(payload.get("sub") or "")
+            user = db.query(User).filter(User.id == user_id, User.tenant_id.is_not(None)).first()
+            db.add(RevokedToken(
+                token_jti=jti,
+                user_id=user_id or None,
+                tenant_id=str(user.tenant_id) if user else None,
+                expires_at=exp_dt,
+            ))
+            if user:
+                db.query(RefreshToken).filter(
+                    RefreshToken.user_id == user.id,
+                    RefreshToken.tenant_id == user.tenant_id,
+                    RefreshToken.revoked_at.is_(None),
+                ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
             db.commit()
         except Exception:
             db.rollback()
