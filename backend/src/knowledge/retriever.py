@@ -78,6 +78,8 @@ class KnowledgeRetriever:
                         insurance_type=insurance_type,
                         document_types=["regulation", "guideline", "claim_requirement"],
                         incident_date=incident_date,
+                        tenant_id=tenant_id,
+                        jurisdiction=jurisdiction,
                     ),
                     "authoritative": True,
                     "planning_model": "policy_manifest",
