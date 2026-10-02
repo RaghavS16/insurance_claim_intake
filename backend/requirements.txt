@@ -9,7 +9,7 @@ python-multipart>=0.0.9
 pydantic>=2.5.0
 pydantic-settings>=2.0.3
 bcrypt>=4.1.2
-PyJWT>=2.8.0
+PyJWT>=2.15.1
 
 # Database & Persistence
 sqlalchemy>=2.0.23
