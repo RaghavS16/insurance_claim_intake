@@ -15,6 +15,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Fresh databases created by 0000 already contain the current schema.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql" and bind.execute(sa.text("SELECT to_regclass('public.schema_baseline')")).scalar():
+        return
     op.create_table(
         "password_reset_otps",
         sa.Column("id", sa.String(), primary_key=True),
