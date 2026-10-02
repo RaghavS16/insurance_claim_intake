@@ -469,6 +469,7 @@ def update_adjuster(
         adjuster.is_active = payload.is_active  # type: ignore[assignment]
         if user:
             user.status = "active" if payload.is_active else "inactive"  # type: ignore[assignment]
+            user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
 
     db_commit_or_500(db, logger, "Failed to update adjuster.", f"Failed to update adjuster {adjuster_id}")
     db.refresh(adjuster)
