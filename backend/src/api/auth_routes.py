@@ -24,6 +24,7 @@ from src.utils.validators import validate_email, validate_password_strength, val
 from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, send_otp_email
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
+from src.api.deps import get_current_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
@@ -422,7 +423,7 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
     user_id = token_payload.get("sub")
     otp_id = token_payload.get("otp_id")
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == user_id, User.tenant_id.is_not(None)).first()
     if not user or not getattr(user, "tenant_id", None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid reset token.")
 
@@ -435,6 +436,11 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
     user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id,
+        RefreshToken.tenant_id == user.tenant_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
     # Revoke the reset token so it cannot be used again
     revoke_token(payload.reset_token)
 
