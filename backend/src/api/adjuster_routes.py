@@ -562,7 +562,7 @@ class EvidenceRequestCreate(BaseModel):
     request_text: str = Field(..., min_length=5, max_length=4000)
 
 def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id).order_by(ClaimEvidence.created_at.desc()).first()
+    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id).order_by(ClaimEvidence.created_at.desc()).first()
     return {
         "id": str(row.id),
         "claim_id": str(row.claim_id),
@@ -591,6 +591,7 @@ def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user
         transition_claim(db, c, "pending_evidence", str(user.id), "adjuster requested additional evidence")
     db.add(ClaimAuditEvent(
         claim_id=str(c.id),
+        tenant_id=str(c.tenant_id or ""),
         tenant_id=str(c.tenant_id or ""), actor_user_id=str(user.id), event_type="evidence_requested",
         new_value_json={"request_id": str(row.id), "request_text": row.request_text}, reason=row.request_text
     ))
