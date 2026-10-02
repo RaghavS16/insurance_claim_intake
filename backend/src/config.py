@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     PASSKEY_RP_NAME: str = "InsureClaim AI"
     PASSKEY_ORIGIN: str = "http://localhost:3000"
     PASSKEY_REQUIRE_USER_VERIFICATION: bool = True
-    PRIVILEGED_PASSKEY_REQUIRED: bool = True
+    PRIVILEGED_PASSKEY_REQUIRED: bool = False
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -170,6 +170,7 @@ class Settings(BaseSettings):
     def ai_allowed_models_list(self) -> List[str]:
         return [item.strip() for item in self.AI_ALLOWED_MODELS.split(",") if item.strip()]
 
+    @property
     def allowed_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()] or ["http://localhost:3000"]
 
