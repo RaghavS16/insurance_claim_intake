@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v1/adjuster", tags=["Adjuster"])
 # Shared dependency for endpoints using Depends(); also used by _resolve_adjuster below.
 _guard = require_role(["ADJUSTER", "ADMIN"])
 
-def _auto_assign_pending(claims:list[Claim], db:Session):
+def _auto_assign_pending(claims:list[Claim], db:Session, tenant_id: str | None = None):
     changed=False
     for c in claims:
         state=dict(c.pipeline_state or {})
@@ -41,9 +41,9 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
         if not readiness.get("ready"):
             continue
         spec=(c.insurance_type or "").lower()
-        a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+        a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == tenant_id or Adjuster.tenant_id.is_not(None), Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if not a:
-            a=db.query(Adjuster).filter(Adjuster.is_active==True).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
+            a=db.query(Adjuster).filter(Adjuster.is_active==True, Adjuster.tenant_id == user.tenant_id).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
         if a:
             a.claims_assigned=(a.claims_assigned or 0)+1
             db.add(ClaimAssignment(claim_id=c.id, adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
