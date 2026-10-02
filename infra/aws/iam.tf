@@ -22,31 +22,32 @@ resource "aws_iam_role_policy" "app" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
-        Resource = "${aws_s3_bucket.evidence.arn}/claims/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "${aws_s3_bucket.evidence.arn}/knowledge/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
-        Resource = aws_kms_key.data.arn
-      },
-      ]
-      dynamic "Statement" {
-        for_each = length(var.secrets_manager_secret_arns) > 0 ? [1] : []
-        content = {
+    Statement = concat(
+      [
+        {
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+          Resource = "${aws_s3_bucket.evidence.arn}/claims/*"
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = "${aws_s3_bucket.evidence.arn}/knowledge/*"
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
+          Resource = aws_kms_key.data.arn
+        }
+      ],
+      length(var.secrets_manager_secret_arns) > 0 ? [
+        {
           Effect   = "Allow"
           Action   = ["secretsmanager:GetSecretValue"]
           Resource = var.secrets_manager_secret_arns
         }
-      }
+      ] : []
+    )
   })
 }
 
