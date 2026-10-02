@@ -6,11 +6,12 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from src.api.deps import get_current_user
 from src.config import settings
-from src.database.models import Claim, User
+from src.database.models import Claim, User, VoiceSession
 from src.database.session import SessionLocal, get_db
 from src.utils.production_security import authenticate_token
 from src.utils.authorization import enforce_claim_ownership
@@ -59,12 +60,22 @@ async def create_realtime_session(
             detail="A voice session is already active for this claim.",
         )
 
-    return {
+    response = JSONResponse({
         "call_id": call_id,
         "ticket_id": ticket_id,
         "provider": "pipecat_local",
         "transport": "small_webrtc",
-    }
+        "worker_id": settings.VOICE_WORKER_ID,
+    })
+    response.set_cookie(
+        settings.VOICE_STICKY_COOKIE_NAME,
+        settings.VOICE_WORKER_ID,
+        httponly=True,
+        secure=settings.ENVIRONMENT in {"production", "staging"},
+        samesite="lax",
+        max_age=settings.MAX_VOICE_SESSION_SECONDS + 60,
+    )
+    return response
 
 
 @router.post("/realtime/offer/{call_id}")
@@ -97,11 +108,23 @@ async def create_realtime_offer(
         raise HTTPException(status_code=400, detail="Only WebRTC offer SDP is accepted.")
 
     _validate_claim_access(db, ticket_id, current_user)
+    worker_cookie = request.cookies.get(settings.VOICE_STICKY_COOKIE_NAME)
+    if worker_cookie and worker_cookie != settings.VOICE_WORKER_ID:
+        raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
+    session_row = db.query(VoiceSession).filter(
+        VoiceSession.call_id == call_id,
+        VoiceSession.tenant_id == str(current_user.tenant_id or ""),
+    ).first()
+    if not session_row:
+        raise HTTPException(status_code=404, detail="Voice session not found.")
+    if session_row.worker_id != settings.VOICE_WORKER_ID:
+        raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
     active_call = await voice_session_manager.active_call(ticket_id)
     if active_call != call_id:
         raise HTTPException(status_code=409, detail="Voice session is not active.")
 
     connection = SmallWebRTCConnection(
+        ice_servers=settings.voice_ice_servers_list,
         connection_timeout_secs=settings.VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS,
     )
     try:
@@ -115,6 +138,7 @@ async def create_realtime_offer(
             ticket_id=ticket_id,
             user_id=str(current_user.id),
             connection=connection,
+            tenant_id=str(current_user.tenant_id or ""),
         )
         return {
             "sdp": answer["sdp"],
@@ -203,7 +227,7 @@ async def close_voice_session(
     db: Session = Depends(get_db),
 ):
     _validate_claim_access(db, ticket_id, current_user)
-    active = voice_session_manager._active_call_by_ticket.get(ticket_id)
+    active = await voice_session_manager.active_call(ticket_id)
     if active:
         await voice_session_manager.close(active)
     return {"status": "closed"}
