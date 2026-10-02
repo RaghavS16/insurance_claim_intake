@@ -674,6 +674,16 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
         new_value_json={"decision": payload.decision, "approved_amount": payload.approved_amount},
         reason=payload.rationale,
     ))
+    append_system_audit(
+        db,
+        tenant_id=str(claim.tenant_id or ""),
+        actor_user_id=str(current_user.id),
+        event_type="human_decision",
+        resource_type="claim",
+        resource_id=str(claim.id),
+        action="record_decision",
+        payload={"decision": payload.decision, "approved_amount": payload.approved_amount, "rationale_present": bool(payload.rationale)},
+    )
     db.commit()
     return {"decision_id": row.id, "claim_id": claim.ticket_id, "decision": payload.decision,
             "status": claim.status, "rationale": payload.rationale}
