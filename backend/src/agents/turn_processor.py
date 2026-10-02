@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from src.agents.graph import build_conversation_graph
 from src.database.models import Claim, ConversationTurn
 from src.database.hardening_models import ClaimSubmission, ClaimSubmissionConfirmation
+from src.services.audit import append_system_audit
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -273,6 +274,20 @@ async def process_claimant_turn(
                         f"{assigned.name}. You can track its progress from Track Claim."
                     )
                     result["message"] = result["next_question"]
+                    append_system_audit(
+                        db,
+                        tenant_id=str(locked.tenant_id or ""),
+                        actor_user_id=str(claim.claimant_id),
+                        event_type="claim_submission",
+                        resource_type="claim",
+                        resource_id=str(locked.id),
+                        action="submit_claim",
+                        payload={
+                            "ticket_id": locked.ticket_id,
+                            "adjuster_id": str(assigned.id),
+                            "state_version": int(locked.state_version or 1),
+                        },
+                    )
             except Exception as exc:
                 db.rollback()
                 logger.exception("Exactly-once claim submission failed")
