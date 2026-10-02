@@ -668,7 +668,7 @@ def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: S
 @router.get("/claims/{ticket_id}/audit")
 def get_claim_audit(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_adjuster(request, db)
-    claim = get_claim_or_404(db, ticket_id)
+    claim = get_claim_or_404(db, ticket_id, str(current_user.tenant_id))
     _ensure_assigned_adjuster(claim, current_user, db)
     rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id, ClaimAuditEvent.tenant_id == claim.tenant_id).order_by(ClaimAuditEvent.created_at.asc()).all()
     return [_format_audit_row(r) for r in rows]
