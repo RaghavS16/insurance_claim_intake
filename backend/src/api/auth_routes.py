@@ -290,7 +290,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     if settings.ENVIRONMENT not in ("development", "test"):
         recent = (
             db.query(PasswordResetOTP)
-            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
+            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
             .order_by(PasswordResetOTP.created_at.desc())
             .first()
         )
@@ -347,7 +347,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 
     record = (
         db.query(PasswordResetOTP)
-        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.consumed == False)  # noqa: E712
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
         .order_by(PasswordResetOTP.created_at.desc())
         .with_for_update()
         .first()
@@ -419,7 +419,8 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
             detail="This reset code has already been used or is no longer valid. Please restart the process.",
         )
 
-    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]\n    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
+    user.password_hash = get_password_hash(payload.new_password)  # type: ignore[assignment]
+    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     record.consumed = True  # type: ignore[assignment]
     revoke_token(payload.reset_token)
     db.query(RefreshToken).filter(RefreshToken.user_id == user.id, RefreshToken.tenant_id == user.tenant_id, RefreshToken.revoked_at.is_(None)).update({"revoked_at": datetime.now(timezone.utc)})
@@ -454,7 +455,21 @@ def logout(request: Request, db: Session = Depends(get_db)):
         except Exception:
             db.rollback()
 
-    return {"message": "Logged out successfully. Token has been revoked."}
+    raw_refresh = request.cookies.get("refresh_token")
+    if raw_refresh:
+        try:
+            refresh_row = db.query(RefreshToken).filter(
+                RefreshToken.token_hash == _refresh_hash(raw_refresh),
+                RefreshToken.revoked_at.is_(None),
+            ).with_for_update().first()
+            if refresh_row:
+                refresh_row.revoked_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:
+            db.rollback()
+    response = Response(content='{"message":"Logged out successfully."}', media_type="application/json")
+    response.delete_cookie("refresh_token", path="/api/v1/auth")
+    return response
 
 
 @router.post("/refresh")
