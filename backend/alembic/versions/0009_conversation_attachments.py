@@ -10,11 +10,17 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        "conversation_turns",
-        sa.Column("attachment", sa.JSON(), nullable=True),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "attachment" not in {column["name"] for column in inspector.get_columns("conversation_turns")}:
+        op.add_column(
+            "conversation_turns",
+            sa.Column("attachment", sa.JSON(), nullable=True),
+        )
 
 
 def downgrade():
-    op.drop_column("conversation_turns", "attachment")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "attachment" in {column["name"] for column in inspector.get_columns("conversation_turns")}:
+        op.drop_column("conversation_turns", "attachment")
