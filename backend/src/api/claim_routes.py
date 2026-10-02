@@ -139,7 +139,7 @@ def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int
     current_user = _resolve_user(request, db)
     claims = (
         db.query(Claim)
-        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id)
         .order_by(Claim.updated_at.desc())
         .offset(offset)
         .limit(limit)
@@ -203,7 +203,7 @@ def start_voice_session(request: Request, payload: Optional[VoiceSessionRequest]
     current_user = _resolve_user(request, db)
     resumable = (
         db.query(Claim)
-        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id)
         .filter(Claim.status.in_(["draft", "pending_confirmation"]))
         .order_by(Claim.updated_at.desc())
         .first()
@@ -259,7 +259,7 @@ def get_active_claim(request: Request, db: Session = Depends(get_db)):
 def track_claims(request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
     statuses = ["submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"]
-    claims = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.status.in_(statuses)).order_by(Claim.updated_at.desc()).all()
+    claims = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id, Claim.status.in_(statuses)).order_by(Claim.updated_at.desc()).all()
     items = []
     for claim in claims:
         payload = _claim_payload(claim)
@@ -863,6 +863,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     if verification_status == "VERIFIED":
         open_evidence_exceptions = db.query(ClaimException).filter(
             ClaimException.claim_id == claim.id,
+            ClaimException.tenant_id == claim.tenant_id,
             ClaimException.event_type.in_(["evidence_review_required", "evidence_conflict"]),
             ClaimException.status == "open",
         ).all()
