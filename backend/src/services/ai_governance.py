@@ -86,7 +86,9 @@ async def _reserve_budget(tenant_id: str, estimated_tokens: int) -> None:
     if redis_client is not None:
         try:
             current = await redis_client.incrby(key, int(estimated_tokens))
-            await redis_client.expire(key, 90000)
+            now = time.time()
+            seconds_until_reset = max(60, int(86400 - (now % 86400)))
+            await redis_client.expire(key, seconds_until_reset)
             if int(current) > limit:
                 await redis_client.decrby(key, int(estimated_tokens))
                 raise HTTPException(status_code=429, detail="AI daily token budget exceeded for this tenant.")
