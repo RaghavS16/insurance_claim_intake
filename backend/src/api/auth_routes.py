@@ -241,7 +241,7 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
         raise HTTPException(status_code=400, detail="Invalid email or verification code.")
     record = (
         db.query(PasswordResetOTP)
-        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.purpose == "email_verification", PasswordResetOTP.consumed == False)
         .order_by(PasswordResetOTP.created_at.desc())
         .with_for_update()
         .first()
