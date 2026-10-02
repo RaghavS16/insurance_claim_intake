@@ -211,6 +211,17 @@ class VoiceSessionManager:
             if call_id in self._tasks and not self._tasks[call_id].done():
                 raise RuntimeError("Voice session is already attached.")
 
+            db = SessionLocal()
+            try:
+                row = db.query(VoiceSession).filter(
+                    VoiceSession.call_id == call_id,
+                    VoiceSession.tenant_id == tenant_id,
+                ).first()
+                if not row or row.worker_id != settings.VOICE_WORKER_ID:
+                    raise RuntimeError("Voice session belongs to another worker.")
+            finally:
+                db.close()
+
             self._connections[call_id] = connection
             task = asyncio.create_task(
                 self._run(
