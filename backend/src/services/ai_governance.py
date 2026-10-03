@@ -118,6 +118,7 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
     lock_key = f"{tenant}:{operation}:concurrency"
     redis_client = await _redis_client()
     acquired = False
+    acquired_locally = False
     if redis_client is not None:
         try:
             lease = await redis_client.incr(lock_key)
@@ -137,6 +138,7 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
                 raise HTTPException(status_code=429, detail="AI concurrency limit reached for this tenant.")
             _local_concurrency[lock_key] = current + 1
             acquired = True
+            acquired_locally = True
 
     try:
         try:
@@ -148,13 +150,13 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
     finally:
         if not acquired:
             return
-        if settings.REDIS_URL:
+        if acquired_locally:
+            async with _local_locks[lock_key]:
+                _local_concurrency[lock_key] = max(0, _local_concurrency[lock_key] - 1)
+        elif settings.REDIS_URL:
             client = await _redis_client()
             if client is not None:
                 try:
                     await client.decr(lock_key)
                 finally:
                     await client.close()
-        else:
-            async with _local_locks[lock_key]:
-                _local_concurrency[lock_key] = max(0, _local_concurrency[lock_key] - 1)
