@@ -2,7 +2,7 @@ name: Supply Chain Security
 
 on:
   push:
-    branches: [production-grade-hardening-2026-10]
+    branches: [production-grade-hardening-2026-10, production-grade-UI-UX]
   pull_request:
     branches: [production-grade-hardening-2026-10]
   schedule:
@@ -36,7 +36,7 @@ jobs:
           ignore-unfixed: true
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
       - name: Upload SBOM
