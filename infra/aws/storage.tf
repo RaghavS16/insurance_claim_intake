@@ -110,7 +110,7 @@ resource "aws_s3_bucket_policy" "evidence" {
         Effect    = "Deny"
         Principal = "*"
         Action    = "s3:*"
-        Resource  = [
+        Resource = [
           aws_s3_bucket.evidence.arn,
           "${aws_s3_bucket.evidence.arn}/*"
         ]
@@ -122,11 +122,11 @@ resource "aws_s3_bucket_policy" "evidence" {
       },
       {
         Sid       = "DenyUnencryptedObjectUploads"
-        Effect          = "Deny"
-        Principal       = "*"
-        Action          = "s3:PutObject"
-        Resource        = "${aws_s3_bucket.evidence.arn}/*"
-        Condition       = {
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.evidence.arn}/*"
+        Condition = {
           StringNotEquals = {
             "s3:x-amz-server-side-encryption" = "aws:kms"
           }
