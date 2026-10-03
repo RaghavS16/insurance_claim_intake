@@ -102,8 +102,8 @@ resource "aws_s3_bucket_ownership_controls" "evidence" {
 resource "aws_s3_bucket_policy" "evidence" {
   bucket = aws_s3_bucket.evidence.id
 
-  policy    = jsonencode({
-    Version   = "2012-10-17"
+  policy = jsonencode({
+    Version = "2012-10-17"
     Statement = [
       {
         Sid       = "DenyInsecureTransport"
@@ -115,13 +115,13 @@ resource "aws_s3_bucket_policy" "evidence" {
           "${aws_s3_bucket.evidence.arn}/*"
         ]
         Condition = {
-          Bool      = {
+          Bool = {
             "aws:SecureTransport" = "false"
           }
         }
       },
       {
-        Sid             = "DenyUnencryptedObjectUploads"
+        Sid       = "DenyUnencryptedObjectUploads"
         Effect          = "Deny"
         Principal       = "*"
         Action          = "s3:PutObject"
