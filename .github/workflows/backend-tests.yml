@@ -121,6 +121,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build backend image
         run: docker build --pull -t insurance-claim-intake:${{ github.sha }} ./backend
+      - name: Verify runtime packaging versions
+        run: docker run --rm insurance-claim-intake:${{ github.sha }} python -c "import pip,setuptools,wheel,urllib3; print('pip',pip.__version__,'setuptools',setuptools.__version__,'wheel',wheel.__version__,'urllib3',urllib3.__version__)"
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
