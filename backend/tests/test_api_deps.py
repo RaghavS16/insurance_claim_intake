@@ -115,6 +115,14 @@ class TestGetClaimOr404:
             get_claim_or_404(db, "")
         assert exc.value.status_code == 404
 
+    def test_claim_helper_must_not_return_cross_tenant_claim(self):
+        from src.api.deps import get_claim_or_404
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = None
+        with pytest.raises(HTTPException) as exc:
+            get_claim_or_404(db, "CLAIM-CROSS-TENANT")
+        assert exc.value.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # get_adjuster_or_404
