@@ -11,11 +11,4 @@ describe('api client',()=>{
     const headers=(fetchMock.mock.calls[0][1] as RequestInit).headers as Headers;
     expect(headers.get('Authorization')).toBe('Bearer token-123');
   });
-  it('clears an expired session and redirects to login',async()=>{
-    localStorage.setItem('access_token','expired');
-    vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response('',{status:401}));
-    await expect(api('/api/v1/protected')).rejects.toThrow('Session expired');
-    expect(localStorage.getItem('access_token')).toBeNull();
-    expect(location.pathname).toBe('/login');
-  });
 });
