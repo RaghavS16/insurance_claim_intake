@@ -31,7 +31,7 @@ resource "aws_ecs_cluster_capacity_providers" "app" {
 }
 
 resource "aws_iam_role" "execution" {
-  name = local.name + "-execution-role"
+  name = `${local.name}-execution-role`
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -123,7 +123,7 @@ resource "aws_ecs_task_definition" "app" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
-            REDIS_URL                    = "rediss://" + aws_elasticache_replication_group.redis.primary_endpoint_address + ":6379/0"
+            REDIS_URL                    = `rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0`
             VOICE_PROVIDER              = "pipecat_local"
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
@@ -211,7 +211,7 @@ resource "aws_ecs_service" "app" {
 }
 
 resource "aws_ecs_task_definition" "outbox" {
-  family                   = local.name + "-outbox"
+  family                   = `${local.name}-outbox`
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = tostring(var.outbox_cpu)
@@ -235,7 +235,7 @@ resource "aws_ecs_task_definition" "outbox" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
-            REDIS_URL                    = "rediss://" + aws_elasticache_replication_group.redis.primary_endpoint_address + ":6379/0"
+            REDIS_URL                    = `rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0`
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
           },
@@ -275,7 +275,7 @@ resource "aws_ecs_task_definition" "outbox" {
 }
 
 resource "aws_ecs_service" "outbox" {
-  name                               = local.name + "-outbox"
+  name                               = `${local.name}-outbox`
   cluster                            = aws_ecs_cluster.app.id
   task_definition                    = aws_ecs_task_definition.outbox.arn
   desired_count                      = var.outbox_desired_count
