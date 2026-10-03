@@ -34,12 +34,12 @@ resource "aws_iam_role" "execution" {
   name = local.name + "-execution-role"
 
   assume_role_policy = jsonencode({
-    Version            = "2012-10-17"
-    Statement          = [
+    Version = "2012-10-17"
+    Statement = [
       {
-        Effect    = "Allow"
+        Effect = "Allow"
         Principal = {
-          Service   = "ecs-tasks.amazonaws.com"
+          Service = "ecs-tasks.amazonaws.com"
         }
         Action = "sts:AssumeRole"
       }
@@ -58,8 +58,8 @@ resource "aws_iam_role_policy" "execution_secrets" {
   count = length(var.secrets_manager_secret_arns) > 0 ? 1 : 0
   role  = aws_iam_role.execution.id
 
-  policy    = jsonencode({
-    Version   = "2012-10-17"
+  policy = jsonencode({
+    Version = "2012-10-17"
     Statement = [
       {
         Effect   = "Allow"
@@ -142,17 +142,17 @@ resource "aws_ecs_task_definition" "app" {
         }
       ]
 
-      logConfiguration      = {
-        logDriver             = "awslogs"
-        options               = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.aws_region
+          logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group = aws_cloudwatch_log_group.app.name
+          awslogs-region = var.aws_region
           awslogs-stream-prefix = "ecs"
         }
       }
 
       healthCheck = {
-        command     = [
+        command = [
           "CMD-SHELL",
           "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${var.app_container_port}${var.health_path}', timeout=3)\""
         ]
@@ -210,7 +210,6 @@ resource "aws_ecs_service" "app" {
   tags = local.tags
 }
 
-
 resource "aws_ecs_task_definition" "outbox" {
   family                   = local.name + "-outbox"
   network_mode             = "awsvpc"
@@ -254,11 +253,11 @@ resource "aws_ecs_task_definition" "outbox" {
         }
       ]
 
-      logConfiguration      = {
-        logDriver             = "awslogs"
-        options               = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.aws_region
+          logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group = aws_cloudwatch_log_group.app.name
+          awslogs-region = var.aws_region
           awslogs-stream-prefix = "outbox"
         }
       }
