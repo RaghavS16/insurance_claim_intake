@@ -199,4 +199,4 @@ jobs:
       - name: Production release gate
         run: |
           echo "Backend, voice, infrastructure, supply-chain, and DR gates passed."
-          echo "Frontend is intentionally deferred per the current hardening scope."
+          echo "Frontend is validated by dedicated frontend build and container workflows."
