@@ -58,6 +58,7 @@ jobs:
           os.environ["SECRET_KEY"]="test-secret-key-at-least-32-characters-long"
           os.environ["DATABASE_URL"]="postgresql://postgres:test@localhost:5432/insurance_claims"
           from src.database.models import Base
+          from src.database import hardening_models  # noqa: F401
           required = {
               "claims", "claim_assignments", "claim_requirements", "claim_evidence",
               "claim_submissions", "voice_sessions", "webauthn_credentials"
