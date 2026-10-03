@@ -32,6 +32,10 @@ aiohttp>=3.10.0,<4.0
 websockets>=14.0,<16.0
 numpy>=1.26.0
 
+# Packaging security: keep build/runtime packaging metadata above current Trivy fixes.
+wheel>=0.46.2
+jaraco.context>=6.1.0
+
 # Testing & Client Utilities
 pytest>=7.4.3
 pytest-asyncio>=1.4.0
