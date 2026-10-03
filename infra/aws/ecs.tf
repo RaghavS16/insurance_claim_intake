@@ -123,13 +123,13 @@ resource "aws_ecs_task_definition" "app" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
-            REDIS_URL = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+            REDIS_URL                   = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
             VOICE_PROVIDER              = "pipecat_local"
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
           },
           var.app_environment
-        ) : {
+          ) : {
           name  = key
           value = value
         }
@@ -142,11 +142,11 @@ resource "aws_ecs_task_definition" "app" {
         }
       ]
 
-          logConfiguration = {
+      logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group = aws_cloudwatch_log_group.app.name
-          awslogs-region = var.aws_region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.aws_region
           awslogs-stream-prefix = "ecs"
         }
       }
@@ -235,12 +235,12 @@ resource "aws_ecs_task_definition" "outbox" {
             S3_BUCKET                   = aws_s3_bucket.evidence.bucket
             S3_SERVER_SIDE_ENCRYPTION   = "aws:kms"
             S3_KMS_KEY_ID               = aws_kms_key.data.arn
-            REDIS_URL = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
+            REDIS_URL                   = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379/0"
             AI_ALLOW_LOCAL_FALLBACK     = "false"
             PRIVILEGED_PASSKEY_REQUIRED = "true"
           },
           var.app_environment
-        ) : {
+          ) : {
           name  = key
           value = value
         }
@@ -253,11 +253,11 @@ resource "aws_ecs_task_definition" "outbox" {
         }
       ]
 
-          logConfiguration = {
+      logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group = aws_cloudwatch_log_group.app.name
-          awslogs-region = var.aws_region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.aws_region
           awslogs-stream-prefix = "outbox"
         }
       }
