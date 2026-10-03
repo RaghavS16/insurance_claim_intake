@@ -11,16 +11,18 @@ from fastapi import HTTPException
 class TestEnforceClaimOwnership:
     """Tests for enforce_claim_ownership."""
 
-    def _make_claim(self, claimant_id=None, customer_id=None):
+    def _make_claim(self, claimant_id=None, customer_id=None, tenant_id="tenant-1"):
         claim = MagicMock()
         claim.claimant_id = claimant_id
         claim.customer_id = customer_id
+        claim.tenant_id = tenant_id
         return claim
 
-    def _make_user(self, uid="user-1", role="CLAIMANT"):
+    def _make_user(self, uid="user-1", role="CLAIMANT", tenant_id="tenant-1"):
         user = MagicMock()
         user.id = uid
         user.role = role
+        user.tenant_id = tenant_id
         return user
 
     def test_adjuster_bypasses_check(self):

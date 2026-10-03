@@ -42,6 +42,10 @@ def verify_policy_for_claim(
     if claim_policy != normalized_policy:
         result["reason"] = "claim_policy_mismatch"
         return result
+    is_confirmed = (state.get("confirmed") is True) or (getattr(candidate, "confirmed", None) is True)
+    if not is_confirmed:
+        result["reason"] = "claimant_confirmation_required"
+        return result
     policy = db.query(Policy).filter(
         Policy.policy_number == normalized_policy,
         Policy.tenant_id == getattr(candidate, "tenant_id", None),
@@ -52,7 +56,7 @@ def verify_policy_for_claim(
     if policy.customer_id is None:
         result["reason"] = "policy_not_linked"
         return result
-    if str(policy.customer_id) != claimant_user_id:
+    if policy.customer_id != claimant_user_id:
         result["reason"] = "ownership_mismatch"
         return result
     result["identity_verified"] = True
@@ -66,7 +70,7 @@ def verify_policy_for_claim(
         result["reason"] = "missing_event_date"
         return result
     try:
-        event_date = datetime.strptime(str(event_date_str), "%Y-%m-%d").date()
+        event_date = datetime.strptime(event_date_str, "%Y-%m-%d").date()
     except ValueError:
         result["reason"] = "invalid_event_date"
         return result

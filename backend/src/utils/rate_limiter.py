@@ -87,9 +87,9 @@ def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seco
     # token is present, use a stable token fingerprint; pre-auth routes fall back
     # to the source IP. Authenticated route handlers also set tenant/user context
     # on request.state, which is incorporated when available.
-    auth_header=request.headers.get("Authorization", "")
-    token_fp=""
-    if auth_header.lower().startswith("bearer "):
+    auth_header = request.headers.get("Authorization", "") or ""
+    token_fp = ""
+    if auth_header and auth_header.lower().startswith("bearer "):
         import hashlib
         token_fp=hashlib.sha256(auth_header[7:].strip().encode("utf-8")).hexdigest()[:24]
     user_id=str(getattr(request.state, "authenticated_user_id", "") or "")

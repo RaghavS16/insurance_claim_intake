@@ -32,6 +32,7 @@ def test_verify_evidence_never_accepts_low_confidence(monkeypatch):
     fake_llm.with_structured_output.return_value.invoke.return_value = FakeResult()
     monkeypatch.setattr("src.evidence.verifier.get_configured_llm", lambda: fake_llm)
     monkeypatch.setattr("src.evidence.verifier.extract_evidence_text", lambda *_: "Hospital Invoice\nInvoice No 123\nTotal 12000")
+    monkeypatch.setattr("src.evidence.verifier.enforce_document_limits", lambda *_: None)
 
     result = verify_evidence(
         content=b"%PDF-1.7 fake but sufficient for mocked extraction",
@@ -59,6 +60,7 @@ def test_verify_evidence_accepts_clear_high_confidence_match(monkeypatch):
     fake_llm.with_structured_output.return_value.invoke.return_value = FakeResult()
     monkeypatch.setattr("src.evidence.verifier.get_configured_llm", lambda: fake_llm)
     monkeypatch.setattr("src.evidence.verifier.extract_evidence_text", lambda *_: "Hospital Invoice\nInvoice No 123\nTotal 12000")
+    monkeypatch.setattr("src.evidence.verifier.enforce_document_limits", lambda *_: None)
 
     result = verify_evidence(
         content=b"%PDF-1.7 fake but sufficient for mocked extraction",

@@ -195,14 +195,15 @@ class TestAssignClaim:
         claim = self._make_claim()
         db = MagicMock()
 
-        call_count = [0]
         def execute_side_effect(stmt):
             mock_exec = MagicMock()
-            if call_count[0] == 0:
-                mock_exec.scalar_one_or_none.return_value = None  # no active assignment
-            else:
-                mock_exec.scalars.return_value = iter([])  # no adjusters
-            call_count[0] += 1
+            s = str(stmt).lower()
+            if "from claim_assignments" in s:
+                mock_exec.scalar_one_or_none.return_value = None
+            elif "from claims" in s:
+                mock_exec.scalar_one.return_value = claim
+            elif "from adjusters" in s:
+                mock_exec.scalars.return_value = []
             return mock_exec
 
         db.execute.side_effect = execute_side_effect
@@ -216,16 +217,15 @@ class TestAssignClaim:
         adj_health = self._make_adjuster("adj-2", specialization="health", claims_assigned=5)
 
         db = MagicMock()
-        call_count = [0]
         def execute_side_effect(stmt):
             mock_exec = MagicMock()
-            if call_count[0] == 0:
+            s = str(stmt).lower()
+            if "from claim_assignments" in s:
                 mock_exec.scalar_one_or_none.return_value = None
-            elif call_count[0] == 1:
-                mock_exec.scalars.return_value = iter([adj_motor, adj_health])
-            else:
-                mock_exec.return_value = None
-            call_count[0] += 1
+            elif "from claims" in s:
+                mock_exec.scalar_one.return_value = claim
+            elif "from adjusters" in s:
+                mock_exec.scalars.return_value = [adj_motor, adj_health]
             return mock_exec
 
         db.execute.side_effect = execute_side_effect
@@ -239,17 +239,15 @@ class TestAssignClaim:
         adj_low = self._make_adjuster("adj-2", specialization="health", claims_assigned=2)
 
         db = MagicMock()
-        call_count = [0]
         def execute_side_effect(stmt):
             mock_exec = MagicMock()
-            if call_count[0] == 0:
+            s = str(stmt).lower()
+            if "from claim_assignments" in s:
                 mock_exec.scalar_one_or_none.return_value = None
-            elif call_count[0] == 1:
-                # Sorted by claims_assigned asc, so adj_low comes first
-                mock_exec.scalars.return_value = iter([adj_low, adj_high])
-            else:
-                mock_exec.return_value = None
-            call_count[0] += 1
+            elif "from claims" in s:
+                mock_exec.scalar_one.return_value = claim
+            elif "from adjusters" in s:
+                mock_exec.scalars.return_value = [adj_low, adj_high]
             return mock_exec
 
         db.execute.side_effect = execute_side_effect
@@ -262,16 +260,15 @@ class TestAssignClaim:
         adj = self._make_adjuster("adj-1", specialization="motor")
 
         db = MagicMock()
-        call_count = [0]
         def execute_side_effect(stmt):
             mock_exec = MagicMock()
-            if call_count[0] == 0:
+            s = str(stmt).lower()
+            if "from claim_assignments" in s:
                 mock_exec.scalar_one_or_none.return_value = None
-            elif call_count[0] == 1:
-                mock_exec.scalars.return_value = iter([adj])
-            else:
-                mock_exec.return_value = None
-            call_count[0] += 1
+            elif "from claims" in s:
+                mock_exec.scalar_one.return_value = claim
+            elif "from adjusters" in s:
+                mock_exec.scalars.return_value = [adj]
             return mock_exec
 
         db.execute.side_effect = execute_side_effect

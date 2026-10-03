@@ -10,10 +10,12 @@ def build_readiness(
     policy_verification: dict[str, Any] | None,
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
+    claimant_confirmation: bool | None = None,
 ) -> dict[str, Any]:
     return calculate_readiness(
         requirements=requirements,
         policy_verification=policy_verification,
         evidence_rows=evidence_rows,
         exceptions=exceptions,
+        claimant_confirmation=claimant_confirmation,
     ).as_dict()

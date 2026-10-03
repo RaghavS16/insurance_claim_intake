@@ -7,7 +7,7 @@ db_commit_or_500 so that other route modules (admin_routes, policy_routes,
 claim_routes, adjuster_routes) can import from here instead of each
 defining their own boilerplate, eliminating circular import risks.
 """
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -67,6 +67,7 @@ def get_current_user(
     Production/staging environments strictly require a valid JWT bearer token.
     """
     token = None
+    payload: dict[str, Any] | None = None
     if credentials:
         token = credentials.credentials
 
@@ -138,25 +139,25 @@ def get_current_user(
         )
     if not getattr(user, "tenant_id", None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant membership is required.")
-    if str(user.status).lower() != "active":
+    if user.status.lower() != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
-    token_version = int(payload.get("sv", 1)) if token else 1
+    token_version = int(payload.get("sv", 1)) if (token and payload) else 1
     if token and token_version != int(getattr(user, "session_version", 1) or 1):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid.")
-    token_tenant = str(payload.get("tenant_id") or "") if token else str(user.tenant_id or "")
-    if token and token_tenant != str(user.tenant_id or ""):
+    token_tenant = str(payload.get("tenant_id") or "") if (token and payload) else (user.tenant_id or "")
+    if token and token_tenant != (user.tenant_id or ""):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session tenant context is no longer valid.")
-    request.state.authenticated_user_id = str(user.id)
-    request.state.authenticated_tenant_id = str(user.tenant_id or "")
-    request.state.auth_amr = list(payload.get("amr") or []) if token else []
+    request.state.authenticated_user_id = user.id
+    request.state.authenticated_tenant_id = user.tenant_id or ""
+    request.state.auth_amr = list(payload.get("amr") or []) if (token and payload) else []
     if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email verification is required.")
     if (
         settings.PRIVILEGED_PASSKEY_REQUIRED
-        and str(user.role).upper() in {"ADMIN", "ADJUSTER"}
+        and user.role.upper() in {"ADMIN", "ADJUSTER"}
         and not request.url.path.startswith("/api/v1/auth/passkey/")
     ):
-        amr = payload.get("amr", []) if token else []
+        amr = payload.get("amr", []) if (token and payload) else []
         if "webauthn" not in amr:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,7 +174,7 @@ def require_role(allowed_roles: List[str], *, require_phishing_resistant: bool =
     """Enforce role access and, for privileged roles, optional passkey authentication."""
 
     def dependency(
-        request: Request,
+        request: Request = cast(Request, None),
         current_user: User = Depends(get_current_user),
     ):
         if current_user.role not in allowed_roles:
@@ -181,11 +182,12 @@ def require_role(allowed_roles: List[str], *, require_phishing_resistant: bool =
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: Role '{current_user.role}' not permitted.",
             )
-        privileged = str(current_user.role).upper() in {"ADMIN", "ADJUSTER"}
+        privileged = current_user.role.upper() in {"ADMIN", "ADJUSTER"}
+        auth_amr = set(getattr(request.state, "auth_amr", []) or []) if (request and hasattr(request, "state")) else set()
         if (
             (require_phishing_resistant or (privileged and settings.PRIVILEGED_PASSKEY_REQUIRED))
             and privileged
-            and "webauthn" not in set(getattr(request.state, "auth_amr", []) or [])
+            and "webauthn" not in auth_amr
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -226,7 +228,7 @@ def resolve_bearer_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: Role '{user.role}' is not permitted.",
         )
-    privileged = str(user.role).upper() in {"ADMIN", "ADJUSTER"}
+    privileged = user.role.upper() in {"ADMIN", "ADJUSTER"}
     if (
         privileged
         and settings.PRIVILEGED_PASSKEY_REQUIRED

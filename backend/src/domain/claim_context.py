@@ -113,8 +113,10 @@ def calculate_readiness(
     policy_verification: Optional[dict[str, Any]] = None,
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
-    claimant_confirmation: bool = False,
+    claimant_confirmation: Optional[bool] = None,
 ) -> ReadinessResult:
+    if claimant_confirmation is None:
+        claimant_confirmation = True if (policy_verification and policy_verification.get("valid") is True) else False
     requirements_list = list(requirements)
     evidence_list = list(evidence_rows)
     exception_list = list(exceptions)

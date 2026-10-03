@@ -5,7 +5,7 @@ Handles user signup, login, logout, and profile retrieval.
 Extracted from the monolithic main.py for clean architectural separation.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 import hashlib
 import secrets
 import uuid
@@ -79,8 +79,8 @@ def _issue_refresh_token(db: Session, user: User, family_id: str | None = None, 
     """Create an opaque refresh token; only its SHA-256 hash is persisted."""
     raw = secrets.token_urlsafe(48)
     db.add(RefreshToken(
-        user_id=str(user.id),
-        tenant_id=str(user.tenant_id or ""),
+        user_id=user.id,
+        tenant_id=user.tenant_id or "",
         token_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         family_id=family_id or str(uuid.uuid4()),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
@@ -118,11 +118,12 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
 
 
 def _auth_response(user: User, refresh_token: str, *, amr: list[str] | None = None, mfa_authenticated: bool = False) -> dict:
+    sv = int(getattr(user, "session_version", 1) or 1)
     return {
-        "access_token": create_access_token(data={"sub": str(user.id), "tenant_id": str(user.tenant_id or ""), "role": user.role, "sv": user.session_version, "mfa": mfa_authenticated, "amr": amr or []}),
+        "access_token": create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": sv, "mfa": mfa_authenticated, "amr": amr or []}),
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": {"id": str(user.id), "full_name": user.full_name, "email": user.email, "role": user.role},
+        "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
     }
 
 
@@ -166,7 +167,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
     )
     db.add(new_user)
     db.flush()
-    db.add(TenantMembership(tenant_id=str(tenant.id), user_id=str(new_user.id), role="CLAIMANT", status="active"))
+    db.add(TenantMembership(tenant_id=tenant.id, user_id=new_user.id, role="CLAIMANT", status="active"))
 
     try:
         db.commit()
@@ -181,7 +182,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
 
     if settings.REQUIRE_EMAIL_VERIFICATION:
         verification_code = generate_otp()
-        db.add(PasswordResetOTP(user_id=new_user.id, tenant_id=str(tenant.id), otp_hash=hash_otp(verification_code), purpose="email_verification", expires_at=otp_expiry(), attempts=0, verified=False, consumed=False))
+        db.add(PasswordResetOTP(user_id=new_user.id, tenant_id=tenant.id, otp_hash=hash_otp(verification_code), purpose="email_verification", expires_at=otp_expiry(), attempts=0, verified=False, consumed=False))
         try:
             db.commit()
         except Exception:
@@ -189,7 +190,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             raise HTTPException(status_code=500, detail="Account verification setup failed.")
         send_otp_email(new_user.email, verification_code, full_name=new_user.full_name, purpose="email_verification")
     return {
-        "id": str(new_user.id),
+        "id": new_user.id,
         "full_name": new_user.full_name,
         "email": new_user.email,
         "phone": new_user.phone,
@@ -212,7 +213,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
 
     user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
-    if not user or not verify_password(payload.password, str(user.password_hash)):
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -231,20 +232,20 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
     if bool(getattr(user, "mfa_enabled", False) or getattr(user, "mfa_required", False)):
         raw_challenge = __import__("secrets").token_urlsafe(32)
-        challenge = MFAChallenge(user_id=str(user.id), tenant_id=str(user.tenant_id or ""), challenge_token_hash=hashlib.sha256(raw_challenge.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.MFA_CHALLENGE_EXPIRE_SECONDS))
+        challenge = MFAChallenge(user_id=user.id, tenant_id=user.tenant_id or "", challenge_token_hash=hashlib.sha256(raw_challenge.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.MFA_CHALLENGE_EXPIRE_SECONDS))
         db.add(challenge)
         db.commit()
         return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
     auth_context = {"mfa": False, "amr": ["pwd"]}
     refresh_token = _issue_refresh_token(db, user, auth_context=auth_context)
     db.commit()
-    access_token = create_access_token(data={"sub": str(user.id), "tenant_id": str(user.tenant_id or ""), "role": user.role, "sv": user.session_version, **auth_context})
+    access_token = create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": user.session_version, **auth_context})
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {
-            "id": str(user.id),
+            "id": user.id,
             "full_name": user.full_name,
             "email": user.email,
             "role": user.role,
@@ -330,7 +331,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     otp = generate_otp()
     record = PasswordResetOTP(
         user_id=user.id,
-        tenant_id=str(user.tenant_id or ""),
+        tenant_id=user.tenant_id or "",
         otp_hash=hash_otp(otp),
         expires_at=otp_expiry(),
         attempts=0,
@@ -403,7 +404,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
     db.commit()
 
     reset_token = create_access_token(
-        data={"sub": str(user.id), "purpose": "password_reset", "otp_id": str(record.id)},
+        data={"sub": user.id, "purpose": "password_reset", "otp_id": record.id},
         expires_delta=timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
     )
     return {"reset_token": reset_token, "message": "Code verified. Use this token to set a new password."}
@@ -586,7 +587,8 @@ def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Ses
         raise HTTPException(status_code=401, detail="Refresh token is required.")
     user, replacement = _rotate_refresh_token(db, raw)
     db.commit()
-    context = dict((db.query(RefreshToken).filter(RefreshToken.token_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()).first() or {}).auth_context_json or {"mfa": False, "amr": ["pwd"]})
+    old_row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()).first()
+    context: dict[str, Any] = dict((old_row.auth_context_json if old_row else None) or {"mfa": False, "amr": ["pwd"]})
     return _auth_response(user, replacement, amr=list(context.get("amr") or []), mfa_authenticated=bool(context.get("mfa")))
 
 
@@ -615,11 +617,11 @@ def mfa_enable(payload: MFASetupVerifyRequest, current_user: User = Depends(get_
     recovery_codes = new_recovery_codes()
     for recovery_code in recovery_codes:
         db.add(MFARecoveryCode(
-            user_id=str(current_user.id),
-            tenant_id=str(current_user.tenant_id or ""),
+            user_id=current_user.id,
+            tenant_id=current_user.tenant_id or "",
             code_hash=hash_recovery_code(recovery_code),
         ))
-    current_user.session_version = int(current_user.session_version or 1) + 1
+    current_user.session_version = (current_user.session_version or 1) + 1
     db.query(RefreshToken).filter(
         RefreshToken.user_id == current_user.id,
         RefreshToken.tenant_id == current_user.tenant_id,
@@ -640,7 +642,7 @@ def mfa_disable(current_user: User = Depends(get_current_user), db: Session = De
         MFARecoveryCode.tenant_id == current_user.tenant_id,
         MFARecoveryCode.consumed.is_(False),
     ).update({MFARecoveryCode.consumed: True}, synchronize_session=False)
-    current_user.session_version = int(current_user.session_version or 1) + 1
+    current_user.session_version = (current_user.session_version or 1) + 1
     db.query(RefreshToken).filter(
         RefreshToken.user_id == current_user.id,
         RefreshToken.tenant_id == current_user.tenant_id,

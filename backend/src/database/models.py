@@ -194,6 +194,7 @@ class PasswordResetOTP(Base):
     __tablename__ = "password_reset_otps"
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = _UUID(ForeignKey("users.id"), nullable=False)
+    otp_hash: Mapped[str] = mapped_column(String, nullable=False)
     purpose: Mapped[str] = mapped_column(String(40), nullable=False, default="password_reset")
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

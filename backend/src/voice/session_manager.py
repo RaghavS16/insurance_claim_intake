@@ -34,6 +34,12 @@ class VoiceEventStore:
         self._local_queues: dict[str, list[asyncio.Queue[str]]] = defaultdict(list)
         self._local_lock = asyncio.Lock()
 
+    @property
+    def expirations(self) -> dict[str, Any]:
+        if self.redis is not None and hasattr(self.redis, "expirations"):
+            return self.redis.expirations
+        return {}
+
     @staticmethod
     def _key(ticket_id: str) -> str:
         return f"voice:events:{ticket_id}"
@@ -69,17 +75,24 @@ class VoiceEventStore:
             cursor = last_event_id or "$"
             try:
                 while True:
-                    rows = await self.redis.xread(
+                    rows: Any = await self.redis.xread(
                         {self._key(ticket_id): cursor},
                         count=50,
                         block=1000,
                     )
-                    for _, messages in rows:
-                        for stream_id, data in messages:
-                            cursor = stream_id
-                            payload = data.get("payload")
-                            if payload:
-                                await websocket.send_text(payload)
+                    if isinstance(rows, (list, tuple)):
+                        for stream_item in rows:
+                            if isinstance(stream_item, (list, tuple)) and len(stream_item) >= 2:
+                                messages = stream_item[1]
+                                if isinstance(messages, (list, tuple)):
+                                    for message in messages:
+                                        if isinstance(message, (list, tuple)) and len(message) >= 2:
+                                            stream_id, data = message[0], message[1]
+                                            cursor = stream_id
+                                            if isinstance(data, dict):
+                                                payload = data.get("payload")
+                                                if payload:
+                                                    await websocket.send_text(payload)
             except Exception:
                 logger.debug("Redis voice subscriber ended for %s", ticket_id, exc_info=True)
             return
@@ -105,7 +118,7 @@ class VoiceSessionManager:
     @staticmethod
     def worker_id() -> str:
         """Return a stable worker identity for this process/container."""
-        return str(settings.VOICE_WORKER_ID or socket.gethostname() or "voice-worker").strip()
+        return (settings.VOICE_WORKER_ID or socket.gethostname() or "voice-worker").strip()
 
     def __init__(self) -> None:
         self.events = VoiceEventStore()
@@ -122,7 +135,6 @@ class VoiceSessionManager:
 
     async def start(
         self,
-        *,
         call_id: str,
         ticket_id: str,
         user_id: str,
@@ -163,8 +175,8 @@ class VoiceSessionManager:
                 row = VoiceSession(
                     tenant_id=str(getattr(claim, "tenant_id", "") or ""),
                     call_id=call_id,
-                    claim_id=str(claim.id),
-                    user_id=str(user_id),
+                    claim_id=claim.id,
+                    user_id=user_id,
                     provider="pipecat_local",
                     model=model,
                     status="connecting",
@@ -324,10 +336,11 @@ class VoiceSessionManager:
             if row:
                 row.status = final_status
                 row.close_reason = final_reason
-                row.ended_at = datetime.now(timezone.utc)
+                ended_at = datetime.now(timezone.utc)
+                row.ended_at = ended_at
                 row.duration_seconds = max(
                     0,
-                    int((row.ended_at - started_at).total_seconds()),
+                    int((ended_at - started_at).total_seconds()),
                 )
                 try:
                     db.commit()

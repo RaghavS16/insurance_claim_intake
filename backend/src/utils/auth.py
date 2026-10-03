@@ -58,6 +58,9 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
         "exp": int(expire.timestamp()),
         "iat": int(now.timestamp()),
     })
+    for k, v in list(to_encode.items()):
+        if isinstance(v, uuid.UUID):
+            to_encode[k] = str(v)
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 

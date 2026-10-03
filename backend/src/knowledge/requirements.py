@@ -37,6 +37,9 @@ def get_requirements_from_context(
     intake_channel: str = "insurer_web_portal",
     intake_started_at: str | None = None,
     claim_facts: dict[str, Any] | None = None,
+    tenant_id: str | None = None,
+    jurisdiction: str | None = None,
+    **kwargs: Any,
 ) -> list[dict]:
     """Dynamically determine follow-up information and evidence requirements from RAG documents."""
     if not policy_context and not regulatory_context:

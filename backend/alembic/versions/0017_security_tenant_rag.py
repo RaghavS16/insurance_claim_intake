@@ -173,7 +173,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         if_not_exists=True,
     )
-    op.create_unique_constraint("uq_system_audit_sequence", "system_audit_events", ["tenant_id", "sequence_no"])
+    bind = op.get_bind()
+    has_uq = bind.execute(sa.text("SELECT 1 FROM pg_constraint WHERE conname = 'uq_system_audit_sequence'")).scalar()
+    if not has_uq:
+        op.create_unique_constraint("uq_system_audit_sequence", "system_audit_events", ["tenant_id", "sequence_no"])
     op.create_index("ix_system_audit_tenant_created", "system_audit_events", ["tenant_id", "created_at"], if_not_exists=True)
 
     # New rows must have tenant context. Existing empty-string tenant values are

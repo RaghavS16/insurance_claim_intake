@@ -53,10 +53,13 @@ def test_pdf_page_limit_is_enforced_before_parser_work(monkeypatch):
     with pytest.raises(ValueError, match="maximum of 2 pages"):
         document_safety.enforce_document_limits(b"%PDF-fake", "claim.pdf")
 
+from typing import Any, cast
+
 def test_access_token_contains_tenant_and_actual_mfa_state():
     user = SimpleNamespace(id="user-123", tenant_id="tenant-123", role="CLAIMANT", full_name="Test User", email="test@example.com")
-    response = auth_routes._auth_response(user, "refresh-token-placeholder", amr=["pwd"], mfa_authenticated=False)
-    payload = llm_factory.jwt.decode(response["access_token"], config.settings.SECRET_KEY, algorithms=["HS256"])
+    response = auth_routes._auth_response(cast(Any, user), "refresh-token-placeholder", amr=["pwd"], mfa_authenticated=False)
+    import jwt
+    payload = jwt.decode(response["access_token"], config.settings.SECRET_KEY, algorithms=["HS256"])
     assert payload["tenant_id"] == "tenant-123"
     assert payload["mfa"] is False
     assert payload["amr"] == ["pwd"]
@@ -69,7 +72,7 @@ def test_llm_local_fallback_is_blocked_when_governance_disables_it(monkeypatch):
     def fallback():
         called["fallback"] = True
         return SimpleNamespace(invoke=lambda *_a, **_k: "fallback")
-    resilient = llm_factory.ResilientChatModel(BrokenModel(), fallback)
+    resilient = llm_factory.ResilientChatModel(cast(Any, BrokenModel()), cast(Any, fallback))
     monkeypatch.setattr(config.settings, "AI_ALLOW_LOCAL_FALLBACK", False)
     with pytest.raises(RuntimeError):
         resilient.invoke("hello")
@@ -83,9 +86,9 @@ def test_voice_event_text_is_bounded(monkeypatch):
 def test_outbox_exhaustion_moves_to_dead_letter(monkeypatch):
     row = SimpleNamespace(attempts=0, status="pending", next_attempt_at=None, processed_at=None, last_error=None)
     monkeypatch.setattr(config.settings, "OUTBOX_MAX_ATTEMPTS", 2)
-    outbox.mark_retry(row, RuntimeError("temporary"))
+    outbox.mark_retry(cast(Any, row), RuntimeError("temporary"))
     assert row.attempts == 1 and row.status == "pending"
-    outbox.mark_retry(row, RuntimeError("temporary"))
+    outbox.mark_retry(cast(Any, row), RuntimeError("temporary"))
     assert row.attempts == 2
     assert row.status == "dead_letter"
     assert row.processed_at is not None

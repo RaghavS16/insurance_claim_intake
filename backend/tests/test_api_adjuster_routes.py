@@ -12,17 +12,19 @@ from src.api.adjuster_routes import _can_access_claim, _ensure_assigned_adjuster
 
 
 class TestCanAccessClaim:
-    def _make_claim(self, assigned_adjuster_id=None):
+    def _make_claim(self, assigned_adjuster_id=None, tenant_id="tenant-1"):
         c = MagicMock(spec=Claim)
         c.id = "claim-uuid-1"
+        c.tenant_id = tenant_id
         c.pipeline_state = {"assigned_adjuster_id": assigned_adjuster_id} if assigned_adjuster_id else {}
         return c
 
-    def _make_user(self, uid="adj-1", email="adj@example.com", role="ADJUSTER"):
+    def _make_user(self, uid="adj-1", email="adj@example.com", role="ADJUSTER", tenant_id="tenant-1"):
         u = MagicMock(spec=User)
         u.id = uid
         u.email = email
         u.role = role
+        u.tenant_id = tenant_id
         return u
 
     def test_admin_always_can_access(self):
@@ -95,6 +97,7 @@ class TestEnsureAssignedAdjuster:
         adj = MagicMock(spec=Adjuster)
         adj.id = "adj-fallback"
         db.query.return_value.first.return_value = adj
+        db.query.return_value.filter.return_value.first.return_value = adj
         result = _ensure_assigned_adjuster(c, u, db)
         assert result.id == "adj-fallback"
 
