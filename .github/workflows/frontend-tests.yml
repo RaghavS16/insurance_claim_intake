@@ -8,8 +8,6 @@ on:
   push:
     branches:
       - main
-      - "refactor/pipecat-voice-migration"
-      - "fix/**"
       - "production-grade-hardening-**"
     paths:
       - "frontend/**"
