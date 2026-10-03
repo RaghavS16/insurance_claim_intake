@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from src.knowledge.store import ingest_document, search
 from src.utils.upload_limits import read_limited
 from src.utils.clamav import scan_bytes
+from src.services.ai_governance import tenant_ai_guard
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,8 @@ async def retrieve(
                 jurisdiction=jurisdiction,
             )
         return {"items": items, "query": q}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Knowledge search failed: %s", exc)
         raise HTTPException(status_code=502, detail="Knowledge retrieval is temporarily unavailable.")
