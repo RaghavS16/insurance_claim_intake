@@ -14,6 +14,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m pip install --no-cache-dir --upgrade "wheel>=0.46.2" "jaraco.context>=6.1.0" \
     && apt-get purge -y --auto-remove gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
