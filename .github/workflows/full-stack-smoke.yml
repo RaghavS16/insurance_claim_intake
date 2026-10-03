@@ -37,7 +37,7 @@ jobs:
           VOICE_ICE_SERVERS=turn:turn.example.invalid:3478
           PRIVILEGED_PASSKEY_REQUIRED=true
           PASSKEY_RP_ID=localhost
-          PASSKEY_ORIGIN=http://localhost:3000
+          PASSKEY_ORIGIN=https://localhost:3000
           S3_BUCKET=ci-test-bucket
           S3_KMS_KEY_ID=ci-test-kms-key
           REQUIRE_EMAIL_VERIFICATION=false
