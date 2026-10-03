@@ -29,3 +29,24 @@ def test_recovery_codes_are_one_way_hashes():
     assert digest != code
     assert verify_recovery_hash(code,digest)
     assert not verify_recovery_hash("WRONG",digest)
+
+
+def test_active_claim_query_is_tenant_scoped(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from src.api import claim_routes
+
+    user = SimpleNamespace(id="user-a", tenant_id="tenant-a", role="CLAIMANT")
+    query = MagicMock()
+    query.filter.return_value = query
+    query.order_by.return_value = query
+    query.first.return_value = None
+    db = MagicMock()
+    db.query.return_value = query
+    monkeypatch.setattr(claim_routes, "_resolve_user", lambda request, db: user)
+
+    claim_routes.get_active_claim(SimpleNamespace(), db)
+
+    first_filter = query.filter.call_args_list[0].args
+    rendered = " ".join(str(item) for item in first_filter)
+    assert "claims.tenant_id" in rendered
