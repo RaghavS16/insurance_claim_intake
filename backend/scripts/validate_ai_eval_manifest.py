@@ -28,8 +28,8 @@ for item in cases:
     if not isinstance(item, dict):
         raise SystemExit("Every regression case must be an object")
     if not str(item.get("input") or "").strip():
-        raise SystemExit(f"Case {item.get("id")} has no input")
+        raise SystemExit(f"Case {item.get('id')} has no input")
     if not isinstance(item.get("properties"), list) or not item["properties"]:
-        raise SystemExit(f"Case {item.get("id")} must declare expected properties")
+        raise SystemExit(f"Case {item.get('id')} must declare expected properties")
 
 print(f"AI evaluation manifest valid: {len(cases)} cases, version {data['manifest_version']}")
