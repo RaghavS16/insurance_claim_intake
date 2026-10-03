@@ -15,7 +15,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir --upgrade "pip>=26.2.0" "setuptools>=83.0.0" "wheel>=0.46.2" "jaraco.context>=6.1.0" "urllib3>=2.8.0" \
-    && python -m pip install --no-cache-dir --upgrade --no-deps "setuptools>=83.0.0" "urllib3>=2.8.0" \
+    && python -m pip uninstall -y pip setuptools wheel \
     && apt-get purge -y --auto-remove gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
