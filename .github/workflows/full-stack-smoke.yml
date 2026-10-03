@@ -45,19 +45,24 @@ jobs:
           VITE_API_BASE_URL=http://localhost:8000
           EOF
 
-      - name: Build and start core application
+      - name: Build and start dependencies
         run: |
-          docker compose --env-file .env.ci up -d --build postgres redis migrate clamav backend frontend
+          docker compose --env-file .env.ci up -d --build postgres redis clamav migrate
 
-      - name: Wait for backend health
+      - name: Start backend with diagnostics
         run: |
+          docker compose --env-file .env.ci up -d --build backend
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/health; then exit 0; fi
             sleep 5
           done
           docker compose --env-file .env.ci ps
-          docker compose --env-file .env.ci logs --tail=200 backend migrate
+          docker compose --env-file .env.ci logs --tail=300 backend migrate
           exit 1
+
+      - name: Start frontend
+        run: |
+          docker compose --env-file .env.ci up -d --build frontend
 
       - name: Verify frontend serves SPA
         run: |
