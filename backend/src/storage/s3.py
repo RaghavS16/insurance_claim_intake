@@ -76,6 +76,17 @@ def get_bytes(key:str)->bytes:
             return p.read_bytes()
         raise
 
+def delete_bytes(key: str) -> None:
+    """Delete one private object after a successful durable handoff."""
+    key = _safe_key(key)
+    if settings.S3_BUCKET:
+        _client().delete_object(Bucket=settings.S3_BUCKET, Key=key)
+        return
+    path = Path(key)
+    if path.exists() and path.is_file():
+        path.unlink()
+
+
 def presigned_get(key:str,expires:int|None=None)->str:
     ttl=expires if expires is not None else settings.S3_PRESIGNED_URL_EXPIRE_SECONDS
     ttl=max(60,min(ttl,3600))
