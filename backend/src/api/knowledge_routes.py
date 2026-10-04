@@ -11,6 +11,9 @@ from src.knowledge.store import ingest_document, search
 from src.utils.upload_limits import read_limited
 from src.utils.clamav import scan_bytes
 from src.services.ai_governance import tenant_ai_guard
+from src.services.outbox import enqueue
+from src.database.hardening_models import OutboxEvent
+from src.storage.s3 import put_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -72,25 +75,54 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=413, detail="Knowledge document is too large.") from exc
     try:
-        return await asyncio.to_thread(
-            ingest_document,
-            content=raw,
+        staged = await asyncio.to_thread(
+            put_bytes,
+            clean,
+            prefix="knowledge-ingest",
             filename=file.filename,
-            document_type=document_type,
-            insurance_type=insurance_type,
-            policy_number=policy_number,
-            effective_from=effective_from,
-            effective_to=effective_to,
-            policy_version=policy_version,
-            uploaded_by=str(user.id),
-            tenant_id=str(user.tenant_id or ""),
-            jurisdiction=jurisdiction,
+            content_type=file.content_type or "application/octet-stream",
+            metadata={"tenant_id": str(user.tenant_id or ""), "uploaded_by": str(user.id), "ingestion_status": "pending"},
         )
+        db = next(get_db())
+        try:
+            event = enqueue(
+                db,
+                event_type="knowledge.ingest",
+                aggregate_type="knowledge_document",
+                aggregate_id=staged["key"],
+                payload={
+                    "key": staged["key"],
+                    "filename": file.filename,
+                    "document_type": document_type,
+                    "insurance_type": insurance_type,
+                    "policy_number": policy_number,
+                    "effective_from": effective_from,
+                    "effective_to": effective_to,
+                    "policy_version": policy_version,
+                    "uploaded_by": str(user.id),
+                    "tenant_id": str(user.tenant_id or ""),
+                    "jurisdiction": jurisdiction,
+                },
+                tenant_id=str(user.tenant_id or ""),
+                idempotency_key=f"knowledge-ingest:{staged['key']}",
+            )
+            db.commit()
+            return {"status": "queued", "job_id": str(event.id), "source_name": file.filename}
+        finally:
+            db.close()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Knowledge document upload failed for '%s': %s", file.filename, exc)
-        raise HTTPException(status_code=502, detail="Knowledge indexing is temporarily unavailable.")
+        logger.exception("Knowledge document staging failed for '%s': %s", file.filename, exc)
+        raise HTTPException(status_code=502, detail="Knowledge ingestion could not be queued.")
+
+@router.get("/ingestion/{job_id}")
+def ingestion_status(job_id: str, user: User = Depends(require_role(["ADJUSTER", "ADMIN"])), db: Session = Depends(get_db)):
+    event = db.query(OutboxEvent).filter(OutboxEvent.id == job_id, OutboxEvent.tenant_id == str(user.tenant_id or "")).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
+    return {"job_id": str(event.id), "status": event.status, "attempts": int(event.attempts or 0), "error": event.last_error}
+
 
 @router.get("/search")
 async def retrieve(
