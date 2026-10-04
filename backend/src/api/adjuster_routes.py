@@ -162,6 +162,97 @@ def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
         "created_at": r.created_at.isoformat(),
     }
 
+@router.get("/dashboard")
+def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
+    """Return adjuster-facing operational metrics and recent assigned claims."""
+    tenant_id = str(user.tenant_id or "")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
+
+    total_filed = db.query(func.count(Claim.id)).filter(
+        Claim.tenant_id == tenant_id,
+        Claim.status.in_({
+            "submitted", "pending_adjuster", "assigned", "under_review",
+            "pending_evidence", "approved", "partially_approved",
+            "rejected", "escalated", "closed",
+        }),
+    ).scalar() or 0
+    total_users = db.query(func.count(User.id)).filter(
+        User.tenant_id == tenant_id,
+        User.status == "active",
+    ).scalar() or 0
+
+    assigned_ids: set[str] = set()
+    if user.role == "ADJUSTER":
+        adjuster = db.query(Adjuster).filter(
+            Adjuster.user_id == user.id,
+            Adjuster.tenant_id == tenant_id,
+            Adjuster.is_active.is_(True),
+        ).first()
+        if not adjuster:
+            raise HTTPException(status_code=403, detail="Active adjuster profile not found.")
+        assigned_ids = {
+            str(row.claim_id)
+            for row in db.query(ClaimAssignment).filter(
+                ClaimAssignment.adjuster_id == adjuster.id,
+                ClaimAssignment.tenant_id == tenant_id,
+                ClaimAssignment.is_active.is_(True),
+            ).all()
+        }
+    else:
+        adjuster = None
+
+    assigned_query = db.query(Claim).filter(Claim.tenant_id == tenant_id)
+    if user.role == "ADJUSTER":
+        if not assigned_ids:
+            assigned_claims = []
+        else:
+            assigned_claims = assigned_query.filter(Claim.id.in_(assigned_ids)).order_by(Claim.updated_at.desc()).all()
+    else:
+        assigned_claims = assigned_query.filter(
+            Claim.status.in_({
+                "submitted", "pending_adjuster", "assigned", "under_review",
+                "pending_evidence", "escalated",
+            }),
+        ).order_by(Claim.updated_at.desc()).all()
+
+    now = datetime.now(timezone.utc)
+    sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
+    active_statuses = {"submitted", "pending_adjuster", "assigned", "under_review", "pending_evidence", "escalated"}
+    under_review = sum(1 for c in assigned_claims if c.status == "under_review")
+    pending_evidence = sum(1 for c in assigned_claims if c.status == "pending_evidence")
+    sla_breached = 0
+    for c in assigned_claims:
+        updated = c.updated_at
+        updated_utc = updated.replace(tzinfo=timezone.utc) if updated and updated.tzinfo is None else updated
+        age_hours = (now - updated_utc).total_seconds() / 3600.0 if updated_utc else 0.0
+        if age_hours > sla_hours and c.status in active_statuses:
+            sla_breached += 1
+
+    recent = []
+    for c in assigned_claims[:8]:
+        item = _item(c, db=db)
+        updated = c.updated_at
+        updated_utc = updated.replace(tzinfo=timezone.utc) if updated and updated.tzinfo is None else updated
+        age_hours = round(max(0.0, (now - updated_utc).total_seconds() / 3600.0), 2) if updated_utc else 0.0
+        item.update({
+            "age_hours": age_hours,
+            "sla_hours": sla_hours,
+            "sla_breached": age_hours > sla_hours and c.status in active_statuses,
+        })
+        recent.append(item)
+
+    return {
+        "total_filed_claims": int(total_filed),
+        "total_users": int(total_users),
+        "assigned_to_me": len(assigned_ids) if user.role == "ADJUSTER" else len(assigned_claims),
+        "under_review": under_review,
+        "pending_evidence": pending_evidence,
+        "sla_breached": sla_breached,
+        "queue_total": len(assigned_claims),
+        "recent_claims": recent,
+    }
+
 @router.get("/queue")
 def queue(status: str | None = None, user: User = Depends(_guard), db: Session = Depends(get_db)):
     """Return tenant-scoped claims with SLA/aging metadata."""
