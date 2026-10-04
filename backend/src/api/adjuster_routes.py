@@ -423,6 +423,9 @@ def update_claim(ticket_id: str, payload: ClaimUpdate, user: User = Depends(_gua
 @router.post("/claims/{ticket_id}/assign")
 def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
+    # Enforce the tenant boundary before reading or mutating assignment state.
+    if str(c.tenant_id or "") != str(user.tenant_id or ""):
+        raise HTTPException(status_code=404, detail="Claim not found.")
     active=db.query(ClaimAssignment).filter(ClaimAssignment.claim_id==c.id,ClaimAssignment.tenant_id==c.tenant_id,ClaimAssignment.is_active.is_(True)).first()
     if active:
         aa=db.query(Adjuster).filter(Adjuster.id==active.adjuster_id,Adjuster.tenant_id==c.tenant_id).first()
