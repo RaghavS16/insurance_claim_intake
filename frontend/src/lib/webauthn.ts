@@ -25,7 +25,7 @@ export function prepareCreationOptions(options: WebAuthnPublicKey): PublicKeyCre
       ...item,
       id: base64UrlToBuffer(item.id),
     })),
-  };
+  } as PublicKeyCredentialCreationOptions;
 }
 
 export function prepareRequestOptions(options: WebAuthnPublicKey): PublicKeyCredentialRequestOptions {
