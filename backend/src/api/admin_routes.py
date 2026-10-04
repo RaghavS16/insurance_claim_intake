@@ -179,30 +179,40 @@ async def import_policies_csv(
     """
     admin = _require_admin(request, db)
 
-    if not file.filename or not file.filename.endswith(".csv"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .csv files are supported.",
-        )
-
+    filename = (file.filename or "").strip()
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if suffix not in {"csv", "xlsx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .csv and .xlsx files are supported.")
     try:
-        contents = await file.read()
-        text_stream = io.StringIO(contents.decode("utf-8-sig"))
-        reader = csv.DictReader(text_stream)
+        contents = await file.read(10 * 1024 * 1024 + 1)
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Policy import file exceeds the 10 MB limit.")
+        if suffix == "csv":
+            text_stream = io.StringIO(contents.decode("utf-8-sig"))
+            reader = csv.DictReader(text_stream)
+            fieldnames = list(reader.fieldnames or [])
+            reader_rows = reader
+        else:
+            from openpyxl import load_workbook
+            workbook = load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
+            sheet = workbook.active
+            rows = sheet.iter_rows(values_only=True)
+            first_row = next(rows, None)
+            fieldnames = [str(value or "").strip() for value in (first_row or [])]
+            reader_rows = (
+                {fieldnames[i]: (values[i] if i < len(values) else "") for i in range(len(fieldnames))}
+                for values in rows
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read CSV file: {str(exc)}",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read policy import file: {str(exc)}")
 
-    if not reader.fieldnames:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="CSV file is empty or headers are missing.",
-        )
+    if not fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Policy import file is empty or headers are missing.")
 
     # Normalize header mapping
-    header_map = {name.strip().lower(): name for name in reader.fieldnames if name}
+    header_map = {name.strip().lower(): name for name in fieldnames if name}
     required_fields = ["policy_number", "policy_type", "coverage_amount", "deductible", "effective_date", "expiry_date"]
 
     for req in required_fields:
@@ -216,7 +226,7 @@ async def import_policies_csv(
     updated_count = 0
     errors: List[Dict[str, Any]] = []
 
-    for row_idx, raw_row in enumerate(reader, start=2):
+    for row_idx, raw_row in enumerate(reader_rows, start=2):
         row = {k.strip().lower(): v.strip() for k, v in raw_row.items() if k}
         policy_num = row.get("policy_number", "").upper()
 
