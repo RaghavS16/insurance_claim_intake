@@ -524,6 +524,9 @@ Return a valid JSON object with EXACTLY this structure:
   ],
   "uncertainties": [
     "Aspects that cannot yet be concluded with certainty"
+  ],
+  "citations": [
+    {"source_id": "retrieved-source-id", "claim": "Short statement this source supports"}
   ]
 }}
 CLAIM FACTS:
@@ -578,6 +581,25 @@ RETRIEVED POLICY/REGULATORY KNOWLEDGE:
         parsed.setdefault("decision_considerations", [])
         parsed.setdefault("recommended_next_steps", [])
         parsed.setdefault("uncertainties", [])
+        citations = parsed.get("citations")
+        if not isinstance(citations, list):
+            raise ValueError("Copilot report must include a citations array.")
+        valid_source_ids = {
+            str(row.get("chunk_id") or row.get("id") or row.get("document_id"))
+            for row in source_rows
+            if row.get("chunk_id") or row.get("id") or row.get("document_id")
+        }
+        normalized_citations = []
+        for citation in citations:
+            if not isinstance(citation, dict):
+                continue
+            source_id = str(citation.get("source_id") or "").strip()
+            claim = str(citation.get("claim") or "").strip()
+            if source_id and claim and source_id in valid_source_ids:
+                normalized_citations.append({"source_id": source_id, "claim": claim})
+        if source_rows and not normalized_citations:
+            raise ValueError("Copilot report citations do not reference retrieved authoritative sources.")
+        parsed["citations"] = normalized_citations
 
         state["copilot"] = parsed
         state["knowledge_sources"] = source_rows
