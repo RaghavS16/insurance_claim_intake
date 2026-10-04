@@ -7,8 +7,8 @@ from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, Clai
 from src.services.outbox import enqueue
 
 ALLOWED_TRANSITIONS = {
-    "draft": {"pending_confirmation", "pending_verification", "verified", "verification_failed", "escalated"},
-    "pending_confirmation": {"draft", "pending_verification", "verified", "verification_failed", "escalated"},
+    "draft": {"pending_confirmation", "pending_verification", "verified", "verification_failed", "escalated", "discarded"},
+    "pending_confirmation": {"draft", "pending_verification", "verified", "verification_failed", "escalated", "discarded"},
     "pending_verification": {"draft", "verified", "verification_failed", "escalated"},
     "verified": {"pending_evidence", "submitted", "assigned", "under_review", "escalated"},
     "pending_evidence": {"verified", "submitted", "assigned", "under_review", "approved", "partially_approved", "rejected", "escalated"},
