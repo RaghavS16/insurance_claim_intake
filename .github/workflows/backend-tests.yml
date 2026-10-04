@@ -192,9 +192,28 @@ jobs:
           name: postgres-dr-report-${{ github.sha }}
           path: /tmp/insurance_claims_dr_report.json
 
+  frontend-release-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test
+      - name: Production build
+        run: npm run build
+
   production-release-gate:
     runs-on: ubuntu-latest
-    needs: [static-and-unit, voice-webrtc, infrastructure-validation, supply-chain, dr-restore]
+    needs: [static-and-unit, voice-webrtc, infrastructure-validation, supply-chain, dr-restore, frontend-release-gate]
     steps:
       - name: Production release gate
         run: |
