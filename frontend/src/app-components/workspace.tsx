@@ -4,8 +4,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Activity, AlertTriangle, Bell, BookOpen, ChevronRight, CircleHelp, ClipboardList, Clock3, ExternalLink, FileCheck2, FilePlus2, Gauge, LayoutDashboard, LogOut, Menu, MessageCircle, Mic, Pencil, Plus, Search, Send, Settings, ShieldAlert, ShieldCheck, Sparkles, Trash2, Upload, UserRound, Users, X } from "lucide-react";
-import { api } from "@/src/lib/api";
-import { Badge, Button, Card, DataBadge, Empty, Metric, Page } from "@/src/app-components/ui";
+import { api } from "@/lib/api";
+import { Badge, Button, Card, DataBadge, Empty, Metric, Page } from "@/app-components/ui";
 
 type User={id:string;full_name?:string;email:string;role:"CLAIMANT"|"ADJUSTER"|"ADMIN";status?:string};
 type R=Record<string,any>;
