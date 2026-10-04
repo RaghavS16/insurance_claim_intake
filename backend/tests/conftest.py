@@ -24,6 +24,10 @@ def patch_settings(monkeypatch):
     monkeypatch.setattr(settings, "OTP_EXPIRY_MINUTES", 10)
     monkeypatch.setattr(settings, "SMTP_HOST", None)
     monkeypatch.setattr(settings, "REDIS_URL", None)
+    # Privileged passkey enforcement is a production security control. Unit tests
+    # that exercise business/route behavior use synthetic test authentication;
+    # dedicated passkey tests should opt in with a real WebAuthn auth context.
+    monkeypatch.setattr(settings, "PRIVILEGED_PASSKEY_REQUIRED", False)
 
 
 @pytest.fixture
