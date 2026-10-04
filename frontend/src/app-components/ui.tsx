@@ -1,3 +1,4 @@
+// Figma source: Flowa Community template; primary UI token #1A67FF, 12px card radius, 272px workspace sidebar.
 "use client";
 import type { ReactNode } from "react";
 import { CheckCircle2, CircleAlert, Clock3, FileCheck2, ShieldCheck } from "lucide-react";
