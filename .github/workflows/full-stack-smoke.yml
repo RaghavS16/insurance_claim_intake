@@ -42,7 +42,7 @@ jobs:
           S3_KMS_KEY_ID=ci-test-kms-key
           REQUIRE_EMAIL_VERIFICATION=false
           REQUIRE_MALWARE_SCAN=false
-          VITE_API_BASE_URL=http://localhost:8000
+          NEXT_PUBLIC_API_URL=http://localhost:8000
           EOF
 
       - name: Build and start dependencies
@@ -66,7 +66,7 @@ jobs:
 
       - name: Verify frontend serves SPA
         run: |
-          curl -fsS http://localhost:3000/ | grep -q '<div id="root"></div>'
+          curl -fsS http://localhost:3000/ | grep -Eq '<html|__next_f'
 
       - name: Verify backend OpenAPI
         run: |
