@@ -229,6 +229,8 @@ class Settings(BaseSettings):
                 raise RuntimeError("SQLite is not supported for production/staging.")
             if "DBpassword" in self.DATABASE_URL or "REPLACE_WITH" in self.DATABASE_URL:
                 raise RuntimeError("DATABASE_URL still contains a development/example credential.")
+            if not self.REDIS_URL or not self.REDIS_URL.strip():
+                raise RuntimeError("REDIS_URL is required in production/staging for distributed rate limiting and AI governance.")
         if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_MALWARE_SCAN and not self.CLAMAV_HOST:
