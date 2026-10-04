@@ -10,7 +10,7 @@ from src.database.hardening_models import OutboxEvent
 from src.database.models import Claim, User
 from src.database.session import SessionLocal
 from src.knowledge.store import ingest_document
-from src.storage.s3 import get_bytes
+from src.storage.s3 import get_bytes, delete_bytes
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -107,6 +107,7 @@ async def handle_knowledge_ingest(event: OutboxEvent) -> None:
         tenant_id=tenant_id,
         jurisdiction=payload.get("jurisdiction"),
     )
+    await asyncio.to_thread(delete_bytes, key)
 
 
 HANDLERS = {
