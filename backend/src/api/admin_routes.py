@@ -512,6 +512,9 @@ def reset_adjuster_password(
 
     temp_password = f"Adj!{secrets.token_urlsafe(8)}9#"
     user.password_hash = get_password_hash(temp_password)  # type: ignore[assignment]
+    # Invalidate every existing access/refresh session immediately. The next
+    # password or passkey authentication receives the incremented session version.
+    user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
 
     db_commit_or_500(
         db, logger,
