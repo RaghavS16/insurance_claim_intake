@@ -41,9 +41,9 @@ services:
       - --no-dtls
       - --fingerprint
       - --lt-cred-mech
-      - --realm=${TURN_REALM:?Set_TURN_REALM}
-      - --user=${TURN_USERNAME:?Set_TURN_USERNAME}:${TURN_PASSWORD:?Set_TURN_PASSWORD}
-      - --external-ip=${TURN_EXTERNAL_IP:?Set_TURN_EXTERNAL_IP}
+      - --realm=${TURN_REALM:-turn.invalid}
+      - --user=${TURN_USERNAME:-invalid}:${TURN_PASSWORD:-invalid}
+      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
       - --listening-port=3478
       - --min-port=49152
       - --max-port=49252
