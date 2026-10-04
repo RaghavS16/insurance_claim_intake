@@ -4,7 +4,7 @@ on:
   push:
     branches: [production-grade-hardening-2026-10, production-grade-UI-UX]
   pull_request:
-    branches: [production-grade-hardening-2026-10]
+    branches: [production-grade-hardening-2026-10, production-grade-UI-UX]
   schedule:
     - cron: "30 2 * * 1"
 
