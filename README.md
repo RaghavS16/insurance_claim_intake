@@ -60,3 +60,20 @@ Backend and supply-chain checks run separately in GitHub Actions. Full end-to-en
 Do not put secrets in the frontend. `NEXT_PUBLIC_API_URL` is public configuration and is embedded into the browser bundle. Backend secrets remain server-side environment variables.
 
 For realtime voice, configure the backend voice ICE/TURN settings and serve the frontend over HTTPS in production so browser microphone/WebRTC security requirements are satisfied.
+
+
+## Free-tier deployment
+
+The repository includes a zero-license-cost deployment path using Docker Compose and self-hosted/open-source runtime components.
+
+See [docs/deployment-free-tier.md](docs/deployment-free-tier.md).
+
+The guide covers Oracle Cloud Always Free, PostgreSQL/pgvector, Redis, ClamAV, Pipecat + local Whisper + Piper, HTTPS, TURN, backups and the production smoke test.
+
+## Knowledge ingestion
+
+Adjuster/admin knowledge uploads are queued through the transactional outbox. Upload returns a `job_id`; use `GET /api/v1/knowledge/ingestion/{job_id}` to check `pending`, `processed` or `dead_letter` status.
+
+## Policy bulk import
+
+Admin policy import accepts both CSV and XLSX files. Imports are tenant-scoped, schema-validated and preserve existing claimant linkage fields during upsert.
