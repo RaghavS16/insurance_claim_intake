@@ -26,7 +26,7 @@ jobs:
           context: ./frontend
           push: false
           build-args: |
-            VITE_API_BASE_URL=http://localhost:8000
+            NEXT_PUBLIC_API_URL=http://localhost:8000
           tags: insurance-claim-intake-frontend:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
