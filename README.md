@@ -4,12 +4,12 @@ This branch contains the authenticated insurance product application and its pro
 
 ## Frontend
 
-- React 19 + TypeScript + Vite
+- Next.js 16 + React 19 + TypeScript
 - TanStack Query for server state
-- React Router with role-aware protected routes
+- Next.js App Router with role-aware protected workspace
 - Vitest + Testing Library
-- Nginx production container with SPA fallback
-- Environment variable: `VITE_API_BASE_URL`
+- Standalone Next.js production container
+- Public runtime/build variable: `NEXT_PUBLIC_API_URL`
 
 ### Local development
 
@@ -23,7 +23,7 @@ npm run dev
 
 ### Production container
 
-Set `VITE_API_BASE_URL` to the public API origin and run:
+Set `NEXT_PUBLIC_API_URL` to the public API origin and run:
 
 ```bash
 docker compose build frontend
@@ -31,7 +31,7 @@ docker compose build frontend
 docker compose up -d
 ```
 
-The frontend is served on port 3000. The backend is on port 8000 by default.
+The Next.js frontend is served on port 3000. The backend is on port 8000 by default.
 
 ## Product roles
 
