@@ -137,7 +137,7 @@ Set:
 VOICE_TTS_BASE_URL=http://piper:5001/synthesize
 ```
 
-You must also configure a real STUN/TURN setup for browser WebRTC. The placeholder TURN values in `.env.example` are not deployable.
+You must also configure a real STUN/TURN setup for browser WebRTC. The repository includes an optional self-hosted Coturn profile for a Linux VM. Set `TURN_REALM`, `TURN_USERNAME`, `TURN_PASSWORD`, `TURN_EXTERNAL_IP` and `VOICE_ICE_SERVERS`, then start with `docker compose --profile turn up -d`. The Coturn profile uses host networking and UDP 3478 plus the configured relay port range; open those ports in the VM firewall. The placeholder values in `.env.example` are not deployable.
 
 For very small free-tier VMs, prefer a smaller Whisper model:
 
@@ -150,7 +150,7 @@ VOICE_STT_MODEL=Systran/faster-distil-whisper-small.en
 ```bash
 docker compose pull
 docker compose build
-docker compose up -d
+docker compose --profile turn up -d
 docker compose ps
 ```
 
