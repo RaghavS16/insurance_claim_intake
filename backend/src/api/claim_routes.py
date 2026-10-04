@@ -322,18 +322,23 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    if claim.status == "submitted":
-        raise HTTPException(status_code=400, detail="Submitted claims cannot be deleted.")
-    
-    # Delete associated conversation turns first
-    db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete()
-    db.delete(claim)
+    if current_user.role != "CLAIMANT":
+        raise HTTPException(status_code=403, detail="Only the claimant can discard a claim session.")
+    if claim.status not in {"draft", "pending_confirmation"}:
+        raise HTTPException(status_code=400, detail="Only an unsubmitted draft can be discarded.")
+
+    # Insurance records must remain durable. Discard is therefore a terminal
+    # domain transition rather than a hard delete of the claim or transcript.
     try:
+        transition_claim(db, claim, "discarded", current_user.id, "Claimant discarded unsubmitted draft.")
         db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete claim session.")
-    return {"message": f"Claim #{ticket_id} and history removed.", "success": True}
+        raise HTTPException(status_code=500, detail="Failed to discard claim session.")
+    return {"message": f"Claim #{ticket_id} was discarded.", "success": True}
 
 
 @router.get("/{ticket_id}")
