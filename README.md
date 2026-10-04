@@ -5,7 +5,6 @@ This branch contains the authenticated insurance product application and its pro
 ## Frontend
 
 - Next.js 16 + React 19 + TypeScript
-- TanStack Query for server state
 - Next.js App Router with role-aware protected workspace
 - Vitest + Testing Library
 - Standalone Next.js production container
@@ -46,9 +45,10 @@ Claims, adjuster management, policy inventory/import/lifecycle and system audit.
 
 ## Verification
 
-Frontend CI runs:
+Frontend CI runs lint, Vitest and the Next.js production build/container.
 
 ```bash
+npm run lint
 npm run test
 npm run build
 ```
