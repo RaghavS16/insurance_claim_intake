@@ -41,8 +41,9 @@ def put_bytes(content:bytes,*,prefix:str,filename:str,content_type:str|None=None
     try:
         if not settings.S3_BUCKET:
             raise RuntimeError("S3_BUCKET is not configured.")
-        extra: dict[str, Any] = {"ContentType": content_type or "application/octet-stream",
-                                 "ServerSideEncryption": settings.S3_SERVER_SIDE_ENCRYPTION}
+        extra: dict[str, Any] = {"ContentType": content_type or "application/octet-stream"}
+        if settings.S3_SERVER_SIDE_ENCRYPTION and not settings.S3_ENDPOINT_URL:
+            extra["ServerSideEncryption"] = settings.S3_SERVER_SIDE_ENCRYPTION
         if settings.S3_SERVER_SIDE_ENCRYPTION == "aws:kms":
             if not settings.S3_KMS_KEY_ID and settings.ENVIRONMENT in {"production", "staging"}:
                 raise RuntimeError("S3_KMS_KEY_ID is required for KMS-encrypted production objects.")
@@ -91,10 +92,12 @@ def presigned_put(*,prefix:str,filename:str,content_type:str="application/octet-
     ttl=max(60,min(ttl,3600))
     suffix=Path(filename).suffix.lower()
     key=f"{prefix.rstrip('/')}/{uuid.uuid4().hex}{suffix}"
-    url=_client().generate_presigned_url("put_object",Params={
-        "Bucket":settings.S3_BUCKET,"Key":key,"ContentType":content_type,
-        "ServerSideEncryption":settings.S3_SERVER_SIDE_ENCRYPTION,
-        **({"SSEKMSKeyId": settings.S3_KMS_KEY_ID} if settings.S3_KMS_KEY_ID else {}),},ExpiresIn=ttl)
+    params={"Bucket":settings.S3_BUCKET,"Key":key,"ContentType":content_type}
+    if settings.S3_SERVER_SIDE_ENCRYPTION and not settings.S3_ENDPOINT_URL:
+        params["ServerSideEncryption"] = settings.S3_SERVER_SIDE_ENCRYPTION
+        if settings.S3_KMS_KEY_ID:
+            params["SSEKMSKeyId"] = settings.S3_KMS_KEY_ID
+    url=_client().generate_presigned_url("put_object",Params=params,ExpiresIn=ttl)
     return {"bucket":settings.S3_BUCKET,"key":key,"url":url,"expires_in":ttl}
 
 
@@ -121,8 +124,8 @@ def promote_quarantined(source_key: str, *, ticket_id: str, filename: str, conte
             CopySource={"Bucket": settings.S3_BUCKET, "Key": source_key},
             Key=destination,
             ContentType=content_type or "application/octet-stream",
-            ServerSideEncryption=settings.S3_SERVER_SIDE_ENCRYPTION,
-            **({"SSEKMSKeyId": settings.S3_KMS_KEY_ID} if settings.S3_KMS_KEY_ID else {}),
+            **({"ServerSideEncryption": settings.S3_SERVER_SIDE_ENCRYPTION} if settings.S3_SERVER_SIDE_ENCRYPTION and not settings.S3_ENDPOINT_URL else {}),
+            **({"SSEKMSKeyId": settings.S3_KMS_KEY_ID} if settings.S3_KMS_KEY_ID and not settings.S3_ENDPOINT_URL else {}),
             MetadataDirective="REPLACE",
             Metadata={"quarantine": "false", "scan_status": "clean"},
         )
