@@ -19,3 +19,17 @@ def test_token_has_session_version():
     payload = verify_token(token)
     assert payload is not None
     assert payload["sv"] == 7
+
+
+def test_production_requires_redis():
+    from src.config import Settings
+    import pytest
+    cfg = Settings(
+        ENVIRONMENT="production",
+        DEBUG=False,
+        SECRET_KEY="x" * 48,
+        DATABASE_URL="postgresql://postgres:password@db.example/claims",
+        REDIS_URL=None,
+    )
+    with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+        cfg.validate_startup()
