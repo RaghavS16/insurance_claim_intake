@@ -22,6 +22,7 @@ ALLOWED_TRANSITIONS = {
     "escalated": {"under_review", "approved", "rejected", "closed"},
     "closed": set(),
     "verification_failed": {"draft", "pending_verification", "verified", "closed"},
+    "discarded": set(),
 }
 
 def transition_claim(db: Session, claim: Claim, new_status: str, actor_user_id: str | None = None, reason: str | None = None) -> Claim:
