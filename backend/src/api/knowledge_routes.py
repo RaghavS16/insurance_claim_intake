@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from src.api.deps import require_role
 from src.database.models import User, KnowledgeDocument
+from src.database.session import SessionLocal
 from src.database.session import get_db
 from sqlalchemy.orm import Session
 from src.knowledge.store import ingest_document, search
@@ -83,7 +84,7 @@ async def upload_document(
             content_type=file.content_type or "application/octet-stream",
             metadata={"tenant_id": str(user.tenant_id or ""), "uploaded_by": str(user.id), "ingestion_status": "pending"},
         )
-        db = next(get_db())
+        db = SessionLocal()
         try:
             event = enqueue(
                 db,
