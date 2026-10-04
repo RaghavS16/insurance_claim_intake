@@ -547,6 +547,7 @@ OPEN/RESPONDED ADJUSTER REQUESTS:
 {json.dumps(requests, ensure_ascii=False, default=str)}
 RETRIEVED POLICY/REGULATORY KNOWLEDGE:
 {json.dumps(source_rows, ensure_ascii=False, default=str)}
+CITATION RULE: For every policy/regulatory/coverage conclusion, include a citation object with source_id equal to one of the retrieved source chunk IDs (prefer chunk_id, then id/document_id) and a short claim describing what it supports. Never invent a source ID.
 """
 
     try:
