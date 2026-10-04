@@ -12,6 +12,9 @@ from src.database.claim_workflow import ALLOWED_TRANSITIONS, transition_claim, a
 # ALLOWED_TRANSITIONS map
 # ---------------------------------------------------------------------------
 class TestAllowedTransitions:
+    def test_draft_can_be_discarded(self):
+        assert "discarded" in ALLOWED_TRANSITIONS["draft"]
+
     def test_draft_can_move_to_pending_confirmation(self):
         assert "pending_confirmation" in ALLOWED_TRANSITIONS["draft"]
 
@@ -23,7 +26,7 @@ class TestAllowedTransitions:
             "draft", "pending_confirmation", "pending_verification", "verified",
             "pending_evidence", "submitted", "pending_adjuster", "assigned",
             "under_review", "approved", "partially_approved", "rejected",
-            "escalated", "closed", "verification_failed",
+            "escalated", "closed", "verification_failed", "discarded",
         }
         assert expected_states.issubset(set(ALLOWED_TRANSITIONS.keys()))
 
