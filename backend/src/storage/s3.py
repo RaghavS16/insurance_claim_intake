@@ -16,7 +16,7 @@ def _client():
         raise RuntimeError("S3_BUCKET is not configured.")
     kwargs: dict[str, Any] = {
         "region_name": settings.AWS_REGION,
-        "config": Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+        "config": Config(signature_version="s3v4", s3={"addressing_style": "path" if settings.S3_ENDPOINT_URL else "virtual"}),
     }
     if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
         kwargs["aws_access_key_id"] = settings.AWS_ACCESS_KEY_ID
