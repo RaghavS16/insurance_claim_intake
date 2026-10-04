@@ -30,6 +30,20 @@ services:
       timeout: 3s
       retries: 5
 
+  piper:
+    build: ./infra/voice/piper
+    restart: unless-stopped
+    environment:
+      HOME: /tmp
+    expose:
+      - "5001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',5001),2); s.close()\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   migrate:
     build: ./backend
     restart: "no"
@@ -97,6 +111,7 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       VAD_AGGRESSIVENESS: ${VAD_AGGRESSIVENESS:-1}
       VOICE_ICE_SERVERS: ${VOICE_ICE_SERVERS:?Set VOICE_ICE_SERVERS_with_TURN}
+      VOICE_TTS_BASE_URL: ${VOICE_TTS_BASE_URL:-http://piper:5001/synthesize}
       VOICE_EVENT_RETENTION_SECONDS: ${VOICE_EVENT_RETENTION_SECONDS:-86400}
       VOICE_WORKER_ID: ${VOICE_WORKER_ID:-backend-1}
       AI_ALLOWED_MODELS: ${AI_ALLOWED_MODELS:?Set_AI_ALLOWED_MODELS}
@@ -117,6 +132,8 @@ services:
       migrate:
         condition: service_completed_successfully
       clamav:
+        condition: service_healthy
+      piper:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)\""]
