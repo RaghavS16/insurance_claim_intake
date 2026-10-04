@@ -57,6 +57,6 @@ Backend and supply-chain checks run separately in GitHub Actions. Full end-to-en
 
 ## Important deployment configuration
 
-Do not put secrets in the frontend. `VITE_API_BASE_URL` is public configuration and is embedded into the static build. Backend secrets remain server-side environment variables.
+Do not put secrets in the frontend. `NEXT_PUBLIC_API_URL` is public configuration and is embedded into the browser bundle. Backend secrets remain server-side environment variables.
 
 For realtime voice, configure the backend voice ICE/TURN settings and serve the frontend over HTTPS in production so browser microphone/WebRTC security requirements are satisfied.
