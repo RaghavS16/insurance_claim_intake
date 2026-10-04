@@ -32,6 +32,12 @@ class TestCanAccessClaim:
         u = self._make_user(role="ADMIN")
         assert _can_access_claim(c, u) is True
 
+
+    def test_cross_tenant_adjuster_cannot_access_claim(self):
+        c = self._make_claim(assigned_adjuster_id="adj-1", tenant_id="tenant-A")
+        u = self._make_user(uid="adj-1", tenant_id="tenant-B")
+        assert _can_access_claim(c, u) is False
+
     def test_adjuster_with_assigned_id_in_pipeline_state(self):
         c = self._make_claim(assigned_adjuster_id="adj-1")
         u = self._make_user(uid="adj-1")
