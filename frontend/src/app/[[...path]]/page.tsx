@@ -1,3 +1,3 @@
 "use client";
-import { RouterView } from "@/src/app-components/workspace";
+import { RouterView } from "@/app-components/workspace";
 export default function Page(){return <RouterView/>}
