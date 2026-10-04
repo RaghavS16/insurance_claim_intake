@@ -137,9 +137,9 @@ variable "app_environment" {
 }
 
 variable "secret_environment" {
-  type    = map(string)
+  type      = map(string)
   sensitive = true
-  default = {}
+  default   = {}
 }
 
 variable "alb_5xx_alarm_threshold" {

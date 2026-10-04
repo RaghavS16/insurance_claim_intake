@@ -92,3 +92,52 @@ def test_outbox_exhaustion_moves_to_dead_letter(monkeypatch):
     assert row.attempts == 2
     assert row.status == "dead_letter"
     assert row.processed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_knowledge_search_preserves_ai_quota_http_errors(monkeypatch):
+    from fastapi import HTTPException
+    from src.api import knowledge_routes
+
+    class FailingGuard:
+        async def __aenter__(self):
+            raise HTTPException(status_code=429, detail="AI request quota exceeded")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        knowledge_routes,
+        "tenant_ai_guard",
+        lambda *args, **kwargs: FailingGuard(),
+    )
+    user = SimpleNamespace(id="adjuster-1", tenant_id="tenant-1", role="ADJUSTER")
+
+    with pytest.raises(HTTPException) as exc:
+        await knowledge_routes.retrieve(q="coverage", user=user)
+
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_local_ai_concurrency_is_released_when_redis_is_unavailable(monkeypatch):
+    from src.services import ai_governance
+
+    async def no_redis():
+        return None
+
+    monkeypatch.setattr(ai_governance, "_redis_client", no_redis)
+    tenant = "tenant-local-concurrency-regression"
+    key = f"{tenant}:claim_turn:concurrency"
+    ai_governance._local_concurrency.pop(key, None)
+    ai_governance._local_windows.pop(f"{tenant}:claim_turn", None)
+
+    async with ai_governance.tenant_ai_guard(
+        tenant,
+        operation="claim_turn",
+        max_requests=100,
+        max_concurrent=1,
+    ):
+        assert ai_governance._local_concurrency[key] == 1
+
+    assert ai_governance._local_concurrency[key] == 0

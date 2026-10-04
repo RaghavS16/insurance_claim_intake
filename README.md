@@ -1,0 +1,62 @@
+# Insurance Claim Intake — production-grade UI
+
+This branch contains the authenticated insurance product application and its production frontend.
+
+## Frontend
+
+- React 19 + TypeScript + Vite
+- TanStack Query for server state
+- React Router with role-aware protected routes
+- Vitest + Testing Library
+- Nginx production container with SPA fallback
+- Environment variable: `VITE_API_BASE_URL`
+
+### Local development
+
+```bash
+cd frontend
+npm install
+npm run test
+npm run build
+npm run dev
+```
+
+### Production container
+
+Set `VITE_API_BASE_URL` to the public API origin and run:
+
+```bash
+docker compose build frontend
+
+docker compose up -d
+```
+
+The frontend is served on port 3000. The backend is on port 8000 by default.
+
+## Product roles
+
+### Claimant
+Dashboard, policies, policy linking, claim intake, claims, tracking, evidence, voice intake, settings and authentication recovery/MFA.
+
+### Adjuster
+Claims queue, claim package/workbench, assignment, exceptions, evidence requests, decisions, notes, copilot, audit and knowledge search/management.
+
+### Admin
+Claims, adjuster management, policy inventory/import/lifecycle and system audit.
+
+## Verification
+
+Frontend CI runs:
+
+```bash
+npm run test
+npm run build
+```
+
+Backend and supply-chain checks run separately in GitHub Actions. Full end-to-end verification requires a configured environment containing PostgreSQL/pgvector, Redis, ClamAV, model credentials, S3 configuration when enabled, and production voice TURN/ICE configuration.
+
+## Important deployment configuration
+
+Do not put secrets in the frontend. `VITE_API_BASE_URL` is public configuration and is embedded into the static build. Backend secrets remain server-side environment variables.
+
+For realtime voice, configure the backend voice ICE/TURN settings and serve the frontend over HTTPS in production so browser microphone/WebRTC security requirements are satisfied.

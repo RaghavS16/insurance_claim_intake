@@ -1,5 +1,5 @@
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
-  alarm_name          = local.name + "-alb-5xx"
+  alarm_name          = "${local.name}-alb-5xx"
   alarm_description   = "ALB backend 5xx rate exceeded the configured threshold."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "HTTPCode_Target_5XX_Count"
@@ -10,7 +10,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
-  dimensions   = {
+  dimensions = {
     LoadBalancer = aws_lb.app.arn_suffix
     TargetGroup  = aws_lb_target_group.api.arn_suffix
   }
@@ -19,7 +19,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
-  alarm_name          = local.name + "-ecs-cpu"
+  alarm_name          = "${local.name}-ecs-cpu"
   alarm_description   = "Backend ECS service CPU is above the configured threshold."
   namespace           = "AWS/ECS"
   metric_name         = "CPUUtilization"
@@ -30,7 +30,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
-  dimensions  = {
+  dimensions = {
     ClusterName = aws_ecs_cluster.app.name
     ServiceName = aws_ecs_service.app.name
   }

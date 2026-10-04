@@ -1,0 +1,77 @@
+name: Full Stack Runtime Smoke
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "docker-compose.yml"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/full-stack-smoke.yml"
+  pull_request:
+    paths:
+      - "docker-compose.yml"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/full-stack-smoke.yml"
+
+jobs:
+  runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create CI production environment
+        run: |
+          cat > .env.ci <<'EOF'
+          POSTGRES_DB=insurance_claims
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=ci-postgres-password
+          REDIS_PASSWORD=ci-redis-password
+          SECRET_KEY=ci-secret-key-012345678901234567890123456789
+          ENVIRONMENT=production
+          DEBUG=false
+          HF_TOKEN=ci-token
+          AI_ALLOWED_MODELS=ci-test-model
+          VOICE_ICE_SERVERS=turn:turn.example.invalid:3478
+          PRIVILEGED_PASSKEY_REQUIRED=true
+          PASSKEY_RP_ID=localhost
+          PASSKEY_ORIGIN=https://localhost:3000
+          S3_BUCKET=ci-test-bucket
+          S3_KMS_KEY_ID=ci-test-kms-key
+          REQUIRE_EMAIL_VERIFICATION=false
+          REQUIRE_MALWARE_SCAN=false
+          VITE_API_BASE_URL=http://localhost:8000
+          EOF
+
+      - name: Build and start dependencies
+        run: |
+          docker compose --env-file .env.ci up -d --build postgres redis clamav migrate
+
+      - name: Start backend with diagnostics
+        run: |
+          docker compose --env-file .env.ci up -d --build backend
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then exit 0; fi
+            sleep 5
+          done
+          docker compose --env-file .env.ci ps
+          docker compose --env-file .env.ci logs --tail=300 backend migrate
+          exit 1
+
+      - name: Start frontend
+        run: |
+          docker compose --env-file .env.ci up -d --build frontend
+
+      - name: Verify frontend serves SPA
+        run: |
+          curl -fsS http://localhost:3000/ | grep -q '<div id="root"></div>'
+
+      - name: Verify backend OpenAPI
+        run: |
+          curl -fsS http://localhost:8000/openapi.json | grep -q 'openapi'
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --env-file .env.ci down -v

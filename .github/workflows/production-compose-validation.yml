@@ -1,0 +1,37 @@
+name: Production Compose Validation
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "docker-compose.yml"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/production-compose-validation.yml"
+  pull_request:
+    paths:
+      - "docker-compose.yml"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/production-compose-validation.yml"
+
+jobs:
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production compose interpolation
+        run: |
+          cat > .env.ci <<'EOF'
+          POSTGRES_PASSWORD=test-postgres-password
+          REDIS_PASSWORD=test-redis-password
+          SECRET_KEY=test-secret-key-at-least-32-characters-long
+          HF_TOKEN=test-token
+          VOICE_ICE_SERVERS=turn:turn.example.invalid:3478
+          AI_ALLOWED_MODELS=test-model
+          PASSKEY_RP_ID=localhost
+          PASSKEY_ORIGIN=http://localhost:3000
+          S3_KMS_KEY_ID=test-kms-key
+          EOF
+          docker compose --env-file .env.ci config --quiet
+          echo "docker compose configuration is valid"

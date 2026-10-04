@@ -58,6 +58,7 @@ jobs:
           os.environ["SECRET_KEY"]="test-secret-key-at-least-32-characters-long"
           os.environ["DATABASE_URL"]="postgresql://postgres:test@localhost:5432/insurance_claims"
           from src.database.models import Base
+          from src.database import hardening_models  # noqa: F401
           required = {
               "claims", "claim_assignments", "claim_requirements", "claim_evidence",
               "claim_submissions", "voice_sessions", "webauthn_credentials"
@@ -133,11 +134,17 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
+      - name: Enforce high and critical findings
+        run: |
+          test -f trivy.sarif
+          findings=$(jq '[.runs[].results[]?] | length' trivy.sarif)
+          echo "High/Critical findings: ${findings}"
+          test "${findings}" -eq 0
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
       - name: Upload SBOM
@@ -192,4 +199,4 @@ jobs:
       - name: Production release gate
         run: |
           echo "Backend, voice, infrastructure, supply-chain, and DR gates passed."
-          echo "Frontend is intentionally deferred per the current hardening scope."
+          echo "Frontend is validated by dedicated frontend build and container workflows."

@@ -2,7 +2,7 @@ name: Supply Chain Security
 
 on:
   push:
-    branches: [production-grade-hardening-2026-10]
+    branches: [production-grade-hardening-2026-10, production-grade-UI-UX]
   pull_request:
     branches: [production-grade-hardening-2026-10]
   schedule:
@@ -32,11 +32,17 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
+      - name: Enforce high and critical findings
+        run: |
+          test -f trivy.sarif
+          findings=$(jq '[.runs[].results[]?] | length' trivy.sarif)
+          echo "High/Critical findings: ${findings}"
+          test "${findings}" -eq 0
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
       - name: Upload SBOM

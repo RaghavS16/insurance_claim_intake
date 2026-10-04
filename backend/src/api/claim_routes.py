@@ -245,7 +245,7 @@ def get_active_claim(request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
     claim = (
         db.query(Claim)
-        .filter(Claim.claimant_id == current_user.id)
+        .filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id)
         .filter(Claim.status.in_(["draft", "pending_confirmation"]))
         .order_by(Claim.updated_at.desc())
         .first()
