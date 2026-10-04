@@ -30,6 +30,31 @@ services:
       timeout: 3s
       retries: 5
 
+  coturn:
+    image: coturn/coturn:4.6.3
+    profiles: ["turn"]
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${TURN_REALM:?Set_TURN_REALM}
+      - --user=${TURN_USERNAME:?Set_TURN_USERNAME}:${TURN_PASSWORD:?Set_TURN_PASSWORD}
+      - --external-ip=${TURN_EXTERNAL_IP:?Set_TURN_EXTERNAL_IP}
+      - --listening-port=3478
+      - --min-port=49152
+      - --max-port=49252
+      - --no-multicast-peers
+      - --no-loopback-peers
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_uclient -t -u ${TURN_USERNAME} -w ${TURN_PASSWORD} 127.0.0.1 3478 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   piper:
     build: ./infra/voice/piper
     restart: unless-stopped
