@@ -1,0 +1,12 @@
+"use client";
+import type { ReactNode } from "react";
+import { CheckCircle2, CircleAlert, Clock3, FileCheck2, ShieldCheck } from "lucide-react";
+
+export function Page({title,subtitle,actions,children,eyebrow}:{title:string;subtitle?:string;actions?:ReactNode;children:ReactNode;eyebrow?:string}){return <div><div className="page-head"><div><div className="eyebrow">{eyebrow||"Insurance workspace"}</div><h1 className="page-title">{title}</h1>{subtitle&&<p className="page-subtitle">{subtitle}</p>}</div>{actions&&<div className="actions">{actions}</div>}</div>{children}</div>}
+export function Card({children,className=""}:{children:ReactNode;className?:string}){return <section className={"card "+className}>{children}</section>}
+export function Metric({label,value,note,icon}:{label:string;value:ReactNode;note?:string;icon?:ReactNode}){return <Card className="metric"><div className="card-kicker" style={{display:"flex",alignItems:"center",gap:7}}>{icon}{label}</div><div className="metric-value">{value}</div>{note&&<div className="metric-trend">{note}</div>}</Card>}
+export function Badge({children,tone="neutral"}:{children:ReactNode;tone?:"neutral"|"success"|"warning"|"danger"|"info"}){return <span className={"badge "+tone}>{children}</span>}
+export function Empty({text}:{text:string}){return <div className="empty">{text}</div>}
+export function Button({children,className="",...props}:{children:ReactNode;className?:string}&React.ButtonHTMLAttributes<HTMLButtonElement>){return <button className={"btn "+className} {...props}>{children}</button>}
+export function DataBadge({status}:{status:string}){const s=(status||"unknown").toLowerCase();const tone=s.includes("approved")||s.includes("verified")||s.includes("resolved")||s.includes("complete")?"success":s.includes("reject")||s.includes("fail")?"danger":s.includes("pending")||s.includes("review")||s.includes("open")||s.includes("missing")?"warning":"info";return <Badge tone={tone}>{(status||"unknown").replaceAll("_"," ")}</Badge>}
+export function StatusIcon({status}:{status:string}){const s=(status||"").toLowerCase();if(["approved","verified","complete","resolved"].includes(s))return <CheckCircle2 size={14} color="var(--success)"/>;if(["pending","under_review","review","pending_evidence"].includes(s))return <Clock3 size={14} color="var(--warning)"/>;if(["rejected","failed","error"].includes(s))return <CircleAlert size={14} color="var(--danger)"/>;if(s.includes("policy"))return <ShieldCheck size={14} color="var(--blue)"/>;return <FileCheck2 size={14} color="#858892"/>}
