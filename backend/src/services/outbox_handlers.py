@@ -9,6 +9,8 @@ from src.config import settings
 from src.database.hardening_models import OutboxEvent
 from src.database.models import Claim, User
 from src.database.session import SessionLocal
+from src.knowledge.store import ingest_document
+from src.storage.s3 import get_bytes
 from src.utils.logger import app_logger
 
 logger = app_logger
@@ -79,7 +81,36 @@ async def handle_claim_event(event: OutboxEvent) -> None:
         db.close()
 
 
+
+
+async def handle_knowledge_ingest(event: OutboxEvent) -> None:
+    """Process one staged knowledge document outside the HTTP request lifecycle."""
+    import asyncio
+    payload = dict(event.payload_json or {})
+    tenant_id = str(event.tenant_id or payload.get("tenant_id") or "")
+    key = str(payload.get("key") or "")
+    filename = str(payload.get("filename") or "")
+    if not tenant_id or not key or not filename:
+        raise ValueError("Knowledge ingestion event is missing required metadata.")
+    content = await asyncio.to_thread(get_bytes, key)
+    await asyncio.to_thread(
+        ingest_document,
+        content=content,
+        filename=filename,
+        document_type=payload.get("document_type"),
+        insurance_type=payload.get("insurance_type"),
+        policy_number=payload.get("policy_number"),
+        effective_from=payload.get("effective_from"),
+        effective_to=payload.get("effective_to"),
+        policy_version=payload.get("policy_version"),
+        uploaded_by=str(payload.get("uploaded_by") or ""),
+        tenant_id=tenant_id,
+        jurisdiction=payload.get("jurisdiction"),
+    )
+
+
 HANDLERS = {
     "claim.assigned": handle_claim_event,
+    "knowledge.ingest": handle_knowledge_ingest,
     "claim.status_changed": handle_claim_event,
 }
