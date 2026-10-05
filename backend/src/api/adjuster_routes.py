@@ -744,17 +744,30 @@ Instructions:
         "message": payload.message,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    citation_rows = [
+        row for row in source_rows
+        if row.get("citation_label") or row.get("source_name") or row.get("chunk_id")
+    ]
+    if citation_rows:
+        labels = []
+        for row in citation_rows[:4]:
+            label = str(row.get("citation_label") or row.get("source_name") or row.get("chunk_id") or "").strip()
+            if label and label not in labels:
+                labels.append(label)
+        if labels and not any(label.lower() in answer.lower() for label in labels):
+            answer = f"{answer.rstrip()}\\n\\nSources: " + "; ".join(labels)
     bot_msg = {
         "id": str(uuid.uuid4()),
         "speaker": "copilot",
         "message": answer,
+        "citations": citation_rows,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     chat = full_history + [user_msg, bot_msg]
     state["copilot_chat"] = chat
     c.pipeline_state = state
     db.commit()
-    return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": source_rows}
+    return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": source_rows, "citations": citation_rows}
 
 
 
