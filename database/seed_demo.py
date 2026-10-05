@@ -3,7 +3,7 @@ import os
 import secrets
 import uuid
 import hashlib
-from datetime import date, timedelta
+from datetime import date, datetime, timezone
 
 from database._db_helpers import SessionLocal
 from src.database.models import User, Policy, Adjuster, Claim, ConversationTurn, KnowledgeDocument, KnowledgeChunk
@@ -34,11 +34,11 @@ def seed_demo():
         for uid,name,email,role,phone in USERS:
             user=db.query(User).filter(User.id==uid).first()
             if not user:
-                user=User(id=uid,tenant_id=TENANT_ID,full_name=name,email=email,phone=phone,password_hash=get_password_hash(demo_password),role=role,status="active",email_verified_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+                user=User(id=uid,tenant_id=TENANT_ID,full_name=name,email=email,phone=phone,password_hash=get_password_hash(demo_password),role=role,status="active",email_verified_at=datetime.now(timezone.utc))
                 db.add(user)
                 db.flush()
             else:
-                user.tenant_id=TENANT_ID; user.role=role; user.status="active"; user.email_verified_at=user.email_verified_at or __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                user.tenant_id=TENANT_ID; user.role=role; user.status="active"; user.email_verified_at = user.email_verified_at or datetime.now(timezone.utc)
             users[role,email]=user
             if not db.query(TenantMembership).filter(TenantMembership.tenant_id==TENANT_ID,TenantMembership.user_id==uid).first():
                 db.add(TenantMembership(tenant_id=TENANT_ID,user_id=uid,role=role,status="active"))
