@@ -34,6 +34,33 @@ def otp_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
 
 
+
+def otp_subject_body(otp: str, full_name: Optional[str] = None, purpose: str = "password_reset") -> tuple[str, str]:
+    subject = "Verify your InsureClaimAI email" if purpose == "email_verification" else "Your InsureClaimAI password reset code"
+    greeting = f"Hi {full_name}," if full_name else "Hi,"
+    label = "email verification" if purpose == "email_verification" else "password reset verification"
+    body = (
+        f"{greeting}\n\n"
+        f"Your {label} code is: {otp}\n\n"
+        f"This code expires in {settings.OTP_EXPIRY_MINUTES} minutes. "
+        "If you didn't request this, you can safely ignore this email.\n"
+    )
+    return subject, body
+
+
+def queue_otp_email(db, *, to_email: str, otp: str, full_name: Optional[str], purpose: str, event_key: str):
+    from src.services.outbox import enqueue
+    subject, body = otp_subject_body(otp, full_name=full_name, purpose=purpose)
+    return enqueue(
+        db,
+        event_type="email.verification" if purpose == "email_verification" else "email.password_reset",
+        aggregate_type="user",
+        aggregate_id=to_email,
+        payload={"to": to_email, "subject": subject, "body": body, "purpose": purpose},
+        idempotency_key=event_key,
+    )
+
+
 def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None, purpose: str = "password_reset") -> bool:
     """
     Send the OTP via SMTP. If SMTP is not configured or fails, logs the OTP instead
