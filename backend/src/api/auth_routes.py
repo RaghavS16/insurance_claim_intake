@@ -458,6 +458,7 @@ def passkey_registration_verify(
             ).first()
             if adjuster:
                 adjuster.is_active = True
+                db.commit()
         return {"registered": True, "credential_id": saved.credential_id, "activated": current_user.role != "ADJUSTER" or bool(adjuster)}
     except ValueError as exc:
         db.rollback()
