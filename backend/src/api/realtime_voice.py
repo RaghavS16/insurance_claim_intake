@@ -60,12 +60,14 @@ async def create_realtime_session(
             detail="A voice session is already active for this claim.",
         )
 
+    ice_servers = [{"urls": url} for url in settings.voice_ice_servers_list]
     response = JSONResponse({
         "call_id": call_id,
         "ticket_id": ticket_id,
         "provider": "pipecat_local",
         "transport": "small_webrtc",
         "worker_id": voice_session_manager.worker_id(),
+        "ice_servers": ice_servers,
     })
     response.set_cookie(
         settings.VOICE_STICKY_COOKIE_NAME,
