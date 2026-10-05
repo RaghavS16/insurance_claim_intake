@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, Mic, Plus, Send, Upload, X } from "lucide-react";
+import { Menu, MessageCircle, Mic, Plus, Send, Upload, X } from "lucide-react";
 import { API_BASE, api } from "@/lib/api";
 
 type Source={citation_label?:string;source_name?:string;document_type?:string;page_number?:number;section_number?:string;clause_number?:string;chunk_id?:string;document_version?:string;text?:string};
@@ -27,6 +27,7 @@ export function ClaimantChat(){
   const socketRef=useRef<WebSocket|null>(null);
   const heartbeatRef=useRef<ReturnType<typeof setInterval>|null>(null);
   const callRef=useRef("");
+  const creatingRef=useRef<Promise<string>|null>(null);
 
   function cleanupVoice(){
     if(heartbeatRef.current)clearInterval(heartbeatRef.current);
@@ -48,8 +49,12 @@ export function ClaimantChat(){
     const items=(data.items||[]) as Conversation[];
     setConversations(items);
     const next=preferred || ticket || items[0]?.ticket_id || "";
-    if(next)await openConversation(next);
-    else setMessages([]);
+    if(next) {
+      await openConversation(next);
+      return;
+    }
+    setMessages([]);
+    if(!items.length) await createChat();
   }
 
   async function openConversation(id:string){
@@ -64,14 +69,19 @@ export function ClaimantChat(){
   }
 
   async function createChat():Promise<string>{
-    cleanupVoice();setMobileHistory(false);
-    setError("");
-    const data=await api<any>("/api/v1/claims/new-session",{method:"POST",body:JSON.stringify({})});
-    const welcome:ChatMessage={role:"assistant",text:data.initial_message||"Tell me what happened, in your own words. I'll collect the details as we go."};
-    setTicket(data.ticket_id);
-    setMessages([welcome]);
-    setConversations(v=>[{ticket_id:data.ticket_id,status:data.status||"draft",insurance_type:data.insurance_type,updated_at:new Date().toISOString(),last_message:welcome.text,turn_count:1},...v.filter(x=>x.ticket_id!==data.ticket_id)]);
-    return data.ticket_id;
+    if(creatingRef.current) return creatingRef.current;
+    const task=(async()=>{
+      cleanupVoice();setMobileHistory(false);
+      setError("");
+      const data=await api<any>("/api/v1/claims/new-session",{method:"POST",body:JSON.stringify({})});
+      const welcome:ChatMessage={role:"assistant",text:data.initial_message||"Tell me what happened, in your own words. I'll collect the details as we go."};
+      setTicket(data.ticket_id);
+      setMessages([welcome]);
+      setConversations(v=>[{ticket_id:data.ticket_id,status:data.status||"draft",insurance_type:data.insurance_type,updated_at:new Date().toISOString(),last_message:welcome.text,turn_count:1},...v.filter(x=>x.ticket_id!==data.ticket_id)]);
+      return String(data.ticket_id);
+    })();
+    creatingRef.current=task;
+    try { return await task; } finally { creatingRef.current=null; }
   }
 
   useEffect(()=>{
@@ -83,14 +93,17 @@ export function ClaimantChat(){
 
   async function sendText(){
     const text=draft.trim();
-    if(!text||!ticket||sending)return;
+    if(!text||sending)return;
+    let activeTicket=ticket;
+    if(!activeTicket) activeTicket=await createChat();
+    if(!activeTicket) return;
     setDraft("");
     setMessages(v=>[...v,{id:"local-"+Date.now(),role:"user",text}]);
     setSending(true);setError("");
     try{
-      const r=await api<any>("/api/v1/claims/"+encodeURIComponent(ticket)+"/text-turn",{method:"POST",body:JSON.stringify({text})});
+      const r=await api<any>("/api/v1/claims/"+encodeURIComponent(activeTicket)+"/text-turn",{method:"POST",body:JSON.stringify({text})});
       setMessages(v=>[...v,{role:"assistant",text:r.agent_message||"Received.",citations:r.citations||r.sources||[],grounded:r.grounded}]);
-      setConversations(v=>v.map(x=>x.ticket_id===ticket?{...x,last_message:r.agent_message||"Received.",updated_at:new Date().toISOString(),status:r.status||x.status,turn_count:(x.turn_count||0)+2}:x));
+      setConversations(v=>v.map(x=>x.ticket_id===activeTicket?{...x,last_message:r.agent_message||"Received.",updated_at:new Date().toISOString(),status:r.status||x.status,turn_count:(x.turn_count||0)+2}:x));
     }catch(e:any){setError(e.message||"Your message could not be processed.");}
     finally{setSending(false);}
   }
@@ -139,8 +152,17 @@ export function ClaimantChat(){
         }catch{/* ignore malformed event */}
       };
       ws.onerror=()=>setError("Voice event stream is unavailable; audio may still connect. Text remains available.");
-      const offer=await peer.createOffer();await peer.setLocalDescription(offer);
-      const answer=await api<any>("/api/v1/voice/realtime/offer/"+encodeURIComponent(session.call_id),{method:"POST",body:JSON.stringify({ticket_id:activeTicket,sdp:offer.sdp,type:offer.type})});
+      const offer=await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      await new Promise<void>((resolve,reject)=>{
+        if(peer.iceGatheringState==="complete"){resolve();return;}
+        const timer=window.setTimeout(()=>{peer.removeEventListener("icegatheringstatechange",onState);resolve();},5000);
+        const onState=()=>{if(peer.iceGatheringState==="complete"){window.clearTimeout(timer);peer.removeEventListener("icegatheringstatechange",onState);resolve();}};
+        peer.addEventListener("icegatheringstatechange",onState);
+      });
+      const local=peer.localDescription;
+      if(!local?.sdp) throw new Error("WebRTC could not prepare local media candidates.");
+      const answer=await api<any>("/api/v1/voice/realtime/offer/"+encodeURIComponent(session.call_id),{method:"POST",body:JSON.stringify({ticket_id:activeTicket,sdp:local.sdp,type:local.type})});
       await peer.setRemoteDescription(answer);
       callRef.current=session.call_id;
       setVoiceState("listening");
@@ -168,7 +190,7 @@ export function ClaimantChat(){
       </div>
     </aside>
     <main className="claim-chat-main">
-      <header className="claim-chat-topbar"><div><div className="claim-chat-title">{selected?.insurance_type?selected.insurance_type.replaceAll("_"," "):"Insurance claim assistant"}</div><div className="claim-chat-status">{ticket||"Start a new claim conversation"}</div></div>{ticket&&<span className="chat-status-pill">{voiceState==="listening"?"Voice active":selected?.status||"draft"}</span>}</header>
+      <header className="claim-chat-topbar"><button className="chat-history-toggle" onClick={()=>setMobileHistory(true)} aria-label="Open chat history"><Menu size={17}/></button><div><div className="claim-chat-title">{selected?.insurance_type?selected.insurance_type.replaceAll("_"," "):"Insurance claim assistant"}</div><div className="claim-chat-status">{ticket||"Start a new claim conversation"}</div></div>{ticket&&<span className="chat-status-pill">{voiceState==="listening"?"Voice active":selected?.status||"draft"}</span>}</header>
       <div className="claim-chat-scroll">
         {loading?<div className="chat-skeleton" aria-label="Loading conversations"><div/><div/><div/></div>:messages.map((m,i)=><div key={m.id||i} className={"claim-chat-message "+(m.role==="user"?"mine":"theirs")}>
           <div className="claim-chat-avatar">{m.role==="user"?"You":"AI"}</div>
