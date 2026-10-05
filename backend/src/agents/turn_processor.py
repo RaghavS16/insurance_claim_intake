@@ -148,6 +148,22 @@ async def process_claimant_turn(
         "local_fallback_allowed": settings.AI_ALLOW_LOCAL_FALLBACK,
         "estimated_tokens_reserved": estimated_tokens,
     }
+    if rag_reply.get("retrieval"):
+        retrieval = rag_reply["retrieval"]
+        result["chat_retrieval"] = retrieval
+        result["chat_citations"] = [
+            source for source in (retrieval.get("policy") or []) + (retrieval.get("regulations") or [])
+            if source.get("citation_label") or source.get("source_name")
+        ]
+    elif result.get("rag_answer_sources"):
+        result["chat_citations"] = list(result.get("rag_answer_sources") or [])
+        result["chat_retrieval"] = {
+            "policy": [x for x in result.get("rag_answer_sources") or [] if x.get("document_type") == "policy_wording"],
+            "regulations": [x for x in result.get("rag_answer_sources") or [] if x.get("document_type") != "policy_wording"],
+            "status": result.get("rag_answer_status"),
+            "grounded": bool(result.get("rag_answer_grounded")),
+        }
+
     # Policy verification is triggered by complete baseline facts, not by a conversational
     # confirmation flag. The claimant can correct facts at any time; verification is rerun
     # after each correction before submission.
