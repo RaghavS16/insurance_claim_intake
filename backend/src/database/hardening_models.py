@@ -26,6 +26,23 @@ class WebAuthnCredential(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class AdjusterInvitation(Base):
+    """Single-use, tenant-scoped invitation used to onboard an adjuster."""
+    __tablename__ = "adjuster_invitations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(254), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    specialization: Mapped[str] = mapped_column(String(60), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    accepted_user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
 class WebAuthnChallenge(Base):
     """One-shot WebAuthn ceremony challenge with tenant binding."""
     __tablename__ = "webauthn_challenges"
