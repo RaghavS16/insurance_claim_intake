@@ -38,6 +38,7 @@ jobs:
           PRIVILEGED_PASSKEY_REQUIRED=true
           PASSKEY_RP_ID=localhost
           PASSKEY_ORIGIN=https://localhost:3000
+          PUBLIC_APP_URL=https://localhost:3000
           S3_BUCKET=ci-test-bucket
           S3_KMS_KEY_ID=ci-test-kms-key
           REQUIRE_EMAIL_VERIFICATION=false
