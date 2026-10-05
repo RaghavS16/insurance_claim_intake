@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = "no-reply@insurance-claims.local"
     SMTP_FROM_NAME: str = "InsureClaim AI"
     SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = Field(15, ge=3, le=60)
+    PUBLIC_APP_URL: str = "http://localhost:3000"
     OTP_LENGTH: int = Field(6, ge=4, le=8)
     OTP_EXPIRY_MINUTES: int = Field(10, ge=1, le=60)
     OTP_MAX_ATTEMPTS: int = Field(5, ge=1, le=20)
@@ -237,6 +240,8 @@ class Settings(BaseSettings):
             raise RuntimeError("CLAMAV_HOST is required when malware scanning is enabled.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_EMAIL_VERIFICATION and not self.SMTP_HOST:
             raise RuntimeError("SMTP_HOST is required when email verification is enabled.")
+        if self.ENVIRONMENT in ("production", "staging") and not self.PUBLIC_APP_URL.startswith("https://"):
+            raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.S3_SERVER_SIDE_ENCRYPTION == "aws:kms" and not self.S3_KMS_KEY_ID:
