@@ -121,6 +121,7 @@ export function ClaimantChat(){
 
   async function startVoice(){
     let activeTicket=ticket || "";
+    let reservedCallId="";
     if(!activeTicket){
       activeTicket=await createChat();
     }
@@ -130,6 +131,7 @@ export function ClaimantChat(){
       const token=localStorage.getItem("access_token");
       if(!token)throw new Error("Your session has expired. Please sign in again.");
       const session=await api<any>("/api/v1/voice/realtime/session/"+encodeURIComponent(activeTicket),{method:"POST"});
+      reservedCallId=String(session.call_id||"");
       if(window.isSecureContext===false) throw new Error("Voice requires HTTPS or localhost. Open the secure application URL and try again.");
       if(!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not provide microphone access.");
       const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
@@ -169,7 +171,12 @@ export function ClaimantChat(){
       callRef.current=session.call_id;
       setVoiceState("listening");
       heartbeatRef.current=setInterval(()=>{api("/api/v1/voice/heartbeat/"+encodeURIComponent(activeTicket)+"/"+encodeURIComponent(session.call_id),{method:"POST"}).catch(()=>{})},30000);
-    }catch(e:any){cleanupVoice();setVoiceState("error");setError(e.message||"Voice is unavailable. Continue this conversation with text.");}
+    }catch(e:any){
+      if(reservedCallId && activeTicket){
+        api("/api/v1/voice/close/"+encodeURIComponent(activeTicket),{method:"POST"}).catch(()=>{});
+      }
+      cleanupVoice();setVoiceState("error");setError(e.message||"Voice is unavailable. Continue this conversation with text.");
+    }
   }
 
   async function stopVoice(){
