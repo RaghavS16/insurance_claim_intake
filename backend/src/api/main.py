@@ -38,7 +38,7 @@ from src.middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware
 from src.services.observability import configure_otel
 
 # Route modules
-from src.api import auth_routes, claim_routes, policy_routes, admin_routes, adjuster_routes, knowledge_routes
+from src.api import auth_routes, auth_onboarding_routes, claim_routes, policy_routes, admin_routes, admin_workflow_routes, adjuster_routes, knowledge_routes
 
 # Shared auth dependencies (also exported for backward compatibility)
 from src.api.deps import get_current_user, get_current_user_id, require_role  # noqa: F401
@@ -297,6 +297,7 @@ def readiness_check():
 
 # Auth routes (signup, login, logout)
 app.include_router(auth_routes.router)
+app.include_router(auth_onboarding_routes.router)
 
 # The /me endpoint needs get_current_user from this module, so we define it here
 @app.get("/api/v1/auth/me", tags=["Authentication"])
