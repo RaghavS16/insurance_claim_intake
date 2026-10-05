@@ -30,6 +30,11 @@ class FakeDB:
     def query(self, model):
         return self.query_values.pop(0)
     def add(self, obj): self.added.append(obj)
+    def execute(self, *args, **kwargs):
+        class R:
+            def scalar_one_or_none(self): return None
+        return R()
+    def flush(self): pass
     def commit(self): pass
     def rollback(self): pass
     def refresh(self, obj): 
@@ -43,12 +48,12 @@ def admin_user():
 
 def test_invite_adjuster_creates_durable_invitation(monkeypatch):
     monkeypatch.setattr(admin, "_admin", lambda request, db: admin_user())
-    monkeypatch.setattr(admin.settings, "PASSKEY_ORIGIN", "http://localhost:3000")
+    monkeypatch.setattr(admin.settings, "PUBLIC_APP_URL", "http://localhost:3000")
     monkeypatch.setattr(admin, "get_password_hash", lambda _: "hashed")
     monkeypatch.setattr(admin, "validate_full_name", lambda x: x.strip())
     monkeypatch.setattr(admin, "validate_email", lambda x: x.strip().lower())
     monkeypatch.setattr(admin, "validate_phone", lambda x: "9876543210")
-    monkeypatch.setattr(admin, "send_adjuster_invite_email", lambda *a, **k: False) if hasattr(admin, "send_adjuster_invite_email") else None
+    monkeypatch.setattr(admin, "enqueue", lambda *a, **k: SimpleNamespace(id="email-event-1"))
     req = SimpleNamespace()
     db = FakeDB([FakeQuery(None), FakeQuery(None)])
     result = admin.invite_adjuster(
