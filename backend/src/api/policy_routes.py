@@ -183,3 +183,70 @@ def list_my_policies(
             "linked_at": linked_at_val.isoformat() if linked_at_val else None,
         })
     return results
+
+
+@router.get("")
+@router.get("/")
+def list_policies_directory(
+    request: Request,
+    q: Optional[str] = None,
+    policy_type: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+):
+    """
+    Overview directory of all policies in the tenant.
+    Accessible to adjusters and administrators to verify policyholder name,
+    policy number, coverage, insured date, and validity date.
+    """
+    current_user = resolve_bearer_user(request, db, ["ADJUSTER", "ADMIN"])
+    query = db.query(Policy).filter(Policy.tenant_id == current_user.tenant_id)
+
+    if q and q.strip():
+        from sqlalchemy import or_
+        term = f"%{q.strip()}%"
+        query = query.filter(or_(Policy.policy_number.ilike(term), Policy.policyholder_name.ilike(term)))
+
+    if policy_type and policy_type.strip().lower() != "all":
+        query = query.filter(Policy.policy_type == policy_type.strip().lower())
+
+    if is_active is not None:
+        query = query.filter(Policy.is_active == is_active)
+
+    total = query.count()
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 200:
+        page_size = 50
+    offset = (page - 1) * page_size
+
+    policies = query.order_by(Policy.created_at.desc()).offset(offset).limit(page_size).all()
+
+    items = []
+    today = datetime.now(timezone.utc).date()
+    for p in policies:
+        cov_val = float(getattr(p, "coverage_amount", 0) or 0)
+        ded_val = float(getattr(p, "deductible", 0) or 0)
+        linked_at_val = getattr(p, "linked_at", None)
+        active_status = bool(p.is_active is not False and (not p.expiry_date or p.expiry_date >= today))
+        items.append({
+            "id": p.id,
+            "policy_number": p.policy_number,
+            "policy_type": p.policy_type,
+            "coverage_amount": cov_val,
+            "deductible": ded_val,
+            "is_active": active_status,
+            "effective_date": str(p.effective_date) if p.effective_date else None,
+            "expiry_date": str(p.expiry_date) if p.expiry_date else None,
+            "policyholder_name": p.policyholder_name,
+            "policyholder_dob": str(p.policyholder_dob) if p.policyholder_dob else None,
+            "policyholder_phone": p.policyholder_phone,
+            "policyholder_email": p.policyholder_email,
+            "customer_id": p.customer_id,
+            "linked": p.customer_id is not None,
+            "linked_at": linked_at_val.isoformat() if linked_at_val else None,
+        })
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
