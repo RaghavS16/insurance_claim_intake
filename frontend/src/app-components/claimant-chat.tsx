@@ -130,8 +130,10 @@ export function ClaimantChat(){
       const token=localStorage.getItem("access_token");
       if(!token)throw new Error("Your session has expired. Please sign in again.");
       const session=await api<any>("/api/v1/voice/realtime/session/"+encodeURIComponent(activeTicket),{method:"POST"});
+      if(window.isSecureContext===false) throw new Error("Voice requires HTTPS or localhost. Open the secure application URL and try again.");
+      if(!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not provide microphone access.");
       const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-      const peer=new RTCPeerConnection();
+      const peer=new RTCPeerConnection({iceServers:(session.ice_servers||[]).map((x:any)=>({urls:x.urls}))});
       pcRef.current=peer;mediaRef.current=stream;
       stream.getTracks().forEach(t=>peer.addTrack(t,stream));
       peer.ontrack=(ev)=>{const remote=ev.streams?.[0];if(remote&&audioRef.current){audioRef.current.srcObject=remote;audioRef.current.play().catch(()=>{});}};
