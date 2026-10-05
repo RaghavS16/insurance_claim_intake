@@ -13,6 +13,8 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { RouterView } from "./workspace";
+import { ClaimantChat } from "./claimant-chat";
+import { api } from "@/lib/api";
 
 describe("authentication routing", () => {
   beforeEach(() => {
@@ -30,6 +32,16 @@ describe("authentication routing", () => {
     pathname = "/login";
     render(<RouterView />);
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("renders unified claimant chat with New chat and one composer", async () => {
+    pathname = "/chat";
+    vi.mocked(api).mockResolvedValue({ items: [] } as never);
+    render(<ClaimantChat />);
+    expect(await screen.findByRole("button", { name: "New chat" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message claim assistant" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start voice" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Attach evidence")).toBeInTheDocument();
   });
 
   it("renders recovery directly", () => {
