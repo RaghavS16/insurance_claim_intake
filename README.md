@@ -68,6 +68,8 @@ The repository includes a zero-license-cost deployment path using Docker Compose
 
 See [docs/deployment-free-tier.md](docs/deployment-free-tier.md).
 
+For the final release handoff, see [docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md).
+
 The guide covers Oracle Cloud Always Free, PostgreSQL/pgvector, Redis, ClamAV, Pipecat + local Whisper + Piper, HTTPS, TURN, backups and the production smoke test.
 
 ## Knowledge ingestion
