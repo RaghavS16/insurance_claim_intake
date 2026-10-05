@@ -147,6 +147,7 @@ services:
       PRIVILEGED_PASSKEY_REQUIRED: ${PRIVILEGED_PASSKEY_REQUIRED:-true}
       PASSKEY_RP_ID: ${PASSKEY_RP_ID:?Set_PASSKEY_RP_ID}
       PASSKEY_ORIGIN: ${PASSKEY_ORIGIN:?Set_PASSKEY_ORIGIN_HTTPS}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
       S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-}
       S3_KMS_KEY_ID: ${S3_KMS_KEY_ID:-}
       VOICE_TURN_SILENCE_SECONDS: ${VOICE_TURN_SILENCE_SECONDS:-0.55}
@@ -193,6 +194,8 @@ services:
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-no-reply@insurance-claims.local}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-InsureClaim AI}
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
     command: ["python", "-m", "src.services.outbox_worker"]
     depends_on:
       postgres:
