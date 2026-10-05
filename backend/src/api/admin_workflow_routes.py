@@ -16,10 +16,11 @@ from sqlalchemy.orm import Session
 from src.api.deps import resolve_bearer_user
 from src.config import settings
 from src.database.models import Adjuster, Claim, Policy, User
-from src.database.hardening_models import AdjusterInvitation, ClaimAssignment, ClaimAuditEvent
+from src.database.hardening_models import AdjusterInvitation, ClaimAssignment, ClaimAuditEvent, OutboxEvent
 from src.database.session import get_db
 from src.utils.auth import get_password_hash
 from src.utils.validators import validate_email, validate_full_name, validate_phone, CANONICAL_POLICY_TYPES
+from src.services.outbox import enqueue
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
 
@@ -128,27 +129,117 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
         expires_at=datetime.now(timezone.utc) + timedelta(days=3),
         created_by=admin.id,
     )
-    db.add(user); db.add(adjuster); db.add(invite)
+    db.add(user)
+    db.add(adjuster)
+    db.add(invite)
     try:
-        db.commit(); db.refresh(invite)
+        db.flush()
+        invite_url = f"{settings.PUBLIC_APP_URL.rstrip('/')}/onboarding/adjuster?token={raw_token}"
+        event = enqueue(
+            db,
+            event_type="email.adjuster_invite",
+            aggregate_type="adjuster_invitation",
+            aggregate_id=str(invite.id),
+            payload={
+                "to": email,
+                "subject": "Your InsureClaim AI adjuster invitation",
+                "body": (
+                    f"Hi {name},\n\n"
+                    "You have been invited to join InsureClaim AI as a claims adjuster.\n\n"
+                    f"Complete your account and passkey setup here:\n{invite_url}\n\n"
+                    "This invitation expires in 3 days.\n"
+                ),
+                "invitation_id": str(invite.id),
+            },
+            idempotency_key=f"adjuster-invite:{invite.id}",
+            tenant_id=str(admin.tenant_id or ""),
+        )
+        invite.email_event_id = str(event.id)
+        db.commit()
+        db.refresh(invite)
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create adjuster invitation.") from exc
-    invite_url = f"{settings.PASSKEY_ORIGIN.rstrip('/')}/onboarding/adjuster?token={raw_token}"
-    sent = False
-    try:
-        from src.utils.adjuster_invite_email import send_adjuster_invite_email
-        sent = send_adjuster_invite_email(email, name, invite_url)
-    except Exception:
-        pass
-    return {"id": invite.id, "adjuster_id": user_id, "status": "invited", "email": email, "invitation_url": invite_url, "email_sent": sent, "expires_at": invite.expires_at.isoformat()}
+    return {
+        "id": invite.id,
+        "adjuster_id": user_id,
+        "status": "invited",
+        "email": email,
+        "invitation_url": invite_url,
+        "email_delivery_status": "queued",
+        "expires_at": invite.expires_at.isoformat(),
+    }
 
 @router.get("/adjusters/invitations")
 def list_invitations(request: Request, db: Session = Depends(get_db)):
     admin = _admin(request, db)
-    rows = db.query(AdjusterInvitation).filter(AdjusterInvitation.tenant_id == admin.tenant_id).order_by(AdjusterInvitation.created_at.desc()).all()
+    rows = db.query(AdjusterInvitation).filter(
+        AdjusterInvitation.tenant_id == admin.tenant_id
+    ).order_by(AdjusterInvitation.created_at.desc()).all()
     now = datetime.now(timezone.utc)
-    return {"items": [{"id": r.id, "email": r.email, "name": r.name, "specialization": r.specialization, "status": "accepted" if r.accepted_at else ("expired" if r.expires_at <= now else "invited"), "expires_at": r.expires_at.isoformat()} for r in rows]}
+    items = []
+    for r in rows:
+        event = None
+        if r.email_event_id:
+            event = db.query(OutboxEvent).filter(
+                OutboxEvent.id == r.email_event_id,
+                OutboxEvent.tenant_id == admin.tenant_id,
+            ).first()
+        items.append({
+            "id": r.id,
+            "email": r.email,
+            "name": r.name,
+            "specialization": r.specialization,
+            "status": "accepted" if r.accepted_at else ("expired" if r.expires_at <= now else "invited"),
+            "email_delivery_status": event.status if event else "not_queued",
+            "email_delivery_attempts": int(event.attempts or 0) if event else 0,
+            "expires_at": r.expires_at.isoformat(),
+        })
+    return {"items": items}
+
+@router.post("/adjusters/invitations/{invitation_id}/resend")
+def resend_invitation(invitation_id: str, request: Request, db: Session = Depends(get_db)):
+    admin = _admin(request, db)
+    invite = db.query(AdjusterInvitation).filter(
+        AdjusterInvitation.id == invitation_id,
+        AdjusterInvitation.tenant_id == admin.tenant_id,
+    ).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation not found.")
+    if invite.accepted_at:
+        raise HTTPException(status_code=409, detail="This invitation has already been accepted.")
+    raw_token = secrets.token_urlsafe(32)
+    invite.token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    invite.expires_at = datetime.now(timezone.utc) + timedelta(days=3)
+    invite_url = f"{settings.PUBLIC_APP_URL.rstrip('/')}/onboarding/adjuster?token={raw_token}"
+    try:
+        db.flush()
+        event = enqueue(
+            db,
+            event_type="email.adjuster_invite",
+            aggregate_type="adjuster_invitation",
+            aggregate_id=str(invite.id),
+            payload={
+                "to": invite.email,
+                "subject": "Your InsureClaim AI adjuster invitation",
+                "body": (
+                    f"Hi {invite.name},\n\n"
+                    "Your InsureClaim AI adjuster invitation has been refreshed.\n\n"
+                    f"Complete your account and passkey setup here:\n{invite_url}\n\n"
+                    "This invitation expires in 3 days.\n"
+                ),
+                "invitation_id": str(invite.id),
+            },
+            idempotency_key=f"adjuster-invite-resend:{invite.id}:{invite.expires_at.isoformat()}",
+            tenant_id=str(admin.tenant_id or ""),
+        )
+        invite.email_event_id = str(event.id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to resend adjuster invitation.") from exc
+    return {"invitation_id": invite.id, "invitation_url": invite_url, "email_delivery_status": "queued", "expires_at": invite.expires_at.isoformat()}
+
 
 @router.get("/adjusters/export")
 def export_adjusters(request: Request, format: str = "csv", is_active: Optional[bool] = None, db: Session = Depends(get_db)):
