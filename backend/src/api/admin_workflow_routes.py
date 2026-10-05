@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from src.api.deps import require_role, resolve_bearer_user
+from src.api.deps import resolve_bearer_user
 from src.config import settings
 from src.database.models import Adjuster, Claim, Policy, User
 from src.database.hardening_models import AdjusterInvitation, ClaimAssignment, ClaimAuditEvent
