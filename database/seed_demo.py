@@ -2,12 +2,15 @@
 import os
 import secrets
 import uuid
+import hashlib
 from datetime import date, timedelta
 
 from database._db_helpers import SessionLocal
-from src.database.models import User, Policy, Adjuster, Claim, ConversationTurn
+from src.database.models import User, Policy, Adjuster, Claim, ConversationTurn, KnowledgeDocument, KnowledgeChunk
 from src.database.hardening_models import Tenant, TenantMembership, ClaimAssignment, ClaimSubmission, ClaimEvidenceRequest
 from src.utils.auth import get_password_hash
+from src.knowledge.embeddings import embed_documents
+from src.storage.s3 import put_bytes
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
 USERS = [
@@ -31,11 +34,11 @@ def seed_demo():
         for uid,name,email,role,phone in USERS:
             user=db.query(User).filter(User.id==uid).first()
             if not user:
-                user=User(id=uid,tenant_id=TENANT_ID,full_name=name,email=email,phone=phone,password_hash=get_password_hash(demo_password),role=role,status="active")
+                user=User(id=uid,tenant_id=TENANT_ID,full_name=name,email=email,phone=phone,password_hash=get_password_hash(demo_password),role=role,status="active",email_verified_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
                 db.add(user)
                 db.flush()
             else:
-                user.tenant_id=TENANT_ID; user.role=role; user.status="active"
+                user.tenant_id=TENANT_ID; user.role=role; user.status="active"; user.email_verified_at=user.email_verified_at or __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
             users[role,email]=user
             if not db.query(TenantMembership).filter(TenantMembership.tenant_id==TENANT_ID,TenantMembership.user_id==uid).first():
                 db.add(TenantMembership(tenant_id=TENANT_ID,user_id=uid,role=role,status="active"))
@@ -59,6 +62,90 @@ def seed_demo():
             if not row:
                 row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=None,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=None,link_attempts=0)
                 db.add(row)
+        # Published demo RAG sources make the sample environment immediately useful.
+        demo_sources = [
+            (
+                "demo-motor-policy-wording.txt",
+                "policy_wording",
+                "motor",
+                "DEMO-MOTOR-1.0",
+                "Demo Motor Policy, Section 4, Clause 4.1",
+                """DEMO POLICY WORDING — NOT AN ACTUAL INSURANCE CONTRACT.
+Section 4. Motor Own-Damage Claims
+Clause 4.1: A covered accidental collision may be reported for claim review when the incident occurs during the policy validity period.
+Clause 4.2: The claimant should provide the incident date, location, a description of the damage, and available repair estimates or garage quotations.
+Clause 4.3: The applicable deductible is applied to an approved covered loss. Final coverage and settlement remain subject to policy verification and adjuster review.
+Clause 4.4: The insurer may request additional evidence when the submitted material is insufficient to establish the loss.
+""",
+            ),
+            (
+                "demo-claims-guidance.txt",
+                "regulation",
+                "motor",
+                "DEMO-GUIDANCE-1.0",
+                "Demo Claims Guidance, Section 2, Clause 2.1",
+                """DEMO REGULATORY/PROCESS GUIDANCE — VERIFY AGAINST LIVE REGULATOR MATERIAL BEFORE PRODUCTION.
+Section 2. Claims handling
+Clause 2.1: Claim communications should identify the claim reference and clearly state any additional information required from the claimant.
+Clause 2.2: Evidence requests should be recorded against the claim and the claimant should be able to respond with a note and supporting document.
+Clause 2.3: Claim decisions should be recorded by an authorized human reviewer with a reason and supporting evidence.
+""",
+            ),
+        ]
+        for filename, doc_type, insurance_type, version, citation, body in demo_sources:
+            existing = db.query(KnowledgeDocument).filter(
+                KnowledgeDocument.source_name == filename,
+                KnowledgeDocument.tenant_id == TENANT_ID,
+            ).first()
+            if not existing:
+                try:
+                    vector = embed_documents([body])[0]
+                    staged = put_bytes(
+                        body.encode("utf-8"),
+                        prefix="knowledge-demo",
+                        filename=filename,
+                        content_type="text/plain",
+                    )
+                    doc = KnowledgeDocument(
+                        id=str(uuid.uuid4()),
+                        source_name=filename,
+                        source_uri=staged["uri"],
+                        document_type=doc_type,
+                        insurance_type=insurance_type,
+                        content_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                        tenant_id=TENANT_ID,
+                        jurisdiction="India",
+                        document_version=version,
+                        uploaded_by=users[("ADJUSTER", "asha.adjuster@insurance.com")].id,
+                        metadata_json={
+                            "title": filename,
+                            "policy_version": version,
+                            "publication_status": "published",
+                            "effective_from": "2026-01-01",
+                            "effective_to": "2027-01-01",
+                            "demo_source": True,
+                        },
+                    )
+                    db.add(doc)
+                    db.flush()
+                    db.add(KnowledgeChunk(
+                        id=str(uuid.uuid4()),
+                        document_id=doc.id,
+                        chunk_index=0,
+                        text=body,
+                        embedding=vector,
+                        tenant_id=TENANT_ID,
+                        page_number=1,
+                        section_number=citation.split(",")[1].strip() if "," in citation else None,
+                        clause_number=citation.split(",")[-1].strip() if "," in citation else None,
+                        citation_label=citation,
+                        metadata_json={"source_name": filename, "demo_source": True},
+                    ))
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    print(f"Warning: demo knowledge source '{filename}' could not be indexed: {type(exc).__name__}: {exc}")
+
         motor_policy = db.query(Policy).filter(Policy.policy_number == "POL-DEMO-MOTOR-001", Policy.tenant_id == TENANT_ID).first()
         asha = db.query(Adjuster).filter(Adjuster.id == "00000000-0000-0000-0000-000000000102", Adjuster.tenant_id == TENANT_ID).first()
         demo_claim = db.query(Claim).filter(Claim.ticket_id == "CLM-DEMO-MOTOR-001", Claim.tenant_id == TENANT_ID).first()
