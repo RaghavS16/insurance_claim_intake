@@ -50,6 +50,9 @@ class LoginRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
 
+class EmailOnlyRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+
 
 class VerifyOtpRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
@@ -324,6 +327,63 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
 # ---------------------------------------------------------------------------
 # Forgot Password: Step 1 — Request OTP
 # ---------------------------------------------------------------------------
+
+@router.post("/resend-verification")
+def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="resend_verification", max_requests=5, window_seconds=300)
+    generic = {"message": "If an account with that email requires verification, a new verification code has been sent."}
+    if not settings.REQUIRE_EMAIL_VERIFICATION:
+        return generic
+    try:
+        clean_email = validate_email(payload.email)
+    except ValueError:
+        return generic
+    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None), User.status == "active").first()
+    if not user or user.email_verified_at:
+        return generic
+    latest = (
+        db.query(PasswordResetOTP)
+        .filter(
+            PasswordResetOTP.user_id == user.id,
+            PasswordResetOTP.tenant_id == user.tenant_id,
+            PasswordResetOTP.purpose == "email_verification",
+            PasswordResetOTP.consumed == False,
+        )
+        .order_by(PasswordResetOTP.created_at.desc())
+        .with_for_update()
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    if latest and latest.created_at:
+        created_at = latest.created_at.replace(tzinfo=timezone.utc) if latest.created_at.tzinfo is None else latest.created_at
+        if (now - created_at).total_seconds() < settings.OTP_RESEND_COOLDOWN_SECONDS:
+            return generic
+        latest.consumed = True
+    otp = generate_otp()
+    record = PasswordResetOTP(
+        user_id=user.id,
+        tenant_id=user.tenant_id or "",
+        otp_hash=hash_otp(otp),
+        purpose="email_verification",
+        expires_at=otp_expiry(),
+        attempts=0,
+        verified=False,
+        consumed=False,
+    )
+    db.add(record)
+    db.flush()
+    queue_otp_email(
+        db,
+        to_email=user.email,
+        otp=otp,
+        full_name=user.full_name,
+        purpose="email_verification",
+        event_key=f"email-verification:{user.id}:{record.id}",
+    )
+    db.commit()
+    return generic
+
+
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """
@@ -365,6 +425,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
         user_id=user.id,
         tenant_id=user.tenant_id or "",
         otp_hash=hash_otp(otp),
+        purpose="password_reset",
         expires_at=otp_expiry(),
         attempts=0,
         verified=False,
@@ -372,14 +433,19 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     )
     db.add(record)
     try:
+        db.flush()
+        queue_otp_email(
+            db,
+            to_email=user.email,
+            otp=otp,
+            full_name=user.full_name,
+            purpose="password_reset",
+            event_key=f"password-reset:{user.id}:{record.id}",
+        )
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception("Failed to persist password reset OTP for user %s", user.id)
-        return generic_response
-
-    queue_otp_email(db, to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset", event_key=f"password-reset:{user.id}:{record.id}")
-    db.commit()
+        logger.exception("Failed to queue password reset email for user %s", user.id)
     return generic_response
 
 
