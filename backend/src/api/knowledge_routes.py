@@ -232,6 +232,67 @@ def update_document(
     return {"document_id": str(doc.id), "updated": True, "publication_status": meta.get("publication_status")}
 
 
+@router.put("/documents/{document_id}/content")
+async def replace_document_content(
+    document_id: str,
+    file: UploadFile = File(...),
+    document_type: str | None = Form(None),
+    insurance_type: str | None = Form(None),
+    policy_number: str | None = Form(None),
+    policy_version: str | None = Form(None),
+    jurisdiction: str | None = Form(None),
+    effective_from: str | None = Form(None),
+    effective_to: str | None = Form(None),
+    user: User = Depends(require_role(["ADJUSTER"])),
+    db: Session = Depends(get_db),
+):
+    old = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+    ).first()
+    if not old:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A document file is required.")
+    try:
+        raw = await read_limited(file, 150 * 1024 * 1024)
+        clean, _scan_reason = await asyncio.to_thread(scan_bytes, raw)
+        if not clean:
+            raise HTTPException(status_code=422, detail="The document failed security scanning.")
+        result = await asyncio.to_thread(
+            ingest_document,
+            content=raw,
+            filename=file.filename,
+            document_type=document_type or old.document_type,
+            insurance_type=insurance_type or old.insurance_type,
+            policy_number=policy_number or (old.metadata_json or {}).get("policy_number"),
+            effective_from=effective_from or (old.metadata_json or {}).get("effective_from"),
+            effective_to=effective_to or (old.metadata_json or {}).get("effective_to"),
+            policy_version=policy_version or (old.metadata_json or {}).get("policy_version") or old.document_version,
+            uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction or old.jurisdiction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Knowledge document replacement failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Knowledge document replacement is temporarily unavailable.") from exc
+
+    new_id = str(result.get("document_id"))
+    meta = dict(old.metadata_json or {})
+    meta["publication_status"] = "superseded"
+    meta["superseded_by"] = new_id
+    meta["updated_by"] = str(user.id)
+    old.metadata_json = meta
+    db.commit()
+    return {
+        "document_id": str(old.id),
+        "replacement_document_id": new_id,
+        "status": "completed",
+        "chunks": result.get("chunks", 0),
+    }
+
 @router.post("/documents/{document_id}/reindex")
 async def reindex_document(
     document_id: str,
