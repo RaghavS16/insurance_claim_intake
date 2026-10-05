@@ -1,6 +1,7 @@
 """Idempotent demo seed for one tenant, three operational roles, and sample policies."""
 import os
 import secrets
+import uuid
 from datetime import date, timedelta
 
 from database._db_helpers import SessionLocal
@@ -56,7 +57,7 @@ def seed_demo():
         for number,ptype,coverage,deductible,eff,exp,name,dob,phone,email in policies:
             row=db.query(Policy).filter(Policy.policy_number==number).first()
             if not row:
-                row=Policy(id=secrets.token_hex(16),tenant_id=TENANT_ID,policy_number=number,customer_id=claimant.id,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=None,link_attempts=0)
+                row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=claimant.id,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=None,link_attempts=0)
                 db.add(row)
         db.commit()
         print("Demo seed complete.")
