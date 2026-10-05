@@ -1,6 +1,6 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 
 export function EmailVerificationPage(){
@@ -11,7 +11,7 @@ export function EmailVerificationPage(){
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
 
-  async function verify(e:React.FormEvent){
+  async function verify(e:FormEvent){
     e.preventDefault();
     setBusy(true); setError(""); setMessage("");
     try{
