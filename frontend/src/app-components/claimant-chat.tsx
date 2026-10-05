@@ -63,7 +63,7 @@ export function ClaimantChat(){
     }catch(e:any){setError(e.message||"Unable to open conversation.");}
   }
 
-  async function createChat(){
+  async function createChat():Promise<string>{
     cleanupVoice();setMobileHistory(false);
     setError("");
     const data=await api<any>("/api/v1/claims/new-session",{method:"POST",body:JSON.stringify({})});
@@ -71,6 +71,7 @@ export function ClaimantChat(){
     setTicket(data.ticket_id);
     setMessages([welcome]);
     setConversations(v=>[{ticket_id:data.ticket_id,status:data.status||"draft",insurance_type:data.insurance_type,updated_at:new Date().toISOString(),last_message:welcome.text,turn_count:1},...v.filter(x=>x.ticket_id!==data.ticket_id)]);
+    return data.ticket_id;
   }
 
   useEffect(()=>{
@@ -108,10 +109,7 @@ export function ClaimantChat(){
   async function startVoice(){
     let activeTicket=ticket || "";
     if(!activeTicket){
-      await createChat();
-      const fresh=await api<any>("/api/v1/claims?limit=1");
-      activeTicket=fresh.items?.[0]?.ticket_id || "";
-      if(activeTicket)setTicket(activeTicket);
+      activeTicket=await createChat();
     }
     if(!activeTicket)return;
     cleanupVoice();setVoiceState("starting");setError("");
