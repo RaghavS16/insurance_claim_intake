@@ -20,6 +20,7 @@ export function ClaimantChat(){
   const [voiceState,setVoiceState]=useState<"idle"|"starting"|"listening"|"thinking"|"speaking"|"error">("idle");
   const [error,setError]=useState("");
   const [showSources,setShowSources]=useState<Record<string,boolean>>({});
+  const [mobileHistory,setMobileHistory]=useState(false);
   const pcRef=useRef<RTCPeerConnection|null>(null);
   const mediaRef=useRef<MediaStream|null>(null);
   const audioRef=useRef<HTMLAudioElement|null>(null);
@@ -63,7 +64,7 @@ export function ClaimantChat(){
   }
 
   async function createChat(){
-    cleanupVoice();
+    cleanupVoice();setMobileHistory(false);
     setError("");
     const data=await api<any>("/api/v1/claims/new-session",{method:"POST",body:JSON.stringify({})});
     const welcome:ChatMessage={role:"assistant",text:data.initial_message||"Tell me what happened, in your own words. I'll collect the details as we go."};
@@ -105,8 +106,13 @@ export function ClaimantChat(){
   }
 
   async function startVoice(){
-    if(!ticket){await createChat();}
-    const activeTicket=ticket || undefined;
+    let activeTicket=ticket || "";
+    if(!activeTicket){
+      await createChat();
+      const fresh=await api<any>("/api/v1/claims?limit=1");
+      activeTicket=fresh.items?.[0]?.ticket_id || "";
+      if(activeTicket)setTicket(activeTicket);
+    }
     if(!activeTicket)return;
     cleanupVoice();setVoiceState("starting");setError("");
     try{
@@ -151,7 +157,7 @@ export function ClaimantChat(){
 
   const selected=conversations.find(x=>x.ticket_id===ticket);
   return <div className="claimant-chat-shell">
-    <aside className="chat-history" aria-label="Claim conversations">
+    <aside className={"chat-history"+(mobileHistory?" mobile-open":"")} aria-label="Claim conversations">
       <div className="chat-history-head"><div><div className="chat-brand">Claims</div><div className="chat-history-sub">Your conversations</div></div><button className="icon-btn" onClick={createChat} aria-label="New chat"><Plus size={17}/></button></div>
       <button className="new-chat-btn" onClick={createChat}><Plus size={15}/>New chat</button>
       <div className="chat-history-list">
