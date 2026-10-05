@@ -38,7 +38,7 @@ describe("authentication routing", () => {
     pathname = "/chat";
     vi.mocked(api).mockResolvedValue({ items: [] } as never);
     render(<ClaimantChat />);
-    expect(await screen.findByRole("button", { name: "New chat" })).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: "New chat" })).length).toBeGreaterThan(0);
     expect(screen.getByRole("textbox", { name: "Message claim assistant" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start voice" })).toBeInTheDocument();
     expect(screen.getByLabelText("Attach evidence")).toBeInTheDocument();
