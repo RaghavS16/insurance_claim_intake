@@ -5,6 +5,8 @@ import { BookOpen, Pencil, Search, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, DataBadge, Empty, Page } from "@/app-components/ui";
 
+const human=(v:string)=>v.replace(/_/g," ").replace(/\b\w/g,m=>m.toUpperCase());
+
 function Knowledge({manage=false}:{manage?:boolean}){
  const[q,setQ]=useState(""),[rows,setRows]=useState<any[]>([]),[docs,setDocs]=useState<any[]>([]),[msg,setMsg]=useState(""),[error,setError]=useState(""),[name,setName]=useState(""),[text,setText]=useState(""),[file,setFile]=useState<File|null>(null),[replaceFile,setReplaceFile]=useState<Record<string,File|null>>({}),[id,setId]=useState(""),[docType,setDocType]=useState("policy_wording"),[insuranceType,setInsuranceType]=useState("general"),[policyNumber,setPolicyNumber]=useState(""),[jurisdiction,setJurisdiction]=useState(""),[version,setVersion]=useState(""),[editing,setEditing]=useState<any>(null),[busy,setBusy]=useState(false);
  async function search(){setError("");try{const x=await api<any>("/api/v1/knowledge/search?q="+encodeURIComponent(q)+"&document_type="+encodeURIComponent(docType||""));setRows(x.items||[])}catch(e:any){setError(e.message)}}
