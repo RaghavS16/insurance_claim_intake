@@ -388,7 +388,14 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
     except Exception as exc:
         logger.exception("Text turn processing failed")
         raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
-    return {**_claim_payload(claim), "agent_message": result.get("next_question") or result.get("message", "")}
+    return {
+        **_claim_payload(claim),
+        "agent_message": result.get("next_question") or result.get("message", ""),
+        "grounded": bool(result.get("rag_answer_grounded") or (result.get("chat_retrieval") or {}).get("grounded")),
+        "citation_status": result.get("rag_answer_status") or (result.get("chat_retrieval") or {}).get("status"),
+        "citations": list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+        "sources": list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+    }
 
 
 def _verification_failure_message(reason: str) -> str:
