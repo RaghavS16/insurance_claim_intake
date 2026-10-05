@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.database.session import get_db
-from src.database.models import User, PasswordResetOTP, RevokedToken
+from src.database.models import User, PasswordResetOTP, RevokedToken, Adjuster
 from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant, TenantMembership, RefreshToken, WebAuthnCredential
 from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
@@ -451,7 +451,14 @@ def passkey_registration_verify(
         raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
     try:
         saved = verify_registration(db, current_user, payload.challenge_id, payload.credential)
-        return {"registered": True, "credential_id": saved.credential_id}
+        if current_user.role == "ADJUSTER":
+            adjuster = db.query(Adjuster).filter(
+                Adjuster.user_id == current_user.id,
+                Adjuster.tenant_id == current_user.tenant_id,
+            ).first()
+            if adjuster:
+                adjuster.is_active = True
+        return {"registered": True, "credential_id": saved.credential_id, "activated": current_user.role != "ADJUSTER" or bool(adjuster)}
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc))
