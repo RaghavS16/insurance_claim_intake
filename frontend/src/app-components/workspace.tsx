@@ -3,10 +3,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Activity, Bell, BookOpen, ChevronRight, CircleHelp, ClipboardList, FilePlus2, LayoutDashboard, LogOut, Menu, MessageCircle, Pencil, Plus, Search, Send, Settings, ShieldCheck, Upload, Users, X } from "lucide-react";
+import { Activity, Bell, BookOpen, CircleHelp, ClipboardList, FilePlus2, LayoutDashboard, LogOut, Menu, MessageCircle, Search, Send, Settings, ShieldCheck, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { assertWebAuthnSupport, prepareCreationOptions, prepareRequestOptions, serializeCredential } from "@/lib/webauthn";
-import { Badge, Button, Card, DataBadge, Empty, Page } from "@/app-components/ui";
+import { Card, Empty, Page } from "@/app-components/ui";
 import { ClaimantChat } from "@/app-components/claimant-chat";
 import { AdjusterOnboardingPage } from "@/app-components/adjuster-onboarding";
 import { AdjusterDashboard, AdjusterQueue, Workbench } from "@/app-components/adjuster-workspace";
@@ -16,10 +16,6 @@ import { Knowledge } from "@/app-components/knowledge-workspace";
 import { EmailVerificationPage } from "@/app-components/email-verification";
 
 type User={id:string;full_name?:string;email:string;role:"CLAIMANT"|"ADJUSTER"|"ADMIN";status?:string};
-const date=(v:any)=>v?new Date(v).toLocaleDateString():"—";
-const dt=(v:any)=>v?new Date(v).toLocaleString():"—";
-const money=(v:any)=>v==null||v===""?"—":new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(Number(v)||0);
-const human=(v:any)=>String(v??"—").replaceAll("_"," ");
 const first=(u:User)=>((u.full_name||u.email||"U")[0]||"U").toUpperCase();
 
 function Auth({title,subtitle,children}:{title:string;subtitle:string;children:ReactNode}){return <main className="login-page"><div className="auth-card"><div className="auth-brand"><span className="brand-mark">F</span><span>Flowa</span></div><h1 className="auth-title">{title}</h1><p className="auth-subtitle">{subtitle}</p>{children}</div></main>}
