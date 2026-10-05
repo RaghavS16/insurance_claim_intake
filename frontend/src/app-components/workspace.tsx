@@ -1,9 +1,9 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Activity, Bell, BookOpen, CircleHelp, ClipboardList, FilePlus2, LayoutDashboard, LogOut, Menu, MessageCircle, Search, Send, Settings, ShieldCheck, Users } from "lucide-react";
+import { Bell, CircleHelp, LogOut, Menu, Search, Settings } from "lucide-react";
 import { api } from "@/lib/api";
 import { assertWebAuthnSupport, prepareCreationOptions, prepareRequestOptions, serializeCredential } from "@/lib/webauthn";
 import { Card, Empty, Page } from "@/app-components/ui";
