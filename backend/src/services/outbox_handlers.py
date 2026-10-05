@@ -69,22 +69,33 @@ def _send_email(to_email: str, subject: str, body: str, event_id: str) -> None:
     if not settings.SMTP_HOST:
         if settings.ENVIRONMENT in {"development", "test"}:
             logger.info("Outbox notification suppressed because SMTP is not configured (event=%s)", event_id)
-        return
+            return
+        raise RuntimeError("SMTP is not configured for transactional notification delivery.")
     from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
+    if not from_email:
+        raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
     from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
-    msg = MIMEText(body)
+    msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
     msg["X-InsureClaim-Event-ID"] = event_id
     password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-        if settings.SMTP_USE_TLS:
-            server.starttls()
-        if settings.SMTP_USERNAME and password:
-            server.login(settings.SMTP_USERNAME, password)
-        server.sendmail(from_email, [to_email], msg.as_string())
+    if settings.SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+            if settings.SMTP_USERNAME and password:
+                server.login(settings.SMTP_USERNAME, password)
+            refused = server.sendmail(from_email, [to_email], msg.as_string())
+    else:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+            if settings.SMTP_USE_TLS:
+                server.starttls()
+            if settings.SMTP_USERNAME and password:
+                server.login(settings.SMTP_USERNAME, password)
+            refused = server.sendmail(from_email, [to_email], msg.as_string())
+    if refused:
+        raise RuntimeError("SMTP rejected recipient(s): " + ", ".join(sorted(refused.keys())))
 
 
 def _claimant_for_event(db, event: OutboxEvent) -> User | None:
