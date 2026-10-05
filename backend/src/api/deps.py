@@ -290,10 +290,10 @@ def db_commit_or_500(
     """
     try:
         db.commit()
-    except Exception:
+    except Exception as e:
         db.rollback()
         logger.exception(log_message or error_detail)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_detail,
+            detail=f"{error_detail} Exception: {str(e)}",
         )

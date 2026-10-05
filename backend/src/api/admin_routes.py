@@ -377,6 +377,7 @@ def add_adjuster(
     )
 
     db.add(new_user)
+    db.flush()
     db.add(new_adjuster)
     db_commit_or_500(db, logger, "Failed to create adjuster account.", "Failed to create adjuster account")
 
