@@ -5,8 +5,8 @@ import uuid
 from datetime import date, timedelta
 
 from database._db_helpers import SessionLocal
-from src.database.models import User, Policy, Adjuster
-from src.database.hardening_models import Tenant, TenantMembership
+from src.database.models import User, Policy, Adjuster, Claim, ConversationTurn
+from src.database.hardening_models import Tenant, TenantMembership, ClaimAssignment, ClaimSubmission
 from src.utils.auth import get_password_hash
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -59,6 +59,83 @@ def seed_demo():
             if not row:
                 row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=None,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=None,link_attempts=0)
                 db.add(row)
+        motor_policy = db.query(Policy).filter(Policy.policy_number == "POL-DEMO-MOTOR-001", Policy.tenant_id == TENANT_ID).first()
+        asha = db.query(Adjuster).filter(Adjuster.id == "00000000-0000-0000-0000-000000000102", Adjuster.tenant_id == TENANT_ID).first()
+        demo_claim = db.query(Claim).filter(Claim.ticket_id == "CLM-DEMO-MOTOR-001", Claim.tenant_id == TENANT_ID).first()
+        if motor_policy and asha:
+            if not demo_claim:
+                demo_claim = Claim(
+                    id=str(uuid.uuid4()),
+                    tenant_id=TENANT_ID,
+                    ticket_id="CLM-DEMO-MOTOR-001",
+                    claimant_id=claimant.id,
+                    customer_id=claimant.id,
+                    policy_id=motor_policy.id,
+                    claim_date=date(2026, 9, 20),
+                    event_date=date(2026, 9, 18),
+                    insurance_type="motor",
+                    input_mode="text",
+                    event_description="Rear-end collision at a city intersection; no injuries reported.",
+                    event_location="Chennai, Tamil Nadu",
+                    estimated_claim_amount=125000,
+                    extraction_confidence=0.99,
+                    validation_status="verified",
+                    status="under_review",
+                    conversation_status="submitted",
+                    pipeline_state={
+                        "extracted_data": {
+                            "policy_id": motor_policy.policy_number,
+                            "insurance_type": "motor",
+                            "event_date": "2026-09-18",
+                            "event_description": "Rear-end collision at a city intersection; no injuries reported.",
+                            "event_location": "Chennai, Tamil Nadu",
+                            "estimated_claim_amount": 125000,
+                        },
+                        "policy_verification": {"valid": True, "policy_number": motor_policy.policy_number},
+                        "assigned_adjuster_id": asha.id,
+                        "assigned_adjuster_name": asha.name,
+                        "conversation_phase": "5_submitted",
+                    },
+                    state_version=1,
+                )
+                db.add(demo_claim)
+                db.flush()
+                db.add(ClaimSubmission(
+                    claim_id=demo_claim.id,
+                    tenant_id=TENANT_ID,
+                    idempotency_key="demo-submission-clm-demo-motor-001",
+                    status="accepted",
+                    submitted_by=claimant.id,
+                    result_json={"demo": True, "ticket_id": demo_claim.ticket_id, "adjuster_id": asha.id},
+                ))
+                db.add(ConversationTurn(
+                    claim_id=demo_claim.id,
+                    turn_number=1,
+                    speaker="user",
+                    text="I had a rear-end collision and need to file a motor claim.",
+                ))
+                db.add(ConversationTurn(
+                    claim_id=demo_claim.id,
+                    turn_number=2,
+                    speaker="agent",
+                    text="I have recorded the incident details and submitted the claim for adjuster review.",
+                ))
+            assignment = db.query(ClaimAssignment).filter(
+                ClaimAssignment.claim_id == demo_claim.id,
+                ClaimAssignment.tenant_id == TENANT_ID,
+                ClaimAssignment.adjuster_id == asha.id,
+                ClaimAssignment.is_active.is_(True),
+            ).first()
+            if not assignment:
+                db.add(ClaimAssignment(
+                    claim_id=demo_claim.id,
+                    tenant_id=TENANT_ID,
+                    adjuster_id=asha.id,
+                    assigned_by=users[("ADMIN", "admin@insurance.com")].id,
+                    reason="Deterministic demo assignment",
+                    is_active=True,
+                ))
+            asha.claims_assigned = max(1, int(asha.claims_assigned or 0))
         db.commit()
         print("Demo seed complete.")
         print(f"Tenant: {TENANT_ID}")
