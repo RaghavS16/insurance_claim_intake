@@ -953,6 +953,9 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         "evidence_items": evidence,
         "missing_evidence": state.get("missing_evidence", []),
         "pending_evidence_review": state.get("pending_evidence_review", []),
+        "grounded": bool(agent_result.get("rag_answer_grounded") or (agent_result.get("chat_retrieval") or {}).get("grounded")) if "agent_result" in locals() else False,
+        "citation_status": agent_result.get("rag_answer_status") or (agent_result.get("chat_retrieval") or {}).get("status") if "agent_result" in locals() else None,
+        "citations": list(agent_result.get("chat_citations") or agent_result.get("rag_answer_sources") or []) if "agent_result" in locals() else [],
     }
 
 @router.patch("/{ticket_id}")
