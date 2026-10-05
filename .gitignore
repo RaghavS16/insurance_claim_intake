@@ -73,3 +73,5 @@ frontend/coverage/
 
 graphify-out/
 .agents/
+
+qa-report

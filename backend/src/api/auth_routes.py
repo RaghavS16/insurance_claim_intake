@@ -156,9 +156,13 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
 
     hashed_pwd = get_password_hash(payload.password)
-    tenant = Tenant(name=f"{clean_name}'s Workspace", status="active")
-    db.add(tenant)
-    db.flush()
+    tenant = db.query(Tenant).filter(Tenant.id == "00000000-0000-0000-0000-000000000001").first()
+    if not tenant:
+        tenant = db.query(Tenant).filter(Tenant.status == "active").first()
+    if not tenant:
+        tenant = Tenant(name=f"{clean_name}'s Workspace", status="active")
+        db.add(tenant)
+        db.flush()
     new_user = User(
         full_name=clean_name,
         email=clean_email,

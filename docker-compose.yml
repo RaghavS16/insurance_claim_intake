@@ -99,6 +99,9 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
+      HOME: /tmp
+      HF_HOME: /tmp/huggingface
+      FASTEMBED_CACHE_DIR: /tmp/fastembed_cache
       ENVIRONMENT: ${ENVIRONMENT:-production}
       DEBUG: ${DEBUG:-false}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}

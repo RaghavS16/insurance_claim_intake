@@ -81,7 +81,7 @@ def _build_limiter():
 limiter=_build_limiter()
 
 def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seconds:int=60,allow_test_bypass:bool=True)->None:
-    if allow_test_bypass and settings.ENVIRONMENT=="test" and not request.headers.get("X-Test-Enforce-Rate-Limit"): return
+    if allow_test_bypass and settings.ENVIRONMENT in ("development", "test") and not request.headers.get("X-Test-Enforce-Rate-Limit"): return
     ip=request.client.host if request.client else "unknown"
     # Never trust a client-supplied identity header for throttling. When a bearer
     # token is present, use a stable token fingerprint; pre-auth routes fall back

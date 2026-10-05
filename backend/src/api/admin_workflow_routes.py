@@ -130,6 +130,7 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
         created_by=admin.id,
     )
     db.add(user)
+    db.flush()
     db.add(adjuster)
     db.add(invite)
     try:

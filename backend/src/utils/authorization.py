@@ -19,7 +19,7 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
         if not user_tenant:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required.")
         return
-    user_id = current_user.id
+    user_id_str = str(current_user.id)
     if role == "ADJUSTER":
         if db is None:
             if settings.ENVIRONMENT == "test":
@@ -34,7 +34,7 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
                 ClaimAssignment.is_active.is_(True),
                 ClaimAssignment.adjuster_id.in_(
                     db.query(Adjuster.id).filter(
-                        Adjuster.user_id == user_id,
+                        Adjuster.user_id == current_user.id,
                         Adjuster.tenant_id == user_tenant,
                         Adjuster.is_active.is_(True),
                     )
@@ -45,7 +45,7 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
         if not assignment:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Claim is not assigned to this adjuster.")
         return
-    claimant_id = None if claim.claimant_id is None else (claim.claimant_id if isinstance(claim.claimant_id, str) else str(claim.claimant_id))
-    customer_id = None if claim.customer_id is None else (claim.customer_id if isinstance(claim.customer_id, str) else str(claim.customer_id))
-    if (claimant_id and claimant_id != user_id) or (customer_id and customer_id != user_id):
+    claimant_id = None if claim.claimant_id is None else str(claim.claimant_id)
+    customer_id = None if claim.customer_id is None else str(claim.customer_id)
+    if (claimant_id and claimant_id != user_id_str) or (customer_id and customer_id != user_id_str):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not own this claim.")

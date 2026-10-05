@@ -281,25 +281,30 @@ function Workbench({ ticket }: { ticket: string }) {
   const [priority, setPriority] = useState("normal");
   const [loading, setLoading] = useState(true);
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     try {
-      const [a, b, c, e] = await Promise.all([
+      const [a, c, e] = await Promise.all([
         api<any>("/api/v1/adjuster/claims/" + ticket),
-        api<any>("/api/v1/adjuster/claims/" + ticket + "/copilot"),
         api<any>("/api/v1/adjuster/claims/" + ticket + "/evidence-requests"),
         api<any>("/api/v1/adjuster/claims/" + ticket + "/audit")
       ]);
       setD(a);
-      setCop(b);
       setRequests(Array.isArray(c) ? c : c.items || []);
       setAudit(Array.isArray(e) ? e : e.items || []);
-      setChatRows(b.chat || []);
       setPriority(a?.claim?.priority || "normal");
+      if (!silent) setLoading(false);
+
+      // Asynchronously fetch AI copilot intelligence without blocking dossier review
+      api<any>("/api/v1/adjuster/claims/" + ticket + "/copilot")
+        .then((b) => {
+          setCop(b);
+          setChatRows(b.chat || []);
+        })
+        .catch(() => {});
     } catch (e: any) {
       setError(e.message);
-    } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -310,7 +315,7 @@ function Workbench({ ticket }: { ticket: string }) {
   async function act(url: string, body?: any, method: "POST" | "PATCH" = "POST") {
     try {
       await api(url, { method, body: body ? JSON.stringify(body) : undefined });
-      await load();
+      await load(true);
     } catch (e: any) {
       setError(e.message);
     }

@@ -27,7 +27,7 @@ MAX_LINK_ATTEMPTS = 5
 # Request Models
 # ---------------------------------------------------------------------------
 class LinkPolicyRequest(BaseModel):
-    policy_number: str = Field(..., min_length=3, max_length=20, description="Policy number e.g. MOT-5521")
+    policy_number: str = Field(..., min_length=3, max_length=64, description="Policy number e.g. MOT-5521")
     policyholder_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Full name of policyholder (Optional)")
     date_of_birth: str = Field(..., description="Date of birth in YYYY-MM-DD format")
     phone_last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of phone number")

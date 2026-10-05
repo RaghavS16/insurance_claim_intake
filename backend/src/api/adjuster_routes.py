@@ -546,7 +546,7 @@ Return a valid JSON object with EXACTLY this structure:
     "Aspects that cannot yet be concluded with certainty"
   ],
   "citations": [
-    {"source_id": "retrieved-source-id", "claim": "Short statement this source supports"}
+    {{"source_id": "retrieved-source-id", "claim": "Short statement this source supports"}}
   ]
 }}
 CLAIM FACTS:

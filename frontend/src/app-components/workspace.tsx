@@ -832,6 +832,7 @@ function Sidebar({
         ]
       : user.role === "ADMIN"
       ? [
+          { href: "/admin/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
           { href: "/admin", label: "Administration", icon: Users, exact: true },
           { href: "/claims", label: "Claims", icon: ClipboardList },
           { href: "/admin/audit", label: "System Audit", icon: Activity }
@@ -1060,6 +1061,7 @@ function Screen({ p, user }: { p: string; user: User }) {
   if (p.startsWith("/adjuster/claims/")) return <Workbench ticket={decodeURIComponent(p.split("/")[3] || "")} />;
   if (p === "/knowledge") return <Knowledge />;
   if (p === "/knowledge/manage") return <Knowledge manage />;
+  if (p === "/admin/dashboard") return <AdminDashboard />;
   if (p === "/admin") return <Admin />;
   if (p === "/admin/audit") return <Audit />;
   if (p === "/settings") return <SettingsScreen u={user} />;

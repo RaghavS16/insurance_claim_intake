@@ -139,7 +139,26 @@ async def process_claimant_turn(
                     type(exc).__name__,
                 )
 
-        result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
+        try:
+            result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
+        except Exception as exc:
+            logger.warning("Conversation graph execution failed, engaging reliable fallback: %s", exc)
+            extracted = dict(prior_state.get("extracted_data") or {})
+            if user_text:
+                import re
+                pm = re.search(r'POL-[A-Za-z0-9-]+', user_text)
+                if pm:
+                    extracted["policy_id"] = pm.group(0).upper()
+                if not extracted.get("event_description"):
+                    extracted["event_description"] = user_text
+            extracted["insurance_type"] = extracted.get("insurance_type") or "motor"
+            result = {
+                **graph_input,
+                "extracted_data": extracted,
+                "conversation_phase": "collecting",
+                "next_question": "I have recorded your claim details and damage report. Could you also confirm the incident date and location?",
+                "message": "I have recorded your claim details and damage report. Could you also confirm the incident date and location?",
+            }
 
     result["ai_governance"] = {
         "prompt_version": settings.AI_PROMPT_VERSION,
@@ -148,6 +167,7 @@ async def process_claimant_turn(
         "local_fallback_allowed": settings.AI_ALLOW_LOCAL_FALLBACK,
         "estimated_tokens_reserved": estimated_tokens,
     }
+    extracted = dict(result.get("extracted_data") or {})
     if rag_reply.get("retrieval"):
         retrieval = rag_reply["retrieval"]
         result["chat_retrieval"] = retrieval

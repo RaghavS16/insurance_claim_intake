@@ -361,8 +361,12 @@ def get_adjuster(
 ):
     """Retrieve details of a single adjuster."""
     admin = _require_admin(request, db)
+    try:
+        val_uuid = uuid.UUID(adjuster_id.strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=404, detail="Adjuster not found.")
 
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id, Adjuster.tenant_id == admin.tenant_id).first()
+    adjuster = db.query(Adjuster).filter(Adjuster.id == str(val_uuid), Adjuster.tenant_id == admin.tenant_id).first()
     if not adjuster: raise HTTPException(status_code=404, detail="Adjuster not found.")
     return _adjuster_dict(adjuster)
 
