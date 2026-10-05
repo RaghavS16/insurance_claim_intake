@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from datetime import datetime, timezone
 from src.api.deps import get_current_user, require_role, resolve_bearer_user, get_claim_or_404
 from src.config import settings
-from src.database.models import Claim, Adjuster, User, ConversationTurn
+from src.database.models import Claim, Adjuster, User, ConversationTurn, Policy
 from src.database.hardening_models import (
     ClaimAssignment, ClaimDecision, ClaimNote, ClaimAuditEvent, CopilotAnalysis,
     ClaimEvidenceRequest, ClaimEvidence, ClaimFact, ClaimRequirement, ClaimException,
@@ -351,9 +351,29 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
     if not package:
         from src.agents.submission_synthesizer import synthesize_claims_package
         package = synthesize_claims_package(state, db, c)
+    extracted = state.get("extracted_data", {})
+    policy_number = extracted.get("policy_id")
+    policy = db.query(Policy).filter(
+        Policy.tenant_id == user.tenant_id,
+        Policy.policy_number == str(policy_number or "").strip().upper(),
+    ).first() if policy_number else None
+    policy_payload = None
+    if policy:
+        policy_payload = {
+            "id": str(policy.id),
+            "policy_number": policy.policy_number,
+            "policy_type": policy.policy_type,
+            "coverage_amount": float(policy.coverage_amount or 0),
+            "deductible": float(policy.deductible or 0),
+            "effective_date": policy.effective_date.isoformat() if policy.effective_date else None,
+            "expiry_date": policy.expiry_date.isoformat() if policy.expiry_date else None,
+            "is_active": bool(policy.is_active),
+            "policyholder_name": policy.policyholder_name,
+        }
     return {
         "claim": _item(c, db=db),
-        "extracted_data": state.get("extracted_data", {}),
+        "extracted_data": extracted,
+        "policy": policy_payload,
         "conversation": [{"speaker": "Claimant" if t.speaker in {"user", "claimant"} else "Agent", "text": t.text, "turn": t.turn_number, "timestamp": t.created_at.isoformat() if t.created_at else None} for t in turns],
         "requirements": state.get("dynamic_requirements", []),
         "missing_requirements": state.get("dynamic_missing", []),
