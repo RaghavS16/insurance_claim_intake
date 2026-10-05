@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -36,7 +36,7 @@ def preview_adjuster_invitation(token: str, db: Session = Depends(get_db)):
     return {"valid": True, "name": invite.name, "email": invite.email, "specialization": invite.specialization, "expires_at": invite.expires_at.isoformat()}
 
 @router.post("/adjuster/accept")
-def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, db: Session = __import__("fastapi", fromlist=["Depends"]).Depends(get_db)):
+def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, db: Session = Depends(get_db)):
     invite = _find_invite(db, payload.token)
     if not invite or invite.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invitation is invalid or expired.")
