@@ -21,7 +21,7 @@ from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant,
 from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
-from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, send_otp_email
+from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 from src.api.deps import get_current_user
@@ -180,15 +180,35 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             detail="Account creation failed. Please try again.",
         )
 
-    if settings.REQUIRE_EMAIL_VERIFICATION:
+    verification_required = bool(settings.REQUIRE_EMAIL_VERIFICATION)
+    if verification_required:
         verification_code = generate_otp()
-        db.add(PasswordResetOTP(user_id=new_user.id, tenant_id=tenant.id, otp_hash=hash_otp(verification_code), purpose="email_verification", expires_at=otp_expiry(), attempts=0, verified=False, consumed=False))
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Account verification setup failed.")
-        send_otp_email(new_user.email, verification_code, full_name=new_user.full_name, purpose="email_verification")
+        record = PasswordResetOTP(
+            user_id=new_user.id,
+            tenant_id=tenant.id,
+            otp_hash=hash_otp(verification_code),
+            purpose="email_verification",
+            expires_at=otp_expiry(),
+            attempts=0,
+            verified=False,
+            consumed=False,
+        )
+        db.add(record)
+        db.flush()
+        queue_otp_email(
+            db,
+            to_email=new_user.email,
+            otp=verification_code,
+            full_name=new_user.full_name,
+            purpose="email_verification",
+            event_key=f"email-verification:{new_user.id}:{record.id}",
+        )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to finalize claimant registration")
+        raise HTTPException(status_code=500, detail="Account creation failed. Please try again.")
     return {
         "id": new_user.id,
         "full_name": new_user.full_name,
@@ -196,6 +216,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         "phone": new_user.phone,
         "role": new_user.role,
         "status": new_user.status,
+        "email_verification_required": verification_required,
     }
 
 
@@ -224,6 +245,17 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled. Please contact support.",
         )
+
+    if user.role == "ADJUSTER":
+        adjuster = db.query(Adjuster).filter(
+            Adjuster.user_id == user.id,
+            Adjuster.tenant_id == user.tenant_id,
+        ).first()
+        if not adjuster or not adjuster.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Adjuster onboarding is incomplete. Finish passkey setup before signing in.",
+            )
 
     user.last_login_at = datetime.now(timezone.utc)
     user.session_version = int(getattr(user, "session_version", 1) or 1)
@@ -315,7 +347,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     if settings.ENVIRONMENT not in ("development", "test"):
         recent = (
             db.query(PasswordResetOTP)
-            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
+            .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.purpose == "password_reset", PasswordResetOTP.consumed == False)  # noqa: E712
             .order_by(PasswordResetOTP.created_at.desc())
             .first()
         )
@@ -346,7 +378,8 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
         logger.exception("Failed to persist password reset OTP for user %s", user.id)
         return generic_response
 
-    send_otp_email(user.email, otp, full_name=user.full_name)
+    queue_otp_email(db, to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset", event_key=f"password-reset:{user.id}:{record.id}")
+    db.commit()
     return generic_response
 
 
