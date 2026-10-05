@@ -58,7 +58,7 @@ export function ClaimantChat(){
     setTicket(id);
     try{
       const rows=await api<any[]>("/api/v1/claims/"+encodeURIComponent(id)+"/conversation");
-      setMessages((rows||[]).map((m:any)=>({role:m.speaker==="user"?"user":"assistant",text:m.text||"",attachment:m.attachment})).filter(x=>x.text));
+      setMessages((rows||[]).map((m:any):ChatMessage=>({role:m.speaker==="user"?"user":"assistant",text:m.text||"",attachment:m.attachment})).filter(x=>x.text));
       setError("");
     }catch(e:any){setError(e.message||"Unable to open conversation.");}
   }
