@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from src.config import settings
 from src.database.hardening_models import AdjusterInvitation
 from src.database.models import Adjuster, User
 from src.database.session import get_db
