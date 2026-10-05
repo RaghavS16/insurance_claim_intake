@@ -29,6 +29,7 @@ export function AdjusterOnboardingPage(){
   async function registerPasskey(){
     setBusy(true);setError("");
     try{
+      if(window.isSecureContext===false) throw Error("Passkey setup requires HTTPS or localhost. Open the secure application URL.");
       assertWebAuthnSupport();
       const options=await api<any>("/api/v1/auth/passkey/registration/options",{method:"POST"});
       const credential=await navigator.credentials.create({publicKey:prepareCreationOptions(options.public_key)});
@@ -45,7 +46,7 @@ export function AdjusterOnboardingPage(){
     {step==="loading"&&<><h1 className="auth-title">Loading invitation</h1><p className="auth-subtitle">Checking your secure invitation…</p></>}
     {step==="error"&&<><h1 className="auth-title">Invitation unavailable</h1><p className="auth-subtitle">{error}</p><a className="btn primary" href="/login">Return to sign in</a></>}
     {step==="form"&&<><h1 className="auth-title">Set up your adjuster account</h1><p className="auth-subtitle">Welcome {info?.name}. Create your password first, then register a passkey.</p><form className="form" onSubmit={e=>{e.preventDefault();accept()}}><label>Email<input value={info?.email||""} readOnly/></label><label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="new-password" minLength={8} required/></label><label>Confirm password<input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} autoComplete="new-password" minLength={8} required/></label>{error&&<div className="error" role="alert">{error}</div>}<button className="btn primary" disabled={busy}>{busy?"Creating account…":"Continue to passkey setup"}</button></form></>}
-    {step==="passkey"&&<><h1 className="auth-title">Register your passkey</h1><p className="auth-subtitle">Use your device biometrics, security key, or platform passkey. Operational access is enabled only after this step.</p>{error&&<div className="error" role="alert">{error}</div>}<button className="btn primary" onClick={registerPasskey} disabled={busy}>{busy?"Waiting for your device…":"Register passkey"}</button></>}
+    {step==="passkey"&&<><h1 className="auth-title">Register your passkey</h1><p className="auth-subtitle">Use your device biometrics, security key, or platform passkey. Keep this tab on the same secure domain used for your organization. Operational access is enabled only after this step.</p>{error&&<div className="error" role="alert">{error}</div>}<button className="btn primary" onClick={registerPasskey} disabled={busy}>{busy?"Waiting for your device…":"Register passkey"}</button></>}
     {step==="done"&&<><h1 className="auth-title">You’re all set</h1><p className="auth-subtitle">Your adjuster account is activated. Sign in with the passkey you just registered.</p><button className="btn primary" onClick={()=>router.replace("/login")}>Continue to sign in</button></>}
   </div></main>;
 }
