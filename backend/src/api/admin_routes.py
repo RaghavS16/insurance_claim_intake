@@ -70,9 +70,10 @@ class CreatePolicyRequest(BaseModel):
     effective_date: str = Field(..., description="Start date YYYY-MM-DD")
     expiry_date: str = Field(..., description="End date YYYY-MM-DD")
     is_active: Optional[bool] = Field(True, description="Active status of policy")
-    policyholder_name: Optional[str] = Field(None, max_length=255, description="Full name of policyholder")
-    policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
-    policyholder_phone: Optional[str] = Field(None, max_length=20, description="Full phone number")
+    policyholder_name: str = Field(..., min_length=2, max_length=255, description="Full name of policyholder")
+    policyholder_dob: str = Field(..., description="DOB YYYY-MM-DD")
+    policyholder_phone: str = Field(..., min_length=5, max_length=20, description="Full phone number")
+    policyholder_email: Optional[str] = Field(None, max_length=254, description="Optional policyholder email")
     policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
 
 
@@ -160,6 +161,7 @@ def _policy_dict(p: Policy) -> Dict[str, Any]:
         "is_active": p.is_active,
         "policyholder_name": p.policyholder_name,
         "policyholder_phone": p.policyholder_phone,
+        "policyholder_email": p.policyholder_email,
     }
 
 
@@ -213,7 +215,7 @@ async def import_policies_csv(
 
     # Normalize header mapping
     header_map = {name.strip().lower(): name for name in fieldnames if name}
-    required_fields = ["policy_number", "policy_type", "coverage_amount", "deductible", "effective_date", "expiry_date"]
+    required_fields = ["policy_number", "policy_type", "coverage_amount", "deductible", "effective_date", "expiry_date", "policyholder_name", "policyholder_dob", "policyholder_phone"]
 
     for req in required_fields:
         if req not in header_map:
@@ -254,6 +256,10 @@ async def import_policies_csv(
 
         holder_name = row.get("policyholder_name") or None
         holder_dob_str = row.get("policyholder_dob") or None
+        holder_phone_raw = row.get("policyholder_phone") or ""
+        if not holder_name: errors.append({"row": row_idx, "policy_number": policy_num, "error": "Missing policyholder_name"}); continue
+        if not holder_dob_str: errors.append({"row": row_idx, "policy_number": policy_num, "error": "Missing policyholder_dob"}); continue
+        if not holder_phone_raw: errors.append({"row": row_idx, "policy_number": policy_num, "error": "Missing policyholder_phone"}); continue
         holder_dob = None
         if holder_dob_str:
             try:
@@ -655,16 +661,15 @@ def create_policy(
     eff_date = parse_date(payload.effective_date, "Effective date")
     exp_date = parse_date(payload.expiry_date, "Expiry date")
 
-    holder_dob = None
-    if payload.policyholder_dob:
-        holder_dob = parse_date(payload.policyholder_dob, "Policyholder date of birth")
+    holder_dob = parse_date(payload.policyholder_dob, "Policyholder date of birth")
 
-    phone = None
-    if payload.policyholder_phone:
-        phone = "".join(filter(str.isdigit, payload.policyholder_phone))
+    phone = "".join(filter(str.isdigit, payload.policyholder_phone)) if payload.policyholder_phone else ""
 
     is_act = payload.is_active if payload.is_active is not None else True
-    phone_last4 = payload.policyholder_phone_last4 or (phone[-4:] if phone and len(phone) >= 4 else None)
+    if not phone or len(phone) < 5:
+        raise HTTPException(status_code=400, detail="Policyholder phone is required and must contain at least 5 digits.")
+    holder_email = validate_email(payload.policyholder_email) if payload.policyholder_email else None
+    phone_last4 = payload.policyholder_phone_last4 or (phone[-4:] if len(phone) >= 4 else None)
 
     new_policy = Policy(
         id=str(uuid.uuid4()),
@@ -680,6 +685,7 @@ def create_policy(
         policyholder_name=payload.policyholder_name.strip() if payload.policyholder_name else None,
         policyholder_dob=holder_dob,
         policyholder_phone=phone,
+        policyholder_email=holder_email,
         policyholder_phone_last4=phone_last4,
         link_attempts=0,
     )
