@@ -122,7 +122,13 @@ class ClaimVoiceProcessor(FrameProcessor):
                     within_target=latency_ms <= settings.VOICE_LATENCY_TARGET_MS,
                 )
                 if response_text:
-                    await self._publish("voice.agent.final", text=response_text)
+                    await self._publish(
+                        "voice.agent.final",
+                        text=response_text,
+                        grounded=bool(result.get("rag_answer_grounded") or (result.get("chat_retrieval") or {}).get("grounded")),
+                        citations=list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+                        sources=list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+                    )
                 record_voice_turn(outcome="processed", latency_ms=latency_ms)
                 return response_text
             finally:
