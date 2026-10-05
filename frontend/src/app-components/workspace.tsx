@@ -143,7 +143,7 @@ function AdminDashboard(){
   {error&&<div className="error" role="alert">{error}</div>}
   <div className="metrics">
    <Metric label="Policies" value={p.length} note="Inventory" icon={<ShieldCheck size={14}/>}/>
-   <Metric label="Adjusters" value={a.length} note="Active "+a.filter(x=>x.is_active!==false).length icon={<Users size={14}/>}/>
+   <Metric label="Adjusters" value={a.length} note={"Active "+a.filter(x=>x.is_active!==false).length} icon={<Users size={14}/>}/>
    <Metric label="Filed claims" value={c.filter(x=>x.status!=="draft").length} note="Tenant workflow" icon={<ClipboardList size={14}/>}/>
    <Metric label="Unassigned" value={c.filter(x=>!x.assigned_adjuster_id&&x.status!=="draft").length} note="Needs routing" icon={<UserRound size={14}/>}/>
   </div>
