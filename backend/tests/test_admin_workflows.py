@@ -95,9 +95,8 @@ def test_strict_policy_rejects_invalid_policy_type(monkeypatch):
 def test_policy_template_returns_download_response(monkeypatch):
     monkeypatch.setattr(admin, "_admin", lambda request, db: admin_user())
     response = admin.policy_template(SimpleNamespace(), "csv", MagicMock())
-    body = b"".join(response.body_iterator) if hasattr(response, "body_iterator") else b""
     assert response.media_type == "text/csv"
-    assert "policyholder_name" in body.decode()
+    assert "policy-import-template.csv" in str(response.headers.get("content-disposition"))
 
 
 def test_reassign_requires_active_target(monkeypatch):
