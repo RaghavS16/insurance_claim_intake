@@ -77,3 +77,31 @@ Adjuster/admin knowledge uploads are queued through the transactional outbox. Up
 ## Policy bulk import
 
 Admin policy import accepts both CSV and XLSX files. Imports are tenant-scoped, schema-validated and preserve existing claimant linkage fields during upsert.
+
+## Demo seed and acceptance users
+
+After the stack is running, seed a deterministic demo tenant with one admin, two adjusters, one claimant, and sample policies:
+
+```bash
+export DEMO_PASSWORD='choose-a-local-demo-password'
+python database/seed_demo.py
+```
+
+The seed prints the exact tenant, role emails, password, and policy numbers. In development, keep `PRIVILEGED_PASSKEY_REQUIRED=false`; privileged production/staging users must complete passkey authentication.
+
+### Core local run
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://localhost:3000`. Backend health is `http://localhost:8000/health`.
+
+### Admin workflow
+
+Use the admin workspace to invite an adjuster. The invitation URL can be copied in development when SMTP is not configured. The invitee sets a password, registers a passkey, and is activated only after passkey registration.
+
+### Policy imports
+
+Download the CSV/XLSX policy template from the Admin workspace. Bulk imports validate the required policyholder identity fields row-by-row and return row-level errors without overwriting claimant linkage.
+
