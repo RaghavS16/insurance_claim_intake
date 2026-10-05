@@ -16,6 +16,55 @@ from src.utils.logger import app_logger
 logger = app_logger
 
 
+def _send_transactional_email(event: OutboxEvent) -> None:
+    """Deliver a queued email and raise on delivery failure so the outbox retries."""
+    payload = dict(event.payload_json or {})
+    to_email = str(payload.get("to") or "").strip()
+    subject = str(payload.get("subject") or "").strip()
+    body = str(payload.get("body") or "")
+    if not to_email or not subject or not body:
+        raise ValueError("Email event is missing recipient, subject, or body.")
+    if not settings.SMTP_HOST:
+        if settings.ENVIRONMENT in {"development", "test"}:
+            logger.info("Transactional email suppressed in %s (event=%s)", settings.ENVIRONMENT, event.id)
+            return
+        raise RuntimeError("SMTP is not configured for transactional email delivery.")
+
+    from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
+    if not from_email:
+        raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
+    from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((from_name, from_email))
+    msg["To"] = to_email
+    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
+    msg["X-InsureClaim-Event-ID"] = str(event.id)
+    password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
+
+    if settings.SMTP_USE_SSL:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+            if settings.SMTP_USERNAME and password:
+                server.login(settings.SMTP_USERNAME, password)
+            refused = server.sendmail(from_email, [to_email], msg.as_string())
+    else:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+            if settings.SMTP_USE_TLS:
+                server.starttls()
+            if settings.SMTP_USERNAME and password:
+                server.login(settings.SMTP_USERNAME, password)
+            refused = server.sendmail(from_email, [to_email], msg.as_string())
+
+    if refused:
+        raise RuntimeError("SMTP rejected recipient(s): " + ", ".join(sorted(refused.keys())))
+
+
+async def handle_email_send(event: OutboxEvent) -> None:
+    import asyncio
+    await asyncio.to_thread(_send_transactional_email, event)
+
+
+
 def _send_email(to_email: str, subject: str, body: str, event_id: str) -> None:
     if not settings.SMTP_HOST:
         if settings.ENVIRONMENT in {"development", "test"}:
@@ -111,6 +160,10 @@ async def handle_knowledge_ingest(event: OutboxEvent) -> None:
 
 
 HANDLERS = {
+    "email.send": handle_email_send,
+    "email.adjuster_invite": handle_email_send,
+    "email.verification": handle_email_send,
+    "email.password_reset": handle_email_send,
     "claim.assigned": handle_claim_event,
     "knowledge.ingest": handle_knowledge_ingest,
     "claim.status_changed": handle_claim_event,
