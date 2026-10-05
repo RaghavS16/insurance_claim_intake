@@ -334,6 +334,7 @@ app.include_router(
     admin_routes.router,
     dependencies=[Depends(get_current_user)],
 )
+app.include_router(admin_workflow_routes.router)
 
 app.include_router(adjuster_routes.router)
 app.include_router(knowledge_routes.router)
