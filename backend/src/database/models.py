@@ -101,6 +101,7 @@ class Policy(Base):
     policyholder_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     policyholder_dob: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     policyholder_phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    policyholder_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     policyholder_phone_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
     linked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     link_attempts: Mapped[int] = mapped_column(Integer, default=0)
