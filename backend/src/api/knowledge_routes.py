@@ -9,6 +9,7 @@ from src.database.session import SessionLocal
 from src.database.session import get_db
 from sqlalchemy.orm import Session
 from src.knowledge.store import ingest_document, search
+from src.storage.s3 import get_bytes
 from src.utils.upload_limits import read_limited
 from src.utils.clamav import scan_bytes
 from src.services.ai_governance import tenant_ai_guard
@@ -155,6 +156,141 @@ async def retrieve(
         raise HTTPException(status_code=502, detail="Knowledge retrieval is temporarily unavailable.")
 
 
+
+
+@router.get("/documents")
+def list_documents(
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    docs = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.tenant_id == str(user.tenant_id or "")
+    ).order_by(KnowledgeDocument.created_at.desc()).limit(500).all()
+    return {"items": [
+        {
+            "id": str(doc.id),
+            "source_name": doc.source_name,
+            "document_type": doc.document_type,
+            "insurance_type": doc.insurance_type,
+            "policy_number": (doc.metadata_json or {}).get("policy_number"),
+            "policy_version": (doc.metadata_json or {}).get("policy_version") or doc.document_version,
+            "jurisdiction": doc.jurisdiction,
+            "publication_status": (doc.metadata_json or {}).get("publication_status", "pending_review"),
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "source_uri": doc.source_uri,
+            "chunks": len(doc.chunks or []),
+        }
+        for doc in docs
+    ]}
+
+
+class UpdateDocumentRequest(BaseModel):
+    source_name: str | None = Field(None, min_length=1, max_length=255)
+    insurance_type: str | None = None
+    policy_number: str | None = None
+    policy_version: str | None = None
+    jurisdiction: str | None = Field(None, max_length=120)
+    effective_from: str | None = None
+    effective_to: str | None = None
+    publication_status: str | None = None
+
+
+@router.put("/documents/{document_id}")
+def update_document(
+    document_id: str,
+    payload: UpdateDocumentRequest,
+    user: User = Depends(require_role(["ADJUSTER"])),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+    allowed_statuses = {"pending_review", "published", "superseded", "archived"}
+    if payload.publication_status and payload.publication_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Invalid publication status.")
+    if payload.source_name is not None:
+        doc.source_name = payload.source_name.strip()
+    if payload.insurance_type is not None:
+        doc.insurance_type = payload.insurance_type.strip() or None
+    if payload.policy_version is not None:
+        doc.document_version = payload.policy_version.strip() or None
+    if payload.jurisdiction is not None:
+        doc.jurisdiction = payload.jurisdiction.strip() or None
+    meta = dict(doc.metadata_json or {})
+    for key in ("policy_number", "effective_from", "effective_to", "policy_version"):
+        value = getattr(payload, key)
+        if value is not None:
+            meta[key] = value.strip() or None
+    if payload.publication_status:
+        meta["publication_status"] = payload.publication_status
+    meta["updated_by"] = str(user.id)
+    doc.metadata_json = meta
+    db.commit()
+    return {"document_id": str(doc.id), "updated": True, "publication_status": meta.get("publication_status")}
+
+
+@router.post("/documents/{document_id}/reindex")
+async def reindex_document(
+    document_id: str,
+    user: User = Depends(require_role(["ADJUSTER"])),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+
+    source_uri = str(doc.source_uri or "")
+    key = source_uri
+    if source_uri.startswith("s3://"):
+        parts = source_uri[5:].split("/", 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=409, detail="Stored knowledge object has an invalid URI.")
+        key = parts[1]
+    elif source_uri.startswith("file://"):
+        from urllib.parse import urlparse, unquote
+        key = unquote(urlparse(source_uri).path)
+
+    try:
+        content = await asyncio.to_thread(get_bytes, key)
+    except Exception as exc:
+        logger.exception("Knowledge source could not be loaded for re-index: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="The stored source document could not be loaded for re-indexing.")
+
+    meta = dict(doc.metadata_json or {})
+    try:
+        result = await asyncio.to_thread(
+            ingest_document,
+            content=content,
+            filename=doc.source_name,
+            document_type=doc.document_type,
+            insurance_type=doc.insurance_type,
+            policy_number=meta.get("policy_number"),
+            effective_from=meta.get("effective_from"),
+            effective_to=meta.get("effective_to"),
+            policy_version=meta.get("policy_version") or doc.document_version,
+            uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=doc.jurisdiction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Knowledge re-index failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Knowledge re-indexing is temporarily unavailable.") from exc
+
+    if str(result.get("document_id")) != str(doc.id):
+        meta["publication_status"] = "superseded"
+        meta["superseded_by"] = str(result.get("document_id"))
+        doc.metadata_json = meta
+        db.commit()
+
+    return {"document_id": str(doc.id), "reindexed_document_id": str(result.get("document_id")), "status": "completed", "chunks": result.get("chunks", 0)}
 
 @router.post("/documents/{document_id}/publish")
 def publish_document(
