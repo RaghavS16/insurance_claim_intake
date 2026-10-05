@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 from database._db_helpers import SessionLocal
 from src.database.models import User, Policy, Adjuster, Claim, ConversationTurn
-from src.database.hardening_models import Tenant, TenantMembership, ClaimAssignment, ClaimSubmission
+from src.database.hardening_models import Tenant, TenantMembership, ClaimAssignment, ClaimSubmission, ClaimEvidenceRequest
 from src.utils.auth import get_password_hash
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -136,6 +136,20 @@ def seed_demo():
                     is_active=True,
                 ))
             asha.claims_assigned = max(1, int(asha.claims_assigned or 0))
+            request_row = db.query(ClaimEvidenceRequest).filter(
+                ClaimEvidenceRequest.claim_id == demo_claim.id,
+                ClaimEvidenceRequest.tenant_id == TENANT_ID,
+                ClaimEvidenceRequest.status == "open",
+            ).first()
+            if not request_row:
+                db.add(ClaimEvidenceRequest(
+                    claim_id=demo_claim.id,
+                    tenant_id=TENANT_ID,
+                    adjuster_id=asha.id,
+                    request_text="Please provide the vehicle repair estimate or garage quotation for the reported damage.",
+                    status="open",
+                ))
+                demo_claim.status = "pending_evidence"
         db.commit()
         print("Demo seed complete.")
         print(f"Tenant: {TENANT_ID}")
