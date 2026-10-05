@@ -2,6 +2,7 @@
 from pathlib import Path
 from typing import List, Optional
 import os
+from urllib.parse import urlparse
 import socket
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -240,8 +241,17 @@ class Settings(BaseSettings):
             raise RuntimeError("CLAMAV_HOST is required when malware scanning is enabled.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_EMAIL_VERIFICATION and not self.SMTP_HOST:
             raise RuntimeError("SMTP_HOST is required when email verification is enabled.")
-        if self.ENVIRONMENT in ("production", "staging") and not self.PUBLIC_APP_URL.startswith("https://"):
-            raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
+        if self.ENVIRONMENT in ("production", "staging"):
+            if not self.PUBLIC_APP_URL.startswith("https://"):
+                raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
+            if self.PASSKEY_ENABLED:
+                public_origin = self.PUBLIC_APP_URL.rstrip("/")
+                passkey_origin = self.PASSKEY_ORIGIN.rstrip("/")
+                if public_origin != passkey_origin:
+                    raise RuntimeError("PUBLIC_APP_URL and PASSKEY_ORIGIN must match exactly for WebAuthn.")
+                hostname = urlparse(passkey_origin).hostname
+                if hostname and self.PASSKEY_RP_ID != hostname:
+                    raise RuntimeError("PASSKEY_RP_ID must match the WebAuthn origin hostname.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.S3_SERVER_SIDE_ENCRYPTION == "aws:kms" and not self.S3_KMS_KEY_ID:
