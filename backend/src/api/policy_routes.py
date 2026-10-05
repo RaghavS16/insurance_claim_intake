@@ -212,8 +212,18 @@ def list_policies_directory(
     if policy_type and policy_type.strip().lower() != "all":
         query = query.filter(Policy.policy_type == policy_type.strip().lower())
 
+    today = datetime.now(timezone.utc).date()
     if is_active is not None:
-        query = query.filter(Policy.is_active == is_active)
+        from sqlalchemy import and_, or_
+        if is_active:
+            query = query.filter(
+                Policy.is_active.isnot(False),
+                or_(Policy.expiry_date.is_(None), Policy.expiry_date >= today)
+            )
+        else:
+            query = query.filter(
+                or_(Policy.is_active == False, and_(Policy.expiry_date.isnot(None), Policy.expiry_date < today))
+            )
 
     total = query.count()
     if page < 1:

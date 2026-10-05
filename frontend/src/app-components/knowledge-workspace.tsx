@@ -19,7 +19,7 @@ import {
 import { api } from "@/lib/api";
 import { Badge, Card, DataBadge, Empty, Page } from "@/app-components/ui";
 
-const human = (v: string) => v.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+const human = (v?: string | null) => (v ? String(v).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()) : "—");
 
 export function Knowledge({ manage = false }: { manage?: boolean }) {
   const [q, setQ] = useState("");

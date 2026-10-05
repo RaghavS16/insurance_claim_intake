@@ -628,7 +628,7 @@ function ClaimDetail({ ticket }: { ticket: string }) {
                 <span className="timeline-dot" />
                 <div className="timeline-card">
                   <small style={{ fontWeight: 600, color: "var(--ink-secondary)" }}>
-                    {m.speaker.toUpperCase()} · {dt(m.timestamp)}
+                    {(m.speaker || m.role || "unknown").toUpperCase()} · {dt(m.timestamp)}
                   </small>
                   <p>{m.text || m.message}</p>
                 </div>

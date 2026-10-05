@@ -464,7 +464,7 @@ function Admin() {
             downloadFile(
               "/api/v1/admin/policies/export?format=csv" +
                 (policyTypeFilter !== "all" ? "&policy_type=" + policyTypeFilter : "") +
-                (policyStatusFilter !== "all" ? "&is_active=" + policyStatusFilter : ""),
+                (policyStatusFilter !== "all" ? "&is_active=" + (policyStatusFilter === "active" ? "true" : "false") : ""),
               "policies-export.csv"
             )
           }

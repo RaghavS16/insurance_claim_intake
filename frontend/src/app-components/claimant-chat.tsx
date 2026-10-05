@@ -74,6 +74,10 @@ export function ClaimantChat() {
   const [mobileHistory, setMobileHistory] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [linkedPolicies, setLinkedPolicies] = useState<any[]>([]);
+  const ticketRef = useRef(ticket);
+  useEffect(() => {
+    ticketRef.current = ticket;
+  }, [ticket]);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const mediaRef = useRef<MediaStream | null>(null);
@@ -205,11 +209,17 @@ export function ClaimantChat() {
     if (!confirm("Are you sure you want to discard this draft claim session?")) return;
     try {
       await api("/api/v1/claims/" + encodeURIComponent(t), { method: "DELETE" });
-      const remaining = conversations.filter((x) => x.ticket_id !== t);
-      setConversations(remaining);
-      if (ticket === t) {
+      let nextFirstTicket: string | null = null;
+      setConversations((prev) => {
+        const remaining = prev.filter((x) => x.ticket_id !== t);
         if (remaining.length > 0) {
-          await openConversation(remaining[0].ticket_id);
+          nextFirstTicket = remaining[0].ticket_id;
+        }
+        return remaining;
+      });
+      if (ticketRef.current === t) {
+        if (nextFirstTicket) {
+          await openConversation(nextFirstTicket);
         } else {
           await createChat();
         }
@@ -242,7 +252,14 @@ export function ClaimantChat() {
     if (!text || sending) return;
 
     let activeTicket = ticket;
-    if (!activeTicket) activeTicket = await createChat();
+    if (!activeTicket) {
+      try {
+        activeTicket = await createChat();
+      } catch (err: any) {
+        setError(err?.message || "Failed to start a new chat session.");
+        return;
+      }
+    }
     if (!activeTicket) return;
 
     if (customText === undefined) setDraft("");
@@ -283,14 +300,6 @@ export function ClaimantChat() {
       setError(e.message || "Your message could not be processed.");
     } finally {
       setSending(false);
-    }
-  }
-
-  async function regenerateTurn() {
-    if (sending || messages.length === 0) return;
-    const lastUserTurn = [...messages].reverse().find((m) => m.role === "user");
-    if (lastUserTurn) {
-      await sendText(lastUserTurn.text);
     }
   }
 
@@ -510,32 +519,54 @@ export function ClaimantChat() {
             <div
               key={c.ticket_id || `conv-${idx}`}
               className={"chat-history-item" + (c.ticket_id === ticket ? " active" : "")}
-              onClick={() => openConversation(c.ticket_id)}
-              style={{ cursor: "pointer" }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span className="chat-history-title">
-                  {c.insurance_type ? c.insurance_type.replaceAll("_", " ") : "Claim session"}
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button
+                type="button"
+                className="chat-history-open-btn"
+                onClick={() => openConversation(c.ticket_id)}
+                style={{
+                  all: "unset",
+                  display: "grid",
+                  gap: 3,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  width: "100%",
+                  paddingRight: ["draft", "pending_confirmation"].includes(c.status) ? 22 : 0
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="chat-history-title">
+                    {c.insurance_type ? c.insurance_type.replaceAll("_", " ") : "Claim session"}
+                  </span>
                   <span style={{ fontSize: 10, color: "var(--muted)" }}>
                     {c.status || "draft"}
                   </span>
-                  {["draft", "pending_confirmation"].includes(c.status) && (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => discardConversation(e, c.ticket_id)}
-                      title="Discard draft conversation"
-                      style={{ cursor: "pointer", color: "var(--muted)", display: "inline-flex", padding: 2 }}
-                    >
-                      <Trash2 size={12} />
-                    </span>
-                  )}
                 </div>
-              </div>
-              <div className="chat-history-meta">{c.ticket_id}</div>
-              <div className="chat-history-preview">{c.last_message || "No messages yet."}</div>
+                <div className="chat-history-meta">{c.ticket_id}</div>
+                <div className="chat-history-preview">{c.last_message || "No messages yet."}</div>
+              </button>
+
+              {["draft", "pending_confirmation"].includes(c.status) && (
+                <button
+                  type="button"
+                  aria-label="Discard draft conversation"
+                  onClick={(e) => discardConversation(e, c.ticket_id)}
+                  title="Discard draft conversation"
+                  style={{
+                    position: "absolute",
+                    top: 11,
+                    right: 12,
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "var(--muted)",
+                    display: "inline-flex",
+                    padding: 2
+                  }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
             </div>
           ))}
           {!conversations.length && !loading && (
@@ -624,19 +655,6 @@ export function ClaimantChat() {
                             {copiedId === msgId ? <Check size={12} color="var(--success)" /> : <Copy size={12} />}
                             <span>{copiedId === msgId ? "Copied" : "Copy"}</span>
                           </button>
-
-                          {i === messages.length - 1 && (
-                            <button
-                              className="chat-util-btn"
-                              onClick={regenerateTurn}
-                              disabled={sending}
-                              aria-label="Regenerate turn"
-                              title="Regenerate response"
-                            >
-                              <RefreshCw size={12} className={sending ? "spinning" : ""} />
-                              <span>Regenerate</span>
-                            </button>
-                          )}
                         </div>
 
                         {/* Citations Sheet */}

@@ -181,6 +181,21 @@ export function ThemeToggle() {
     applyTheme(saved);
   }, []);
 
+  useEffect(() => {
+    if (theme !== "system" || typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      applyTheme("system");
+    };
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    } else if (typeof (media as any).addListener === "function") {
+      (media as any).addListener(onChange);
+      return () => (media as any).removeListener(onChange);
+    }
+  }, [theme]);
+
   function applyTheme(t: "light" | "dark" | "system") {
     if (typeof document === "undefined") return;
     const root = document.documentElement;

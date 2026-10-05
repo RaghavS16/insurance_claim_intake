@@ -735,20 +735,23 @@ function Workbench({ ticket }: { ticket: string }) {
           <div className="card-title">Copilot policy query</div>
           <div style={{ maxHeight: 300, overflowY: "auto", display: "grid", gap: 10, paddingRight: 4 }}>
             {chatRows.length ? (
-              chatRows.map((m: any, i: number) => (
-                <div key={i} className={"chat-turn " + ((m.speaker || m.role) === "adjuster" ? "user" : "assistant")}>
-                  <div className="chat-avatar">{m.speaker === "adjuster" ? "Adj" : "AI"}</div>
-                  <div className="chat-message-content">
-                    {m.speaker === "adjuster" ? (
-                      <div className="chat-bubble-user">{m.message || m.text}</div>
-                    ) : (
-                      <div className="chat-response-ai">
-                        <MarkdownRenderer content={m.message || m.content || m.text} />
-                      </div>
-                    )}
+              chatRows.map((m: any, i: number) => {
+                const isAdj = (m.speaker || m.role) === "adjuster";
+                return (
+                  <div key={i} className={"chat-turn " + (isAdj ? "user" : "assistant")}>
+                    <div className="chat-avatar">{isAdj ? "Adj" : "AI"}</div>
+                    <div className="chat-message-content">
+                      {isAdj ? (
+                        <div className="chat-bubble-user">{m.message || m.text}</div>
+                      ) : (
+                        <div className="chat-response-ai">
+                          <MarkdownRenderer content={m.message || m.content || m.text} />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <Empty text="Ask questions about clause limits, deductible exceptions, or risk flags." />
             )}
