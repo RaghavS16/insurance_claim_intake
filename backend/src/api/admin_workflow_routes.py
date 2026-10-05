@@ -242,6 +242,32 @@ async def import_strict_policies(request: Request, file: UploadFile = File(...),
     db.commit()
     return {"created":created,"updated":updated,"total_processed":created+updated,"errors":errors}
 
+@router.get("/claims")
+def admin_claims(request: Request, status: Optional[str] = None, adjuster_id: Optional[str] = None, db: Session = Depends(get_db)):
+    admin = _admin(request, db)
+    q = db.query(Claim).filter(Claim.tenant_id == admin.tenant_id)
+    if status:
+        q = q.filter(Claim.status == status.strip().lower())
+    claims = q.order_by(Claim.updated_at.desc()).limit(500).all()
+    active_assignments = {str(a.claim_id): a for a in db.query(ClaimAssignment).filter(ClaimAssignment.tenant_id == admin.tenant_id, ClaimAssignment.is_active.is_(True)).all()}
+    items = []
+    for claim in claims:
+        assignment = active_assignments.get(str(claim.id))
+        if adjuster_id and (not assignment or str(assignment.adjuster_id) != str(adjuster_id)):
+            continue
+        adjuster = db.query(Adjuster).filter(Adjuster.id == assignment.adjuster_id, Adjuster.tenant_id == admin.tenant_id).first() if assignment else None
+        items.append({
+            "ticket_id": claim.ticket_id,
+            "status": claim.status,
+            "insurance_type": claim.insurance_type,
+            "event_date": claim.event_date.isoformat() if claim.event_date else None,
+            "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
+            "assigned_adjuster_id": adjuster.id if adjuster else None,
+            "assigned_adjuster_name": adjuster.name if adjuster else None,
+            "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
+        })
+    return {"items": items, "total": len(items)}
+
 @router.post("/claims/{ticket_id}/reassign")
 def reassign_claim(ticket_id: str, payload: ReassignClaimRequest, request: Request, db: Session = Depends(get_db)):
     admin = _admin(request, db)
