@@ -327,71 +327,18 @@ def add_adjuster(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """
-    Create a new Adjuster user account and associated adjuster profile.
-    Generates a secure temporary password for initial access.
-    """
-    admin = _require_admin(request, db)
-
-    try:
-        clean_name = validate_full_name(payload.name)
-        clean_email = validate_email(payload.email)
-        clean_phone = validate_phone(payload.phone)
-        if not clean_phone:
-            raise ValueError("Phone number is required.")
-    except ValueError as val_err:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
-
-    spec = payload.specialization.strip().lower()
-    if spec not in CANONICAL_POLICY_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}",
-        )
-
-    existing_user = db.query(User).filter(User.email == clean_email, User.tenant_id == admin.tenant_id).first()
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A user with this email already exists.",
-        )
-
-    # Generate a strong temporary password
-    temp_password = f"Adj!{secrets.token_urlsafe(8)}9#"
-    user_id = str(uuid.uuid4())
-
-    new_user = User(
-        id=user_id,
-        tenant_id=str(admin.tenant_id or ""),
-        full_name=clean_name,
-        email=clean_email,
-        phone=clean_phone,
-        password_hash=get_password_hash(temp_password),
-        role="ADJUSTER",
-        status="active",
+    """Backward-compatible alias that now always follows the invitation/onboarding workflow."""
+    from src.api.admin_workflow_routes import InviteAdjusterRequest, invite_adjuster
+    return invite_adjuster(
+        InviteAdjusterRequest(
+            name=payload.name,
+            email=payload.email,
+            phone=payload.phone,
+            specialization=payload.specialization,
+        ),
+        request,
+        db,
     )
-    new_adjuster = Adjuster(
-        id=user_id,
-        user_id=user_id,
-        tenant_id=str(admin.tenant_id or ""),
-        name=clean_name,
-        email=clean_email,
-        phone=clean_phone,
-        specialization=spec,
-        claims_assigned=0,
-        is_active=True,
-    )
-
-    db.add(new_user)
-    db.flush()
-    db.add(new_adjuster)
-    db_commit_or_500(db, logger, "Failed to create adjuster account.", "Failed to create adjuster account")
-
-    return {
-        **_adjuster_dict(new_adjuster),
-        "temporary_password": temp_password,
-        "message": "Adjuster account created successfully. Provide the temporary password securely to the adjuster.",
-    }
 
 
 @router.get("/adjusters")
