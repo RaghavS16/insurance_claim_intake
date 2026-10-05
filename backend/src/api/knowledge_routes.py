@@ -79,7 +79,7 @@ async def upload_document(
     try:
         staged = await asyncio.to_thread(
             put_bytes,
-            clean,
+            raw,
             prefix="knowledge-ingest",
             filename=file.filename,
             content_type=file.content_type or "application/octet-stream",
