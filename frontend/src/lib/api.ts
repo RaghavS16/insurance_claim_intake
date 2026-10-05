@@ -5,7 +5,7 @@ export async function api<T=any>(path:string,init:RequestInit & {skipAuth?:boole
  const headers=new Headers(requestInit.headers||{});
  if(!skipAuth && typeof window!=="undefined"){const token=localStorage.getItem("access_token");if(token)headers.set("Authorization","Bearer "+token)}
  if(requestInit.body && !(requestInit.body instanceof FormData))headers.set("Content-Type","application/json");
- const res=await fetch(API_BASE+path,{...requestInit,headers});
+ const res=await fetch(API_BASE+path,{...requestInit,headers,credentials:requestInit.credentials||"include"});
  const text=await res.text();let payload:any=null;try{payload=text?JSON.parse(text):null}catch{payload=text}
  if(!res.ok)throw new ApiError(payload?.detail||payload?.message||"Request failed ("+res.status+")",res.status,payload);
  return payload as T;
