@@ -215,7 +215,18 @@ def answer_claimant_question(
                 for x in content
             )
         answer = _clean(str(content))
-        if answer:
+        if answer and sources:
+            labels = []
+            for source in sources[:4]:
+                label = str(source.get("citation_label") or "").strip()
+                if not label:
+                    name = str(source.get("source_name") or "Source").strip()
+                    page = source.get("page_number")
+                    label = f"{name}, p.{page}" if page else name
+                if label and label not in labels:
+                    labels.append(label)
+            if labels and not any(label.lower() in answer.lower() for label in labels):
+                answer = f"{answer.rstrip()}\\n\\nSources: " + "; ".join(labels)
             return answer
     except Exception:
         pass
