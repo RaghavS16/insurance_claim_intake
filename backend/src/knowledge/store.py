@@ -543,6 +543,8 @@ def search(
     db = SessionLocal()
     try:
         conditions: list[Any] = [KnowledgeDocument.tenant_id == tenant_id]
+        publication_status = KnowledgeDocument.metadata_json["publication_status"].as_string()
+        conditions.append((publication_status.is_(None)) | (publication_status == "published"))
         if jurisdiction:
             conditions.append((KnowledgeDocument.jurisdiction == jurisdiction) | (KnowledgeDocument.jurisdiction.is_(None)))
         if insurance_type:
