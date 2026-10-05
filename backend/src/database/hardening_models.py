@@ -40,6 +40,7 @@ class AdjusterInvitation(Base):
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     accepted_user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    email_event_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
