@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from src.api.deps import require_role
+from src.api.deps import require_role, resolve_bearer_user
 from src.config import settings
 from src.database.models import Adjuster, Claim, Policy, User
 from src.database.hardening_models import AdjusterInvitation, ClaimAssignment, ClaimAuditEvent
@@ -46,7 +46,7 @@ class ReassignClaimRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=2000)
 
 def _admin(request: Request, db: Session) -> User:
-    return require_role(["ADMIN"])(request=request, current_user=__import__("src.api.deps", fromlist=["get_current_user"]).get_current_user(request=request, db=db))
+    return resolve_bearer_user(request, db, ["ADMIN"])
 
 def _parse_date(value: str, label: str):
     try:
