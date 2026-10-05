@@ -148,7 +148,7 @@ function AdminDashboard(){
    <Metric label="Unassigned" value={c.filter(x=>!x.assigned_adjuster_id&&x.status!=="draft").length} note="Needs routing" icon={<UserRound size={14}/>}/>
   </div>
   <div className="grid grid-2">
-   <Card><div className="card-title">Claims by status</div>{Object.keys(statusCounts).length?Object.entries(statusCounts).sort(([,a],[,b])=>(b as number)-(a as number)).map(([k,v])=><div className="list-row" key={k}><div className="list-main"><b>{human(k)}</b><span>Current claims</span></div><b>{String(v)}</b></div>):<Empty text="No claims found."/>)}</Card>
+   <Card><div className="card-title">Claims by status</div>{Object.keys(statusCounts).length?Object.entries(statusCounts).sort(([,a],[,b])=>(b as number)-(a as number)).map(([k,v])=><div className="list-row" key={k}><div className="list-main"><b>{human(k)}</b><span>Current claims</span></div><b>{String(v)}</b></div>):<Empty text="No claims found."/>}</Card>
    <Card><div className="card-title">Adjuster workload</div>{a.length?a.map(x=><div className="list-row" key={x.id}><div className="list-main"><b>{x.name}</b><span>{human(x.specialization)} · {x.is_active===false?"Inactive":"Active"}</span></div><b>{x.claims_assigned||0}</b></div>):<Empty text="No adjusters onboarded yet."/>}</Card>
   </div>
  </Page>
