@@ -60,7 +60,7 @@ export function ClaimantChat(){
   async function openConversation(id:string){
     if(!id)return;
     cleanupVoice();
-    setTicket(id);
+    setTicket(id); setMobileHistory(false);
     try{
       const rows=await api<any[]>("/api/v1/claims/"+encodeURIComponent(id)+"/conversation");
       setMessages((rows||[]).map((m:any):ChatMessage=>({role:m.speaker==="user"?"user":"assistant",text:m.text||"",attachment:m.attachment})).filter(x=>x.text));
@@ -192,7 +192,7 @@ export function ClaimantChat(){
       </div>
     </aside>
     <main className="claim-chat-main">
-      <header className="claim-chat-topbar"><button className="chat-history-toggle" onClick={()=>setMobileHistory(true)} aria-label="Open chat history"><Menu size={17}/></button><div><div className="claim-chat-title">{selected?.insurance_type?selected.insurance_type.replaceAll("_"," "):"Insurance claim assistant"}</div><div className="claim-chat-status">{ticket||"Start a new claim conversation"}</div></div>{ticket&&<span className="chat-status-pill">{voiceState==="listening"?"Voice active":selected?.status||"draft"}</span>}</header>
+      <header className="claim-chat-topbar"><button className="chat-history-toggle" onClick={()=>setMobileHistory(v=>!v)} aria-label="Toggle chat history"><Menu size={17}/></button><div><div className="claim-chat-title">{selected?.insurance_type?selected.insurance_type.replaceAll("_"," "):"Insurance claim assistant"}</div><div className="claim-chat-status">{ticket||"Start a new claim conversation"}</div></div>{ticket&&<span className="chat-status-pill">{voiceState==="listening"?"Voice active":selected?.status||"draft"}</span>}</header>
       <div className="claim-chat-scroll">
         {loading?<div className="chat-skeleton" aria-label="Loading conversations"><div/><div/><div/></div>:messages.map((m,i)=><div key={m.id||i} className={"claim-chat-message "+(m.role==="user"?"mine":"theirs")}>
           <div className="claim-chat-avatar">{m.role==="user"?"You":"AI"}</div>
