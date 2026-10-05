@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ChevronRight, Plus, Send, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge, Button, Card, DataBadge, Empty, Page } from "@/app-components/ui";
