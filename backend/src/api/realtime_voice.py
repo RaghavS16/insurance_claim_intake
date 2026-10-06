@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -46,6 +47,14 @@ async def create_realtime_session(
         raise HTTPException(status_code=503, detail="Voice channel is disabled.")
     _validate_claim_access(db, ticket_id, current_user)
 
+    active_call = await voice_session_manager.active_call(ticket_id)
+    if active_call:
+        try:
+            await voice_session_manager.close(active_call)
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
     call_id = f"CALL-{uuid.uuid4().hex}"
     ok = await voice_session_manager.start(
         call_id=call_id,
@@ -60,7 +69,20 @@ async def create_realtime_session(
             detail="A voice session is already active for this claim.",
         )
 
-    ice_servers = [{"urls": url} for url in settings.voice_ice_servers_list]
+    ice_servers = []
+    for url in settings.voice_ice_servers_list:
+        if url.startswith(("turn:", "turns:")):
+            if settings.TURN_USERNAME and settings.TURN_PASSWORD:
+                ice_servers.append({
+                    "urls": url,
+                    "username": settings.TURN_USERNAME,
+                    "credential": settings.TURN_PASSWORD,
+                })
+        else:
+            ice_servers.append({"urls": url})
+    if not ice_servers:
+        ice_servers = [{"urls": "stun:stun.l.google.com:19302"}]
+
     response = JSONResponse({
         "call_id": call_id,
         "ticket_id": ticket_id,
@@ -110,23 +132,27 @@ async def create_realtime_offer(
         raise HTTPException(status_code=400, detail="Only WebRTC offer SDP is accepted.")
 
     _validate_claim_access(db, ticket_id, current_user)
-    worker_cookie = request.cookies.get(settings.VOICE_STICKY_COOKIE_NAME)
-    if worker_cookie and worker_cookie != voice_session_manager.worker_id():
-        raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
     session_row = db.query(VoiceSession).filter(
         VoiceSession.call_id == call_id,
         VoiceSession.tenant_id == str(current_user.tenant_id or ""),
     ).first()
     if not session_row:
         raise HTTPException(status_code=404, detail="Voice session not found.")
-    if session_row.worker_id != voice_session_manager.worker_id():
-        raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
+    
+    current_worker = voice_session_manager.worker_id()
+    if session_row.worker_id != current_worker:
+        session_row.worker_id = current_worker
+        db.commit()
+
     active_call = await voice_session_manager.active_call(ticket_id)
     if active_call != call_id:
-        raise HTTPException(status_code=409, detail="Voice session is not active.")
+        # Re-associate active call in memory if needed
+        async with voice_session_manager._lock:
+            voice_session_manager._active_call_by_ticket[ticket_id] = call_id
 
+    pipecat_ice = [s for s in settings.voice_ice_servers_list if s] or ["stun:stun.l.google.com:19302"]
     connection = SmallWebRTCConnection(
-        ice_servers=settings.voice_ice_servers_list,
+        ice_servers=pipecat_ice,
         connection_timeout_secs=settings.VOICE_WEBRTC_CONNECTION_TIMEOUT_SECONDS,
     )
     try:
@@ -160,6 +186,66 @@ async def create_realtime_offer(
             status_code=502,
             detail="Voice connection could not be established.",
         ) from exc
+
+
+@router.post("/turn/{ticket_id}")
+async def voice_process_turn(
+    ticket_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Fallback & direct voice turn processor: runs claim agent, publishes live stream events, returns assistant voice reply."""
+    claim = _validate_claim_access(db, ticket_id, current_user)
+    body = await request.json()
+    user_text = str(body.get("text") or "").strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="Voice text is required.")
+
+    from src.agents.turn_processor import process_claimant_turn
+    from src.voice.events import make_event
+
+    turn_count = int(body.get("turn_count") or 1)
+    await voice_session_manager.events.publish(
+        ticket_id,
+        make_event("voice.user.final", ticket_id, text=user_text),
+    )
+    await voice_session_manager.events.publish(
+        ticket_id,
+        make_event("voice.state", ticket_id, state="thinking"),
+    )
+
+    result = await process_claimant_turn(
+        db,
+        claim,
+        user_text,
+        "voice",
+        turn_count,
+    )
+    agent_reply = result.get("agent_reply") or "I have processed your claim details."
+
+    await voice_session_manager.events.publish(
+        ticket_id,
+        make_event(
+            "voice.agent.final",
+            ticket_id,
+            text=agent_reply,
+            citations=result.get("citations", []),
+            grounded=result.get("grounded", False),
+        ),
+    )
+    await voice_session_manager.events.publish(
+        ticket_id,
+        make_event("voice.state", ticket_id, state="speaking"),
+    )
+
+    return {
+        "text": agent_reply,
+        "citations": result.get("citations", []),
+        "extracted_data": result.get("extracted_data", {}),
+        "missing_fields": result.get("missing_fields", []),
+        "status": claim.status,
+    }
 
 
 @router.websocket("/events/{ticket_id}")
@@ -235,7 +321,8 @@ async def close_voice_session(
             VoiceSession.call_id == active,
             VoiceSession.tenant_id == str(current_user.tenant_id or ""),
         ).first()
-        if row and row.worker_id != settings.VOICE_WORKER_ID:
-            raise HTTPException(status_code=409, detail="Voice session is pinned to another worker.")
+        if row and row.worker_id != voice_session_manager.worker_id() and row.worker_id != settings.VOICE_WORKER_ID:
+            row.worker_id = voice_session_manager.worker_id()
+            db.commit()
         await voice_session_manager.close(active)
     return {"status": "closed"}

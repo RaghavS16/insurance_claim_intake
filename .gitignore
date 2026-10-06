@@ -1,77 +1,218 @@
-# ===== Environment variables =====
+# ==============================================================================
+# Insurance Claim Intake System - Unified .gitignore
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Environment Variables & Secrets
+# ------------------------------------------------------------------------------
+# Never commit sensitive environment secrets, API keys, or JWT tokens
 .env
 .env.local
 .env.*.local
+*.env
+*.env.*
 backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
 frontend/.env.local
 
-# ===== Python (backend) =====
-venv/
-env/
-ENV/
+# Always allow template / example environment files to be committed
+!.env.example
+!*.env.example
+!**/.env.example
+
+# ------------------------------------------------------------------------------
+# 2. Python & Backend
+# ------------------------------------------------------------------------------
+# Bytecode and runtime caches
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-pip-log.txt
-pip-delete-this-directory.txt
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Packaging, builds, and distributions
 *.egg-info/
 .eggs/
 dist/
 build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+*.egg
 
-# ===== Node / Next.js (frontend) =====
+# Pip logs & diagnostics
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Linters, type checkers, and test caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+backend/.pytest_cache/
+.pyre/
+pyrefly.toml
+
+# Developer scratch files & exploratory test scripts
+scratch/
+**/scratch/
+scratch_*.py
+**/scratch_*.py
+backend/scratch_*.py
+
+# ------------------------------------------------------------------------------
+# 3. Node.js & Next.js Frontend
+# ------------------------------------------------------------------------------
+# Package manager dependencies & debug logs
 node_modules/
-frontend/.next/
-frontend/out/
-frontend/build/
+frontend/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+lerna-debug.log*
 
-# ===== Database =====
+# Next.js build output & static exports
+.next/
+frontend/.next/
+out/
+frontend/out/
+frontend/build/
+.open-next/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+next-env.d.ts.bak
+
+# ------------------------------------------------------------------------------
+# 4. Testing, Code Coverage & Playwright
+# ------------------------------------------------------------------------------
+# Test coverage reports
+htmlcov/
+.coverage
+.coverage.*
+*.lcov
+coverage/
+frontend/coverage/
+
+# Playwright & E2E test run outputs
+test-results/
+playwright-report/
+blob-report/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+.playwright/
+.playwright-mcp/
+
+# Ephemeral UI capture / screenshot scripts created during ad-hoc test runs
+**/capture_*.js
+
+# ------------------------------------------------------------------------------
+# 5. QA Reports & Visual Artifacts
+# ------------------------------------------------------------------------------
+# Heavy test recordings, automated screenshots, and generated HTML reports
+qa-report/recordings/
+qa-report/screenshots/
+qa-report/playwright-report/
+qa-report/design-compare/*.png
+qa-report/**/*.webm
+qa-report/**/*.mp4
+qa-report/**/*.png
+
+# Keep markdown documentation, audit logs, and test specs tracked
+!qa-report/**/*.md
+!qa-report/*.md
+qa-report/
+# ------------------------------------------------------------------------------
+# 6. Database & Local Storage
+# ------------------------------------------------------------------------------
+# SQLite databases, journals, and PostgreSQL data volumes
+*.sqlite
 *.sqlite3
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 postgres_data/
 
-# ===== Docker =====
-*.pid
+# Local evidence uploads (keep folder structure intact via .gitkeep)
+backend/uploads/*
+!backend/uploads/.gitkeep
+uploads/*
+!uploads/.gitkeep
 
-# ===== Voice / model artifacts (large files, don't commit) =====
+# ------------------------------------------------------------------------------
+# 7. Voice & AI Model Artifacts
+# ------------------------------------------------------------------------------
+# Large voice models and ONNX runtime weights (downloaded on demand)
 *.onnx
 *.onnx.json
 whisper_models/
 piper_models/
+backend/piper/*.onnx
+backend/piper/*.onnx.json
 
-# ===== IDE / Editor =====
-.vscode/
-.idea/
-pyrefly.toml
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
+# ------------------------------------------------------------------------------
+# 8. Local Development Binaries & Tools
+# ------------------------------------------------------------------------------
+# Standalone local utilities (e.g., Mailpit test mail server binary)
+infra/mailpit/
+mailpit/
+*.exe
+*.dll
+*.dylib
 
-# ===== Logs =====
-*.log
-logs/
+# Process IDs
+*.pid
 
-# ===== Test coverage =====
-htmlcov/
-.coverage
-coverage/
-frontend/coverage/
-
-# ===== Misc =====
-*.tmp
-.cache/
-
+# ------------------------------------------------------------------------------
+# 9. AI Agent & Graphify Tooling
+# ------------------------------------------------------------------------------
+# Automated codebase analysis & agent workspace caches
 graphify-out/
+backend/graphify-out/
 .agents/
 
-qa-report
+# ------------------------------------------------------------------------------
+# 10. IDE, Editor & Operating System Artifacts
+# ------------------------------------------------------------------------------
+# IDE configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Operating system metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs & temporary files
+*.log
+logs/
+*.tmp
+*.temp
+.cache/
+*.bak

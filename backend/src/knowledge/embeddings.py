@@ -77,21 +77,29 @@ class EmbeddingService:
         target_model = model_name or "BAAI/bge-base-en-v1.5"
         cache_dir = os.environ.get("FASTEMBED_CACHE_DIR") or os.path.join(tempfile.gettempdir(), "fastembed_cache")
         os.makedirs(cache_dir, exist_ok=True)
-        try:
-            if self._fastembed_model is None or getattr(self._fastembed_model, "model_name", None) != target_model:
-                logger.info("Initializing FastEmbed model '%s' (runs locally in RAM)...", target_model)
-                self._fastembed_model = TextEmbedding(model_name=target_model, cache_dir=cache_dir)
-            return [list(vec) for vec in self._fastembed_model.embed(texts, batch_size=64)]
-        except Exception as exc:
-            logger.warning("FastEmbed embedding failed (%s); using deterministic 768d fallback vector.", exc)
+        def _get_fallback():
             import hashlib
             fallback_vectors = []
             for t in texts:
                 h = hashlib.sha256(t.encode("utf-8")).digest()
-                # Create a 768-dimensional normalized float vector from hash
                 vec = [(float(b) / 255.0) - 0.5 for b in (h * 24)[:768]]
                 fallback_vectors.append(vec)
             return fallback_vectors
+
+        try:
+            import concurrent.futures
+            def _init_and_embed():
+                if self._fastembed_model is None or getattr(self._fastembed_model, "model_name", None) != target_model:
+                    logger.info("Initializing FastEmbed model '%s'...", target_model)
+                    self._fastembed_model = TextEmbedding(model_name=target_model, cache_dir=cache_dir)
+                return [list(vec) for vec in self._fastembed_model.embed(texts, batch_size=64)]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_init_and_embed)
+                return future.result(timeout=5.0)
+        except Exception as exc:
+            logger.warning("FastEmbed embedding failed or timed out (%s); using deterministic 768d fallback vector.", exc)
+            return _get_fallback()
 
     def _embed_openai_compatible(self, texts: list[str], base_url: str, model: str, api_key: str) -> list[list[float]]:
         is_local = "localhost" in base_url or "127.0.0.1" in base_url

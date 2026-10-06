@@ -19,6 +19,7 @@ from src.database.models import Adjuster, Claim, Policy, User
 from src.database.hardening_models import AdjusterInvitation, ClaimAssignment, ClaimAuditEvent, OutboxEvent
 from src.database.session import get_db
 from src.utils.auth import get_password_hash
+from src.utils.email_otp import send_invitation_email
 from src.utils.validators import validate_email, validate_full_name, validate_phone, CANONICAL_POLICY_TYPES
 from src.services.outbox import enqueue
 
@@ -136,6 +137,11 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
     try:
         db.flush()
         invite_url = f"{settings.PUBLIC_APP_URL.rstrip('/')}/onboarding/adjuster?token={raw_token}"
+        email_sent = False
+        try:
+            email_sent = send_invitation_email(email, name, invite_url)
+        except Exception:
+            pass
         event = enqueue(
             db,
             event_type="email.adjuster_invite",
@@ -155,6 +161,9 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
             idempotency_key=f"adjuster-invite:{invite.id}",
             tenant_id=str(admin.tenant_id or ""),
         )
+        if email_sent:
+            event.status = "sent"
+            event.processed_at = datetime.now(timezone.utc)
         invite.email_event_id = str(event.id)
         db.commit()
         db.refresh(invite)
@@ -167,7 +176,7 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
         "status": "invited",
         "email": email,
         "invitation_url": invite_url,
-        "email_delivery_status": "queued",
+        "email_delivery_status": "sent" if email_sent else "queued",
         "expires_at": invite.expires_at.isoformat(),
     }
 
@@ -213,6 +222,11 @@ def resend_invitation(invitation_id: str, request: Request, db: Session = Depend
     invite.token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     invite.expires_at = datetime.now(timezone.utc) + timedelta(days=3)
     invite_url = f"{settings.PUBLIC_APP_URL.rstrip('/')}/onboarding/adjuster?token={raw_token}"
+    email_sent = False
+    try:
+        email_sent = send_invitation_email(invite.email, invite.name, invite_url)
+    except Exception:
+        pass
     try:
         db.flush()
         event = enqueue(
@@ -234,12 +248,15 @@ def resend_invitation(invitation_id: str, request: Request, db: Session = Depend
             idempotency_key=f"adjuster-invite-resend:{invite.id}:{invite.expires_at.isoformat()}",
             tenant_id=str(admin.tenant_id or ""),
         )
+        if email_sent:
+            event.status = "sent"
+            event.processed_at = datetime.now(timezone.utc)
         invite.email_event_id = str(event.id)
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to resend adjuster invitation.") from exc
-    return {"invitation_id": invite.id, "invitation_url": invite_url, "email_delivery_status": "queued", "expires_at": invite.expires_at.isoformat()}
+    return {"invitation_id": invite.id, "invitation_url": invite_url, "email_delivery_status": "sent" if email_sent else "queued", "expires_at": invite.expires_at.isoformat()}
 
 
 @router.get("/adjusters/export")

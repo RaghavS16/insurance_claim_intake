@@ -103,11 +103,19 @@ def _ensure_assigned_adjuster(claim: Claim, user: User, db: Session) -> Adjuster
             a = db.query(Adjuster).filter(Adjuster.tenant_id == claim.tenant_id).first()
         if a: return a
     adj = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
-    if adj and (str(assigned_id) in {adj.id, user.id}):
-        return adj
-    if adj and db.query(ClaimAssignment).filter(ClaimAssignment.claim_id == claim.id, ClaimAssignment.tenant_id == claim.tenant_id, ClaimAssignment.adjuster_id == adj.id).first():
-        return adj
-    if str(assigned_id) == user.id:
+    if not adj:
+        adj = db.query(Adjuster).filter(Adjuster.id == user.id, Adjuster.tenant_id == claim.tenant_id).first()
+    if adj:
+        assigned_str = str(assigned_id) if assigned_id else ""
+        if assigned_str and (assigned_str in {str(adj.id), str(user.id)}):
+            return adj
+        if db.query(ClaimAssignment).filter(
+            ClaimAssignment.claim_id == claim.id,
+            ClaimAssignment.tenant_id == claim.tenant_id,
+            ClaimAssignment.adjuster_id == adj.id
+        ).first():
+            return adj
+    if str(assigned_id) == str(user.id):
         a = db.query(Adjuster).filter(
             Adjuster.id == user.id,
             Adjuster.tenant_id == claim.tenant_id,
@@ -837,6 +845,27 @@ def list_evidence_requests(ticket_id: str, user: User = Depends(_guard), db: Ses
     _ensure_assigned_adjuster(c, user, db)
     rows = db.query(ClaimEvidenceRequest).filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id).order_by(ClaimEvidenceRequest.requested_at.desc()).all()
     return [_request_payload(row, db) for row in rows]
+
+class ClaimTransitionRequest(BaseModel):
+    status: str
+    reason: str = "Adjuster moved claim card in board view"
+
+@router.post("/claims/{ticket_id}/transition")
+def transition_claim_status(
+    ticket_id: str,
+    payload: ClaimTransitionRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    current_user = _resolve_adjuster(request, db)
+    claim = get_claim_or_404(db, ticket_id)
+    _ensure_assigned_adjuster(claim, current_user, db)
+    try:
+        transition_claim(db, claim, payload.status, current_user.id, payload.reason)
+        db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ticket_id": claim.ticket_id, "status": claim.status}
 
 class DecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(approve|partial_approve|reject|request_evidence|escalate)$")

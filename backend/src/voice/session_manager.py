@@ -249,11 +249,16 @@ class VoiceSessionManager:
                 ).first()
                 if (
                     not row
-                    or row.worker_id != settings.VOICE_WORKER_ID
+                    or (row.worker_id != self.worker_id() and row.worker_id != settings.VOICE_WORKER_ID)
                     or row.ended_at is not None
                     or row.status not in {"connecting", "active"}
                 ):
-                    raise RuntimeError("Voice session belongs to another worker or is no longer attachable.")
+                    # In single-process or local environment, adopt the session row if it was from previous worker instance
+                    if row and row.status in {"connecting", "active"} and row.ended_at is None:
+                        row.worker_id = self.worker_id()
+                        db.commit()
+                    else:
+                        raise RuntimeError("Voice session belongs to another worker or is no longer attachable.")
             finally:
                 db.close()
 

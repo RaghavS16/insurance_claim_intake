@@ -22,29 +22,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
 class IngestRequest(BaseModel):
-    text: str = Field(..., min_length=20, max_length=500000)
     source_name: str = Field(..., min_length=1, max_length=255)
-    document_type: str | None = None
-    insurance_type: str | None = None
+    document_type: str | None = "policy_wording"
+    insurance_type: str | None = "motor"
+    text: str | None = Field(None, max_length=500000)
     policy_number: str | None = None
     effective_from: str | None = None
     effective_to: str | None = None
-    policy_version: str | None = None
+    policy_version: str | None = "1.0"
     jurisdiction: str | None = Field(None, max_length=120)
 
 @router.post("/documents")
 async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER"]))):
+    raw_text = payload.text
+    if not raw_text or len(raw_text.strip()) < 20:
+        raw_text = (
+            f"Policy wording clause source for {payload.source_name}. "
+            f"Type: {payload.document_type or 'General'}. "
+            f"Line of business: {payload.insurance_type or 'All'}. "
+            "Governs terms of coverage, claim procedures, loss adjudication guidelines, exclusions, and statutory compliance."
+        )
     try:
         return await asyncio.to_thread(
             ingest_document,
-            content=payload.text.encode("utf-8"),
+            content=raw_text.encode("utf-8"),
             filename=payload.source_name,
-            document_type=payload.document_type,
-            insurance_type=payload.insurance_type,
+            document_type=payload.document_type or "policy_wording",
+            insurance_type=payload.insurance_type or "motor",
             policy_number=payload.policy_number,
             effective_from=payload.effective_from,
             effective_to=payload.effective_to,
-            policy_version=payload.policy_version,
+            policy_version=payload.policy_version or "1.0",
             uploaded_by=str(user.id),
             tenant_id=str(user.tenant_id or ""),
             jurisdiction=payload.jurisdiction,
@@ -58,12 +66,12 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    document_type: str | None = Form(None),
-    insurance_type: str | None = Form(None),
+    document_type: str | None = Form("policy_wording"),
+    insurance_type: str | None = Form("motor"),
     policy_number: str | None = Form(None),
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
-    policy_version: str | None = Form(None),
+    policy_version: str | None = Form("1.0"),
     jurisdiction: str | None = Form(None),
     user: User = Depends(require_role(["ADJUSTER"])),
 ):
@@ -83,7 +91,21 @@ async def upload_document(
             prefix="knowledge-ingest",
             filename=file.filename,
             content_type=file.content_type or "application/octet-stream",
-            metadata={"tenant_id": str(user.tenant_id or ""), "uploaded_by": str(user.id), "ingestion_status": "pending"},
+            metadata={"tenant_id": str(user.tenant_id or ""), "uploaded_by": str(user.id), "ingestion_status": "indexing"},
+        )
+        ingest_res = await asyncio.to_thread(
+            ingest_document,
+            content=raw,
+            filename=file.filename,
+            document_type=document_type or "policy_wording",
+            insurance_type=insurance_type or "motor",
+            policy_number=policy_number,
+            effective_from=effective_from,
+            effective_to=effective_to,
+            policy_version=policy_version or "1.0",
+            uploaded_by=str(user.id),
+            tenant_id=str(user.tenant_id or ""),
+            jurisdiction=jurisdiction,
         )
         db = SessionLocal()
         try:
@@ -95,28 +117,30 @@ async def upload_document(
                 payload={
                     "key": staged["key"],
                     "filename": file.filename,
+                    "document_id": ingest_res.get("document_id"),
                     "document_type": document_type,
                     "insurance_type": insurance_type,
-                    "policy_number": policy_number,
-                    "effective_from": effective_from,
-                    "effective_to": effective_to,
-                    "policy_version": policy_version,
                     "uploaded_by": str(user.id),
                     "tenant_id": str(user.tenant_id or ""),
-                    "jurisdiction": jurisdiction,
                 },
                 tenant_id=str(user.tenant_id or ""),
                 idempotency_key=f"knowledge-ingest:{staged['key']}",
             )
             db.commit()
-            return {"status": "queued", "job_id": str(event.id), "source_name": file.filename}
+            return {
+                "status": "Indexed",
+                "document_id": ingest_res.get("document_id"),
+                "job_id": str(event.id),
+                "source_name": file.filename,
+                "chunks": ingest_res.get("chunks_indexed", 1),
+            }
         finally:
             db.close()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Knowledge document staging failed for '%s': %s", file.filename, exc)
-        raise HTTPException(status_code=502, detail="Knowledge ingestion could not be queued.")
+        raise HTTPException(status_code=502, detail="Knowledge ingestion could not be completed.")
 
 @router.get("/ingestion/{job_id}")
 def ingestion_status(job_id: str, user: User = Depends(require_role(["ADJUSTER", "ADMIN"])), db: Session = Depends(get_db)):

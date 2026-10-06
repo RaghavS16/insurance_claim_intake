@@ -21,13 +21,15 @@ class Settings(BaseSettings):
     CLAIM_SLA_HOURS: int = Field(72, ge=1, le=720)
     VOICE_LATENCY_TARGET_MS: int = Field(1800, ge=250, le=10000)
 
+    EMAIL_BACKEND: str = Field("mailpit")
+    MAILPIT_API_URL: str = Field("http://localhost:8025")
     SMTP_HOST: Optional[str] = None
-    SMTP_PORT: int = 587
+    SMTP_PORT: int = 1025
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: str = "no-reply@insurance-claims.local"
     SMTP_FROM_NAME: str = "InsureClaim AI"
-    SMTP_USE_TLS: bool = True
+    SMTP_USE_TLS: bool = False
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = Field(15, ge=3, le=60)
     PUBLIC_APP_URL: str = "http://localhost:3000"

@@ -21,7 +21,7 @@ from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant,
 from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
-from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email
+from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email, send_otp_email
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 from src.api.deps import get_current_user
@@ -212,6 +212,8 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         )
     try:
         db.commit()
+        if verification_required:
+            send_otp_email(to_email=new_user.email, otp=verification_code, full_name=new_user.full_name, purpose="email_verification")
     except Exception:
         db.rollback()
         logger.exception("Failed to finalize claimant registration")
@@ -385,6 +387,7 @@ def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session
         event_key=f"email-verification:{user.id}:{record.id}",
     )
     db.commit()
+    send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="email_verification")
     return generic
 
 
@@ -403,7 +406,10 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
     generic_response = {"message": "If an account with that email exists, a reset code has been sent."}
 
-    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
+    from sqlalchemy import func
+    user = db.query(User).filter(
+        func.lower(func.trim(User.email)) == clean_email.lower().strip()
+    ).first()
     if not user or user.status != "active":
         return generic_response
 
@@ -447,6 +453,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
             event_key=f"password-reset:{user.id}:{record.id}",
         )
         db.commit()
+        send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset")
     except Exception:
         db.rollback()
         logger.exception("Failed to queue password reset email for user %s", user.id)

@@ -216,6 +216,12 @@ Clause 2.3: Claim decisions should be recorded by an authorized human reviewer w
                     speaker="agent",
                     text="I have recorded the incident details and submitted the claim for adjuster review.",
                 ))
+            if demo_claim:
+                ps = dict(demo_claim.pipeline_state or {})
+                ps["assigned_adjuster_id"] = asha.id
+                ps["assigned_adjuster_name"] = asha.name
+                demo_claim.pipeline_state = ps
+                demo_claim.status = "under_review"
             assignment = db.query(ClaimAssignment).filter(
                 ClaimAssignment.claim_id == demo_claim.id,
                 ClaimAssignment.tenant_id == TENANT_ID,
