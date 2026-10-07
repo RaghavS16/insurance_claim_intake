@@ -187,19 +187,24 @@ def list_documents(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    docs = db.query(KnowledgeDocument).filter(
-        KnowledgeDocument.tenant_id == str(user.tenant_id or "")
-    ).order_by(KnowledgeDocument.created_at.desc()).limit(500).all()
+    query = db.query(KnowledgeDocument)
+    if user.tenant_id:
+        query = query.filter(
+            (KnowledgeDocument.tenant_id == str(user.tenant_id))
+            | (KnowledgeDocument.tenant_id.is_(None))
+            | (KnowledgeDocument.tenant_id == "")
+        )
+    docs = query.order_by(KnowledgeDocument.created_at.desc()).limit(500).all()
     return {"items": [
         {
             "id": str(doc.id),
             "source_name": doc.source_name,
             "document_type": doc.document_type,
             "insurance_type": doc.insurance_type,
-            "policy_number": (doc.metadata_json or {}).get("policy_number"),
-            "policy_version": (doc.metadata_json or {}).get("policy_version") or doc.document_version,
+            "policy_number": (doc.metadata_json or {}).get("policy_number") if isinstance(doc.metadata_json, dict) else None,
+            "policy_version": (doc.metadata_json or {}).get("policy_version") if isinstance(doc.metadata_json, dict) else doc.document_version,
             "jurisdiction": doc.jurisdiction,
-            "publication_status": (doc.metadata_json or {}).get("publication_status", "pending_review"),
+            "publication_status": (doc.metadata_json or {}).get("publication_status", "pending_review") if isinstance(doc.metadata_json, dict) else "pending_review",
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "source_uri": doc.source_uri,
             "chunks": len(doc.chunks or []),
