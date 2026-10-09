@@ -4,7 +4,7 @@
 
 # Web Framework & Serialization
 fastapi>=0.104.1
-uvicorn>=0.24.0
+uvicorn>=0.54.0
 python-multipart>=0.0.9
 pydantic>=2.5.0
 pydantic-settings>=2.0.3
