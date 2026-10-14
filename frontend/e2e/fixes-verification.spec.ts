@@ -56,7 +56,7 @@ test.describe('Verification of User-Reported Fixes', () => {
     await expect(page).toHaveURL(/.*\/claimant\/dashboard/, { timeout: 15000 });
 
     await page.goto('/claimant/file-claim');
-    await expect(page.locator('text=AI Intake Assistant Ready')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('h1')).toHaveText('Conversational Claim Intake', { timeout: 15000 });
 
     // Verify Reset Chat button exists and opens modal
     const resetChatBtn = page.locator('button:has-text("Reset Chat")');
@@ -67,9 +67,8 @@ test.describe('Verification of User-Reported Fixes', () => {
     await expect(page.locator('text=Discard Draft and Clear History?')).toBeVisible();
     await page.click('button:has-text("Keep Current Chat")');
 
-    // Verify Edit Facts button exists
-    const editBtn = page.locator('button:has-text("Edit")');
-    await expect(editBtn).toBeVisible();
+    // Verify side panel "Extracted Claim Facts" is NOT present (Fix 3)
+    await expect(page.locator('text=Extracted Claim Facts')).toHaveCount(0);
   });
 
   test('Signup API accepts payload with confirm_password and does not return 422', async ({ request }) => {

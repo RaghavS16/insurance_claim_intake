@@ -66,24 +66,24 @@ def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Reque
     user.email_verified_at = now
     user.session_version = int(getattr(user, "session_version", 1) or 1) + 1
     invite.accepted_at = now
-    invite.accepted_user_id = user.id
+    adjuster.is_active = True
+    user.last_login_at = now
     db.commit()
 
-    setup_token = create_access_token(
+    token = create_access_token(
         data={
             "sub": user.id,
             "tenant_id": user.tenant_id or "",
             "role": user.role,
             "sv": user.session_version,
-            "purpose": "adjuster_onboarding",
+            "mfa": False,
             "amr": ["invite"],
-        },
-        expires_delta=timedelta(minutes=15),
+        }
     )
     return {
         "accepted": True,
+        "access_token": token,
+        "token_type": "bearer",
         "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
-        "setup_access_token": setup_token,
-        "next": "register_passkey",
-        "message": "Account created. Register your passkey to activate adjuster access.",
+        "message": "Account created and activated successfully.",
     }

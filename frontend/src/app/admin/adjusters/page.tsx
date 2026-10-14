@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox } from 'lucide-react';
+import { UserPlus, Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { Adjuster } from '@/lib/types';
@@ -34,6 +35,16 @@ export default function AdminAdjustersPage() {
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
   const [selectedAdjuster, setSelectedAdjuster] = useState<Adjuster | null>(null);
 
+  // Edit Adjuster Modal State
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingAdjuster, setEditingAdjuster] = useState<Adjuster | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editSpec, setEditSpec] = useState('motor');
+  const [editActive, setEditActive] = useState(true);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const fetchData = async () => {
     setLoading(true);
     setError(null);
@@ -57,6 +68,44 @@ export default function AdminAdjustersPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const handleOpenEdit = (adj: Adjuster) => {
+    setEditingAdjuster(adj);
+    setEditName(adj.name || '');
+    setEditEmail(adj.email || '');
+    setEditPhone(adj.phone || '');
+    setEditSpec(adj.specialization || 'motor');
+    setEditActive(adj.is_active !== false);
+    setEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdjuster) return;
+    setSavingEdit(true);
+    try {
+      await api.patch(`/api/v1/admin/adjusters/${editingAdjuster.id}`, {
+        full_name: editName.trim(),
+        email: editEmail.trim(),
+        phone: editPhone.trim(),
+        specialization: editSpec,
+        is_active: editActive,
+      });
+      setAdjusters((prev) =>
+        prev.map((a) =>
+          a.id === editingAdjuster.id
+            ? { ...a, name: editName.trim(), email: editEmail.trim(), phone: editPhone.trim(), specialization: editSpec, is_active: editActive }
+            : a
+        )
+      );
+      showToast(`Adjuster ${editName} updated successfully.`, 'success');
+      setEditModalOpen(false);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update adjuster.', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const handleCreateAdjuster = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -312,6 +361,7 @@ export default function AdminAdjustersPage() {
             data={adjusters}
             keyField="id"
             searchPlaceholder="Filter adjusters roster..."
+            onEditRow={(adj) => handleOpenEdit(adj)}
           />
         )
       ) : invitations.length === 0 ? (
@@ -361,21 +411,19 @@ export default function AdminAdjustersPage() {
             onChange={(e) => setNewPhone(e.target.value)}
             required
           />
-          <div className="snow-form-group">
-            <label className="snow-label">Specialization</label>
-            <select
-              className="snow-select"
-              value={newSpec}
-              onChange={(e) => setNewSpec(e.target.value)}
-            >
-              <option value="motor">Motor / Auto</option>
-              <option value="home">Home / Property</option>
-              <option value="health">Health</option>
-              <option value="senior_health">Senior Health</option>
-              <option value="travel">Travel</option>
-              <option value="cyber">Cyber</option>
-            </select>
-          </div>
+          <Select
+            label="Specialization"
+            value={newSpec}
+            onChange={(val) => setNewSpec(val)}
+            options={[
+              { value: 'motor', label: 'Motor / Auto' },
+              { value: 'home', label: 'Home / Property' },
+              { value: 'health', label: 'Health' },
+              { value: 'senior_health', label: 'Senior Health' },
+              { value: 'travel', label: 'Travel' },
+              { value: 'cyber', label: 'Cyber' },
+            ]}
+          />
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
             <Button type="button" variant="secondary" onClick={() => setCreateModalOpen(false)}>
@@ -418,21 +466,19 @@ export default function AdminAdjustersPage() {
             onChange={(e) => setNewPhone(e.target.value)}
             required
           />
-          <div className="snow-form-group">
-            <label className="snow-label">Specialization</label>
-            <select
-              className="snow-select"
-              value={newSpec}
-              onChange={(e) => setNewSpec(e.target.value)}
-            >
-              <option value="motor">Motor / Auto</option>
-              <option value="home">Home / Property</option>
-              <option value="health">Health</option>
-              <option value="senior_health">Senior Health</option>
-              <option value="travel">Travel</option>
-              <option value="cyber">Cyber</option>
-            </select>
-          </div>
+          <Select
+            label="Specialization"
+            value={newSpec}
+            onChange={(val) => setNewSpec(val)}
+            options={[
+              { value: 'motor', label: 'Motor / Auto' },
+              { value: 'home', label: 'Home / Property' },
+              { value: 'health', label: 'Health' },
+              { value: 'senior_health', label: 'Senior Health' },
+              { value: 'travel', label: 'Travel' },
+              { value: 'cyber', label: 'Cyber' },
+            ]}
+          />
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
             <Button type="button" variant="secondary" onClick={() => setInviteModalOpen(false)}>
@@ -440,6 +486,72 @@ export default function AdminAdjustersPage() {
             </Button>
             <Button type="submit" variant="primary">
               Dispatch Invitation Email
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Edit Adjuster Modal */}
+      <Modal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        title="Edit Adjuster Profile"
+      >
+        <form onSubmit={handleSaveEdit}>
+          <Input
+            label="Full Name"
+            placeholder="John Doe"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            required
+          />
+          <Input
+            label="Corporate Email"
+            type="email"
+            placeholder="john.doe@intelliclaim.com"
+            value={editEmail}
+            onChange={(e) => setEditEmail(e.target.value)}
+            required
+          />
+          <Input
+            label="Direct Phone Number"
+            type="tel"
+            placeholder="+1 (555) 019-2834"
+            value={editPhone}
+            onChange={(e) => setEditPhone(e.target.value)}
+            required
+          />
+
+          <Select
+            label="Claim Adjudication Specialization"
+            value={editSpec}
+            onChange={(val) => setEditSpec(val)}
+            options={[
+              { value: 'motor', label: 'Motor & Collision Auto' },
+              { value: 'home', label: 'Property & Casualty (Home)' },
+              { value: 'health', label: 'Health & Medical Benefits' },
+              { value: 'travel', label: 'Travel & Trip Delay' },
+              { value: 'cyber', label: 'Cyber Risk & Data Breach' },
+              { value: 'life', label: 'Life & Accidental Death' },
+            ]}
+          />
+
+          <Select
+            label="Account Status"
+            value={editActive ? 'active' : 'inactive'}
+            onChange={(val) => setEditActive(val === 'active')}
+            options={[
+              { value: 'active', label: 'Active (Can receive claim assignments)' },
+              { value: 'inactive', label: 'Inactive / Suspended (No assignments)' },
+            ]}
+          />
+
+          <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
+            <Button type="button" variant="secondary" onClick={() => setEditModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={savingEdit}>
+              {savingEdit ? 'Saving Updates...' : 'Save Adjuster Changes'}
             </Button>
           </div>
         </form>

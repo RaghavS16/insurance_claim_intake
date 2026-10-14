@@ -117,6 +117,7 @@ export default function AdjusterPolicyDirectoryPage() {
           columns={columns}
           data={policies}
           keyField="id"
+          hideRowActions={true}
           searchPlaceholder="Filter policy database..."
         />
       )}

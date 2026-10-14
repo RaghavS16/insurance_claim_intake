@@ -17,15 +17,13 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import User, PasswordResetOTP, RevokedToken, Adjuster
-from src.database.hardening_models import MFAChallenge, MFARecoveryCode, Tenant, TenantMembership, RefreshToken, WebAuthnCredential
-from src.utils.mfa import encrypt_secret, decrypt_secret, new_totp_secret, verify_totp, provisioning_uri, new_recovery_codes, hash_recovery_code, verify_recovery_hash
+from src.database.hardening_models import Tenant, TenantMembership, RefreshToken
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
 from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email, send_otp_email
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 from src.api.deps import get_current_user
-from src.services.passkey import registration_options, verify_registration, authentication_options, verify_authentication
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
@@ -61,15 +59,6 @@ class VerifyOtpRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., min_length=20, max_length=512)
-
-
-class MFAVerifyRequest(BaseModel):
-    challenge_token: str = Field(..., min_length=20, max_length=512)
-    code: str = Field(..., pattern=r"^\d{6}$")
-
-
-class MFASetupVerifyRequest(BaseModel):
-    code: str = Field(..., pattern=r"^\d{6}$")
 
 
 class ResetPasswordRequest(BaseModel):
@@ -263,7 +252,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         if not adjuster or not adjuster.is_active:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Adjuster onboarding is incomplete. Finish passkey setup before signing in.",
+                detail="Adjuster onboarding is incomplete. Please finish invitation setup before signing in.",
             )
 
     user.last_login_at = datetime.now(timezone.utc)
@@ -271,12 +260,6 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     db.commit()
     if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
-    if bool(getattr(user, "mfa_enabled", False) or getattr(user, "mfa_required", False)):
-        raw_challenge = __import__("secrets").token_urlsafe(32)
-        challenge = MFAChallenge(user_id=user.id, tenant_id=user.tenant_id or "", challenge_token_hash=hashlib.sha256(raw_challenge.encode()).hexdigest(), expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.MFA_CHALLENGE_EXPIRE_SECONDS))
-        db.add(challenge)
-        db.commit()
-        return {"mfa_required": True, "challenge_token": raw_challenge, "expires_in": settings.MFA_CHALLENGE_EXPIRE_SECONDS}
     auth_context = {"mfa": False, "amr": ["pwd"]}
     refresh_token = _issue_refresh_token(db, user, auth_context=auth_context)
     db.commit()
@@ -522,127 +505,6 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 
 
 # ---------------------------------------------------------------------------
-# WebAuthn / passkeys
-# ---------------------------------------------------------------------------
-class PasskeyRegistrationVerifyRequest(BaseModel):
-    challenge_id: str = Field(..., min_length=20, max_length=64)
-    credential: dict
-
-
-class PasskeyAuthenticationOptionsRequest(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-
-
-class PasskeyAuthenticationVerifyRequest(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-    challenge_id: str = Field(..., min_length=20, max_length=64)
-    credential: dict
-
-
-@router.post("/passkey/registration/options")
-def passkey_registration_options(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not settings.PASSKEY_ENABLED:
-        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
-    try:
-        return registration_options(db, current_user)
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Passkey registration options failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Passkey registration is temporarily unavailable.")
-
-
-@router.post("/passkey/registration/verify")
-def passkey_registration_verify(
-    payload: PasskeyRegistrationVerifyRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if not settings.PASSKEY_ENABLED:
-        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
-    try:
-        saved = verify_registration(db, current_user, payload.challenge_id, payload.credential)
-        if current_user.role == "ADJUSTER":
-            adjuster = db.query(Adjuster).filter(
-                Adjuster.user_id == current_user.id,
-                Adjuster.tenant_id == current_user.tenant_id,
-            ).first()
-            if adjuster:
-                adjuster.is_active = True
-                db.commit()
-        return {"registered": True, "credential_id": saved.credential_id, "activated": current_user.role != "ADJUSTER" or bool(adjuster)}
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Passkey registration verification failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=401, detail="Passkey registration could not be verified.")
-
-
-@router.post("/passkey/auth/options")
-def passkey_authentication_options(payload: PasskeyAuthenticationOptionsRequest, request: Request, db: Session = Depends(get_db)):
-    if not settings.PASSKEY_ENABLED:
-        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
-    enforce_rate_limit(request, action="passkey_options", max_requests=10, window_seconds=60)
-    try:
-        clean_email = validate_email(payload.email)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
-    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None), User.status == "active").first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
-    try:
-        return authentication_options(db, user)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Passkey authentication options failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Passkey authentication is temporarily unavailable.")
-
-
-@router.post("/passkey/auth/verify")
-def passkey_authentication_verify(
-    payload: PasskeyAuthenticationVerifyRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    if not settings.PASSKEY_ENABLED:
-        raise HTTPException(status_code=503, detail="Passkey authentication is disabled.")
-    enforce_rate_limit(request, action="passkey_verify", max_requests=10, window_seconds=60)
-    try:
-        clean_email = validate_email(payload.email)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
-    user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None), User.status == "active").first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
-    try:
-        verify_authentication(db, user, payload.challenge_id, payload.credential)
-    except ValueError:
-        db.rollback()
-        raise HTTPException(status_code=401, detail="Invalid passkey authentication.")
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Passkey authentication failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=401, detail="Invalid passkey authentication.")
-    user.last_login_at = datetime.now(timezone.utc)
-    user.session_version = int(getattr(user, "session_version", 1) or 1)
-    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["webauthn"]})
-    db.commit()
-    return _auth_response(user, refresh, amr=["webauthn"], mfa_authenticated=True)
-
-
-@router.get("/passkey/status")
-def passkey_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    count = db.query(WebAuthnCredential).filter(
-        WebAuthnCredential.user_id == current_user.id,
-        WebAuthnCredential.tenant_id == current_user.tenant_id,
-    ).count()
-    return {"enabled": settings.PASSKEY_ENABLED, "registered": count > 0, "credential_count": count}
-
-
-# ---------------------------------------------------------------------------
 # Forgot Password: Step 3 — Reset password using verified token
 # ---------------------------------------------------------------------------
 @router.post("/reset-password")
@@ -708,132 +570,6 @@ def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Ses
     old_row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()).first()
     context: dict[str, Any] = dict((old_row.auth_context_json if old_row else None) or {"mfa": False, "amr": ["pwd"]})
     return _auth_response(user, replacement, amr=list(context.get("amr") or []), mfa_authenticated=bool(context.get("mfa")))
-
-
-@router.post("/mfa/setup")
-def mfa_setup(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Start TOTP setup without enabling MFA until the first code is verified."""
-    secret = new_totp_secret()
-    current_user.mfa_secret_encrypted = encrypt_secret(secret)
-    current_user.mfa_enabled = False
-    db.commit()
-    return {
-        "secret": secret,
-        "provisioning_uri": provisioning_uri(secret, current_user.email),
-    }
-
-
-@router.post("/mfa/enable")
-def mfa_enable(payload: MFASetupVerifyRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Verify TOTP enrollment and issue one-time recovery codes."""
-    if not current_user.mfa_secret_encrypted:
-        raise HTTPException(status_code=400, detail="MFA setup has not been started.")
-    if not verify_totp(decrypt_secret(current_user.mfa_secret_encrypted), payload.code):
-        raise HTTPException(status_code=401, detail="Invalid MFA code.")
-    current_user.mfa_enabled = True
-    current_user.mfa_required = True
-    recovery_codes = new_recovery_codes()
-    for recovery_code in recovery_codes:
-        db.add(MFARecoveryCode(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id or "",
-            code_hash=hash_recovery_code(recovery_code),
-        ))
-    current_user.session_version = (current_user.session_version or 1) + 1
-    db.query(RefreshToken).filter(
-        RefreshToken.user_id == current_user.id,
-        RefreshToken.tenant_id == current_user.tenant_id,
-        RefreshToken.revoked_at.is_(None),
-    ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
-    db.commit()
-    return {"mfa_enabled": True, "recovery_codes": recovery_codes}
-
-
-@router.post("/mfa/disable")
-def mfa_disable(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Disable MFA and invalidate current sessions."""
-    current_user.mfa_enabled = False
-    current_user.mfa_required = False
-    current_user.mfa_secret_encrypted = None
-    db.query(MFARecoveryCode).filter(
-        MFARecoveryCode.user_id == current_user.id,
-        MFARecoveryCode.tenant_id == current_user.tenant_id,
-        MFARecoveryCode.consumed.is_(False),
-    ).update({MFARecoveryCode.consumed: True}, synchronize_session=False)
-    current_user.session_version = (current_user.session_version or 1) + 1
-    db.query(RefreshToken).filter(
-        RefreshToken.user_id == current_user.id,
-        RefreshToken.tenant_id == current_user.tenant_id,
-        RefreshToken.revoked_at.is_(None),
-    ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
-    db.commit()
-    return {"mfa_enabled": False}
-
-
-@router.post("/mfa/verify")
-def verify_mfa(payload: MFAVerifyRequest, request: Request, db: Session = Depends(get_db)):
-    enforce_rate_limit(request, action="mfa_verify", max_requests=10, window_seconds=60)
-    token = payload.challenge_token.strip()
-    code = payload.code.strip()
-    if not token or not code:
-        raise HTTPException(status_code=400, detail="MFA challenge and code are required.")
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    challenge = db.query(MFAChallenge).filter(MFAChallenge.challenge_token_hash == digest).with_for_update().first()
-    now = datetime.now(timezone.utc)
-    if not challenge or challenge.consumed or challenge.expires_at <= now:
-        raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge.")
-    user = db.query(User).filter(User.id == challenge.user_id, User.tenant_id == challenge.tenant_id, User.status == "active").first()
-    if not user or not user.mfa_secret_encrypted:
-        raise HTTPException(status_code=401, detail="Invalid MFA challenge.")
-    if challenge.attempts >= settings.MFA_MAX_ATTEMPTS:
-        challenge.consumed = True
-        db.commit()
-        raise HTTPException(status_code=429, detail="Too many MFA attempts.")
-    if not verify_totp(decrypt_secret(user.mfa_secret_encrypted), code):
-        challenge.attempts += 1
-        db.commit()
-        raise HTTPException(status_code=401, detail="Invalid MFA code.")
-    challenge.consumed = True
-    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["pwd", "totp"]})
-    db.commit()
-    return _auth_response(user, refresh, amr=["pwd", "totp"], mfa_authenticated=True)
-
-
-@router.post("/mfa/recover")
-def mfa_recover(payload: dict, request: Request, db: Session = Depends(get_db)):
-    """Complete MFA using a one-time recovery code."""
-    enforce_rate_limit(request, action="mfa_recover", max_requests=5, window_seconds=60)
-    token = str(payload.get("challenge_token") or "").strip()
-    recovery_code = str(payload.get("recovery_code") or "").strip()
-    if not token or not recovery_code:
-        raise HTTPException(status_code=400, detail="MFA challenge and recovery code are required.")
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    challenge = db.query(MFAChallenge).filter(
-        MFAChallenge.challenge_token_hash == digest,
-    ).with_for_update().first()
-    now = datetime.now(timezone.utc)
-    if not challenge or challenge.consumed or challenge.expires_at <= now:
-        raise HTTPException(status_code=401, detail="Invalid or expired MFA challenge.")
-    user = db.query(User).filter(
-        User.id == challenge.user_id,
-        User.tenant_id == challenge.tenant_id,
-        User.status == "active",
-    ).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid MFA challenge.")
-    codes = db.query(MFARecoveryCode).filter(
-        MFARecoveryCode.user_id == user.id,
-        MFARecoveryCode.tenant_id == user.tenant_id,
-        MFARecoveryCode.consumed.is_(False),
-    ).with_for_update().all()
-    match = next((code for code in codes if verify_recovery_hash(recovery_code, code.code_hash)), None)
-    if not match:
-        raise HTTPException(status_code=401, detail="Invalid recovery code.")
-    match.consumed = True
-    challenge.consumed = True
-    refresh = _issue_refresh_token(db, user, auth_context={"mfa": True, "amr": ["pwd", "recovery_code"]})
-    db.commit()
-    return _auth_response(user, refresh, amr=["pwd", "recovery_code"], mfa_authenticated=True)
 
 
 @router.post("/logout")

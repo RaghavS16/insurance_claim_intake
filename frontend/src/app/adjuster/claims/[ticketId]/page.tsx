@@ -119,7 +119,9 @@ export default function AdjusterClaimWorkspacePage({
       if (Array.isArray(res)) {
         setAuditEvents(res);
       }
-    } catch {}
+    } catch {
+      // Audit logs may not be available yet
+    }
   };
 
   useEffect(() => {

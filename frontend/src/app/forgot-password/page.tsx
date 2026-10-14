@@ -45,19 +45,13 @@ export default function ForgotPasswordPage() {
         className="snow-flex snow-justify-between snow-items-center"
         style={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}
       >
-        <div className="snow-flex snow-items-center snow-gap-2">
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #007AFF 0%, #00D1FF 100%)',
-            }}
+        <Link href="/">
+          <img
+            src="/primary-logo.png"
+            alt="IntelliClaim"
+            style={{ width: 165, height: 'auto', objectFit: 'contain', display: 'block' }}
           />
-          <span className="snow-body" style={{ fontWeight: 700, letterSpacing: -0.5 }}>
-            ApexCare
-          </span>
-        </div>
+        </Link>
 
         <Link href="/signin">
           <Button size="sm" variant="ghost">Sign in</Button>
@@ -118,7 +112,7 @@ export default function ForgotPasswordPage() {
       </main>
 
       <footer style={{ textAlign: 'center', color: '#A1A1AA', fontSize: 12 }}>
-        © 2026 ApexCare Claims Platform
+        © 2026 IntelliClaim AI Platform
       </footer>
     </div>
   );

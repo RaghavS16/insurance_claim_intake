@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 export interface TooltipProps {
   content: React.ReactNode;
@@ -23,9 +23,36 @@ export const Tooltip: React.FC<TooltipProps> = ({
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [effectivePosition, setEffectivePosition] = useState<'top' | 'bottom' | 'left' | 'right'>(position);
+  const [horizontalShift, setHorizontalShift] = useState<'center' | 'left' | 'right'>('center');
+
+  useEffect(() => {
+    setEffectivePosition(position);
+  }, [position]);
 
   const showTooltip = () => {
     timeoutRef.current = setTimeout(() => {
+      if (wrapperRef.current) {
+        const rect = wrapperRef.current.getBoundingClientRect();
+        // Check top boundary collision: if element is close to top of viewport (< 42px), flip to 'bottom'
+        if ((position === 'top' || !position) && rect.top < 42) {
+          setEffectivePosition('bottom');
+        } else if (position === 'bottom' && window.innerHeight - rect.bottom < 42) {
+          setEffectivePosition('top');
+        } else {
+          setEffectivePosition(position);
+        }
+
+        // Check horizontal boundaries to avoid clipping on left or right viewport edges
+        if (rect.left + rect.width / 2 + 70 > window.innerWidth) {
+          setHorizontalShift('right'); // align flush right with trigger
+        } else if (rect.left - 50 < 0) {
+          setHorizontalShift('left'); // align flush left with trigger
+        } else {
+          setHorizontalShift('center');
+        }
+      }
       setIsVisible(true);
     }, delay);
   };
@@ -39,13 +66,19 @@ export const Tooltip: React.FC<TooltipProps> = ({
 
   // Position calculation styles
   const getPositionStyles = (): React.CSSProperties => {
-    switch (position) {
-      case 'bottom':
+    switch (effectivePosition) {
+      case 'bottom': {
+        const hStyle: React.CSSProperties =
+          horizontalShift === 'right'
+            ? { right: 0, left: 'auto', transform: 'none' }
+            : horizontalShift === 'left'
+            ? { left: 0, right: 'auto', transform: 'none' }
+            : { left: '50%', transform: 'translateX(-50%)' };
         return {
           top: 'calc(100% + 6px)',
-          left: '50%',
-          transform: 'translateX(-50%)',
+          ...hStyle,
         };
+      }
       case 'left':
         return {
           top: '50%',
@@ -59,12 +92,18 @@ export const Tooltip: React.FC<TooltipProps> = ({
           transform: 'translateY(-50%)',
         };
       case 'top':
-      default:
+      default: {
+        const hStyle: React.CSSProperties =
+          horizontalShift === 'right'
+            ? { right: 0, left: 'auto', transform: 'none' }
+            : horizontalShift === 'left'
+            ? { left: 0, right: 'auto', transform: 'none' }
+            : { left: '50%', transform: 'translateX(-50%)' };
         return {
           bottom: 'calc(100% + 6px)',
-          left: '50%',
-          transform: 'translateX(-50%)',
+          ...hStyle,
         };
+      }
     }
   };
 
@@ -72,6 +111,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
 
   return (
     <div
+      ref={wrapperRef}
       className={`snow-tooltip-wrapper ${className}`}
       style={{ position: 'relative', display: 'inline-flex', ...style }}
       onMouseEnter={showTooltip}

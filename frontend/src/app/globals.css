@@ -1,4 +1,4 @@
-/* ApexCare Design System - Vanilla CSS Architecture */
+/* IntelliClaim Design System - Vanilla CSS Architecture */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
@@ -186,7 +186,7 @@ button, input, select, textarea {
 .snow-gap-4 { gap: 16px; }
 .snow-gap-6 { gap: 24px; }
 
-/* ApexCare Card Container */
+/* IntelliClaim Card Container */
 .snow-card {
   background: var(--snow-surface);
   border: 1px solid var(--snow-border-subtle);
@@ -195,7 +195,7 @@ button, input, select, textarea {
   box-shadow: var(--snow-shadow-card);
 }
 
-/* ApexCare Metric Tint Card */
+/* IntelliClaim Metric Tint Card */
 .snow-metric-card {
   border-radius: var(--snow-radius-lg);
   padding: 20px;
@@ -279,7 +279,7 @@ button, input, select, textarea {
 .snow-metric-trend.up { color: #10B981; }
 .snow-metric-trend.down { color: #EF4444; }
 
-/* ApexCare Buttons */
+/* IntelliClaim Buttons */
 .snow-btn {
   display: inline-flex;
   align-items: center;
@@ -364,7 +364,7 @@ button, input, select, textarea {
   border-radius: var(--snow-radius-pill);
 }
 
-/* ApexCare Form Controls */
+/* IntelliClaim Form Controls */
 .snow-form-group {
   display: flex;
   flex-direction: column;
@@ -423,7 +423,7 @@ button, input, select, textarea {
 .snow-input-adornment.left { left: 12px; }
 .snow-input-adornment.right { right: 12px; cursor: pointer; }
 
-/* ApexCare PIN / OTP Input */
+/* IntelliClaim PIN / OTP Input */
 .snow-pin-container {
   display: flex;
   gap: 12px;
@@ -450,7 +450,7 @@ button, input, select, textarea {
   box-shadow: 0 0 0 2px rgba(28, 28, 28, 0.08);
 }
 
-/* ApexCare Toggle Switch */
+/* IntelliClaim Toggle Switch */
 .snow-switch {
   position: relative;
   display: inline-block;
@@ -495,7 +495,7 @@ input:checked + .snow-switch-slider:before {
   transform: translateX(18px);
 }
 
-/* ApexCare Status Badges & Pills */
+/* IntelliClaim Status Badges & Pills */
 .snow-badge-dot {
   display: inline-flex;
   align-items: center;
@@ -533,7 +533,7 @@ input:checked + .snow-switch-slider:before {
 .snow-badge-pill.purple { background-color: var(--snow-tint-purple-bg); color: var(--snow-tint-purple-text); }
 .snow-badge-pill.neutral { background-color: var(--snow-surface-muted); color: var(--snow-text-secondary); }
 
-/* ApexCare Data Table */
+/* IntelliClaim Data Table */
 .snow-table-container {
   width: 100%;
   overflow-x: auto;
@@ -574,7 +574,7 @@ input:checked + .snow-switch-slider:before {
   color: var(--snow-text-primary);
 }
 
-/* ApexCare Modal Dialog */
+/* IntelliClaim Modal Dialog */
 .snow-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -585,6 +585,7 @@ input:checked + .snow-switch-slider:before {
   justify-content: center;
   z-index: 1000;
   padding: 20px;
+  overflow-y: auto;
 }
 
 .snow-modal {
@@ -628,7 +629,7 @@ input:checked + .snow-switch-slider:before {
   color: var(--snow-text-primary);
 }
 
-/* ApexCare Toast Notification */
+/* IntelliClaim Toast Notification */
 .snow-toast {
   position: fixed;
   bottom: 28px;
@@ -653,7 +654,7 @@ input:checked + .snow-switch-slider:before {
   100% { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* ApexCare App Shell Layout */
+/* IntelliClaim App Shell Layout */
 .snow-shell {
   display: flex;
   min-height: 100vh;
@@ -871,4 +872,25 @@ input:checked + .snow-switch-slider:before {
     font-size: 20px;
   }
 }
+
+@keyframes snowPulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+  70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.snow-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #71717A;
+  display: inline-block;
+  animation: snowBounce 1.4s infinite ease-in-out both;
+}
+
+@keyframes snowBounce {
+  0%, 80%, 100% { transform: scale(0.35); opacity: 0.3; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
 

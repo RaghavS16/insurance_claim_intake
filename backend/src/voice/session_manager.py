@@ -131,7 +131,7 @@ class VoiceSessionManager:
     def safety_identifier(user_id: str) -> str:
         # Retained for compatibility with earlier callers; the local pipeline
         # does not transmit this value to any third-party provider.
-        return hashlib.sha256(f"insureclaim:{user_id}".encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"intelliclaim:{user_id}".encode("utf-8")).hexdigest()
 
     async def start(
         self,

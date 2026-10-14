@@ -10,10 +10,12 @@ export interface DatePickerProps {
   label?: string;
   error?: string;
   disabled?: boolean;
+  required?: boolean;
   minDate?: string;
   maxDate?: string;
   className?: string;
   style?: React.CSSProperties;
+  popoverDirection?: 'auto' | 'up' | 'down';
 }
 
 const MONTH_NAMES = [
@@ -30,13 +32,78 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   label,
   error,
   disabled = false,
+  required = false,
   minDate,
   maxDate,
   className = '',
   style,
+  popoverDirection = 'auto',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [popoverPlacement, setPopoverPlacement] = useState<{
+    vertical: 'down' | 'up';
+    horizontal: 'left' | 'right';
+  }>({ vertical: 'down', horizontal: 'left' });
+
+  // Update placement to avoid overflowing offscreen or into the Windows taskbar
+  const updatePlacement = () => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const popoverHeight = 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+
+    let vertical: 'down' | 'up' = 'down';
+    if (popoverDirection === 'up') {
+      vertical = 'up';
+    } else if (popoverDirection === 'down') {
+      vertical = 'down';
+    } else {
+      // If there is not enough space below, and more space above, open upwards
+      if (spaceBelow < popoverHeight && spaceAbove > spaceBelow) {
+        vertical = 'up';
+      } else {
+        vertical = 'down';
+      }
+    }
+
+    const popoverWidth = 290;
+    let horizontal: 'left' | 'right' = 'left';
+    const modalEl = containerRef.current.closest('.snow-modal, [role="dialog"]');
+    if (modalEl) {
+      const modalRect = modalEl.getBoundingClientRect();
+      if (rect.left + popoverWidth > modalRect.right - 16) {
+        horizontal = 'right';
+      }
+    } else if (rect.left + popoverWidth > window.innerWidth - 16) {
+      horizontal = 'right';
+    }
+
+    setPopoverPlacement({ vertical, horizontal });
+  };
+
+  const handleToggle = () => {
+    if (disabled) return;
+    if (!isOpen) {
+      updatePlacement();
+    }
+    setIsOpen(!isOpen);
+  };
+
+  // Re-calculate placement on open, resize, or scroll
+  useEffect(() => {
+    if (isOpen) {
+      updatePlacement();
+      const onReposition = () => updatePlacement();
+      window.addEventListener('resize', onReposition);
+      window.addEventListener('scroll', onReposition, true);
+      return () => {
+        window.removeEventListener('resize', onReposition);
+        window.removeEventListener('scroll', onReposition, true);
+      };
+    }
+  }, [isOpen]);
 
   // Parse initial view month/year
   const selectedDate = value ? new Date(value + 'T00:00:00') : null;
@@ -134,11 +201,24 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       className={`snow-datepicker-wrapper ${className}`}
       style={{ position: 'relative', width: '100%', marginBottom: label ? 16 : 0, ...style }}
     >
-      {label && <label className="snow-form-label">{label}</label>}
+      {label && (
+        <label
+          className="snow-label"
+          style={{
+            display: 'block',
+            marginBottom: 6,
+            fontSize: 13,
+            fontWeight: 500,
+            color: '#3F3F46',
+          }}
+        >
+          {label} {required && <span style={{ color: '#EF4444' }}>*</span>}
+        </label>
+      )}
 
       {/* Input trigger */}
       <div
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={handleToggle}
         className="snow-flex snow-items-center snow-justify-between"
         style={{
           height: 40,
@@ -195,9 +275,13 @@ export const DatePicker: React.FC<DatePickerProps> = ({
           className="snow-datepicker-popover"
           style={{
             position: 'absolute',
-            top: 'calc(100% + 6px)',
-            left: 0,
-            zIndex: 1000,
+            ...(popoverPlacement.vertical === 'up'
+              ? { bottom: 'calc(100% + 6px)', top: 'auto' }
+              : { top: 'calc(100% + 6px)', bottom: 'auto' }),
+            ...(popoverPlacement.horizontal === 'right'
+              ? { right: 0, left: 'auto' }
+              : { left: 0, right: 'auto' }),
+            zIndex: 1100,
             width: 290,
             backgroundColor: '#FFFFFF',
             border: '1px solid #EBECEF',

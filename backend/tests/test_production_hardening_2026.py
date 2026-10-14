@@ -119,7 +119,3 @@ def test_adjuster_model_exposes_user_identity():
     assert hasattr(Adjuster, "user_id")
 
 
-def test_webauthn_models_import():
-    from src.database.hardening_models import WebAuthnCredential, WebAuthnChallenge
-    assert WebAuthnCredential.__tablename__ == "webauthn_credentials"
-    assert WebAuthnChallenge.__tablename__ == "webauthn_challenges"

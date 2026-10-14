@@ -6,7 +6,7 @@ import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -246,6 +246,49 @@ async def voice_process_turn(
         "missing_fields": result.get("missing_fields", []),
         "status": claim.status,
     }
+
+
+_whisper_engine = None
+
+
+def _get_whisper_engine():
+    global _whisper_engine
+    if _whisper_engine is None:
+        from faster_whisper import WhisperModel
+        _whisper_engine = WhisperModel("tiny", device="cpu", compute_type="int8")
+    return _whisper_engine
+
+
+@router.post("/transcribe")
+async def transcribe_audio_file(
+    file: UploadFile = File(...),
+    request: Request = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Direct audio transcription via local faster-whisper model."""
+    import tempfile
+    import os
+
+    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = tmp.name
+        content = await file.read()
+        tmp.write(content)
+
+    try:
+        engine = _get_whisper_engine()
+        segments, info = engine.transcribe(tmp_path, beam_size=1, language="en")
+        text = " ".join([seg.text.strip() for seg in segments]).strip()
+        return {"text": text, "language": getattr(info, "language", "en")}
+    except Exception as exc:
+        logger.exception("Voice audio transcription error")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(exc)}")
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 @router.websocket("/events/{ticket_id}")

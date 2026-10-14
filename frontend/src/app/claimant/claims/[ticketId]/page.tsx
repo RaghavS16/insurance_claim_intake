@@ -107,14 +107,16 @@ export default function ClaimDetailsPage({
     setSubmittingResponse(true);
 
     try {
-      let docName = respondFile?.name || 'evidence_response.pdf';
+      const docName = respondFile?.name || 'evidence_response.pdf';
       if (respondFile) {
         const formData = new FormData();
         formData.append('file', respondFile);
         formData.append('document_type', 'claimant_response');
         try {
           await api.post(`/api/v1/claims/${ticketId}/evidence`, formData);
-        } catch {}
+        } catch {
+          // Evidence upload optional / non-fatal
+        }
       }
 
       await api.post(`/api/v1/claims/${ticketId}/requests/${claim.pending_request.id}/respond`, {

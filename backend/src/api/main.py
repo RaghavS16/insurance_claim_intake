@@ -208,8 +208,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Insurance Claim Intake Voice Agent API",
-    description="Conversational voice-first insurance claim intake service",
+    title="IntelliClaim API",
+    description="Voice-driven agentic AI system for insurance intake and adjudication",
     version="2.0.0",
     lifespan=lifespan,
 )

@@ -31,13 +31,16 @@ export default function HomePage() {
     <div
       style={{
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         height: '100vh',
         backgroundColor: '#F7F9FB',
+        gap: 16,
       }}
     >
-      <div className="snow-body-muted">Redirecting to your workspace...</div>
+      <img src="/primary-logo.png" alt="IntelliClaim" style={{ width: 200, height: 'auto', objectFit: 'contain' }} />
+      <div className="snow-body-muted">Loading your workspace...</div>
     </div>
   );
 }

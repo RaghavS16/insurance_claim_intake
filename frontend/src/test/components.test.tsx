@@ -8,7 +8,7 @@ import { MetricCard } from '@/components/ui/MetricCard';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 
-describe('ApexCare Component Library', () => {
+describe('IntelliClaim Component Library', () => {
   it('renders Button with primary variant and handles click', () => {
     const handleClick = vi.fn();
     render(<Button onClick={handleClick}>Submit Claim</Button>);

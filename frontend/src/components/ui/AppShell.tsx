@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -52,6 +52,42 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [rightDrawerOpen, setRightDrawerOpen] = useState(Boolean(rightDrawerContent && !hideRightDrawer));
 
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState([
+    { id: '1', title: 'IntelliClaim Engine Active', message: 'Claims intake and policy verification pipeline operational.', time: 'Just now', unread: true },
+    { id: '2', title: 'System Security Verification', message: 'Audit trails and deterministic tenant role enforcement active.', time: '12m ago', unread: true },
+    { id: '3', title: 'Realtime Voice Adjudication', message: 'Pipecat voice streaming and local faster-whisper initialized.', time: '1h ago', unread: false },
+  ]);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  // Close notifications on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(e.target as Node)) {
+        setNotificationsOpen(false);
+      }
+    };
+    if (notificationsOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [notificationsOpen]);
+
+  // Global Cmd+K / Ctrl+K shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   useEffect(() => {
     if (isLoading) return;
     if (!user) {
@@ -81,7 +117,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     if (role === 'CLAIMANT') {
       return [
         { label: 'Overview', href: '/claimant/dashboard', icon: LayoutDashboard },
-        { label: 'File Claim (AI & Voice)', href: '/claimant/file-claim', icon: MessageSquare },
+        { label: 'File Claim (AI & Voice)', href: '/claimant/file-claim?fresh=true', icon: MessageSquare },
         { label: 'Track Claims', href: '/claimant/claims', icon: FolderOpen },
         { label: 'My Policies', href: '/claimant/policies', icon: ShieldCheck },
       ];
@@ -97,7 +133,6 @@ export const AppShell: React.FC<AppShellProps> = ({
         { label: 'Claims Oversight', href: '/admin/claims', icon: FolderOpen },
         { label: 'Adjusters Management', href: '/admin/adjusters', icon: Users },
         { label: 'Policies Management', href: '/admin/policies', icon: ShieldCheck },
-        { label: 'Knowledge Base', href: '/admin/knowledge', icon: BookOpen },
         { label: 'System Audit Trail', href: '/admin/audit', icon: Activity },
       ];
     }
@@ -109,8 +144,27 @@ export const AppShell: React.FC<AppShellProps> = ({
     <div className="snow-shell">
       {/* Left Sidebar */}
       <aside className={`snow-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        {/* Brand Logo Header */}
+        <div style={{ marginBottom: 18, padding: sidebarCollapsed ? '4px 0' : '2px 4px' }}>
+          <Link href={role === 'CLAIMANT' ? '/claimant/dashboard' : role === 'ADJUSTER' ? '/adjuster/dashboard' : '/admin/claims'}>
+            {sidebarCollapsed ? (
+              <img
+                src="/secondary-logo.png"
+                alt="IntelliClaim"
+                style={{ width: 36, height: 36, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 8 }}
+              />
+            ) : (
+              <img
+                src="/primary-logo.png"
+                alt="IntelliClaim"
+                style={{ width: 175, height: 'auto', maxHeight: 56, objectFit: 'contain', display: 'block' }}
+              />
+            )}
+          </Link>
+        </div>
+
         {/* User profile header */}
-        <div className="snow-flex snow-items-center snow-gap-3" style={{ marginBottom: 24 }}>
+        <div className="snow-flex snow-items-center snow-gap-3" style={{ marginBottom: 20 }}>
           <div
             style={{
               width: 32,
@@ -151,7 +205,8 @@ export const AppShell: React.FC<AppShellProps> = ({
         <nav className="snow-flex-col snow-gap-1" style={{ flex: 1 }}>
           {navLinks.map((link) => {
             const Icon = link.icon;
-            const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
+            const basePath = link.href.split('?')[0];
+            const isActive = pathname === basePath || pathname.startsWith(basePath + '/');
 
             return (
               <Link
@@ -196,14 +251,14 @@ export const AppShell: React.FC<AppShellProps> = ({
             }}
           >
             <Settings size={16} />
-            {!sidebarCollapsed && <span>Settings & Security</span>}
+            {!sidebarCollapsed && <span>Settings</span>}
           </Link>
         </nav>
 
         {/* Fixed Sign Out Action */}
         <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid #EBECEF', flexShrink: 0 }}>
           {sidebarCollapsed ? (
-            <Tooltip content="Sign Out">
+            <Tooltip content="Sign Out" position="right">
               <button
                 onClick={async () => {
                   await logout();
@@ -266,7 +321,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             </button>
 
             {/* Desktop Sidebar Toggle */}
-            <Tooltip content={sidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}>
+            <Tooltip content={sidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'} position="bottom">
               <button
                 className="snow-desktop-sidebar-btn"
                 onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -277,7 +332,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               </button>
             </Tooltip>
 
-            <Tooltip content="Favorite Shortcuts">
+            <Tooltip content="Favorite Shortcuts" position="bottom">
               <span style={{ display: 'inline-flex', cursor: 'pointer' }}>
                 <Star size={16} color="#A1A1AA" />
               </span>
@@ -299,38 +354,169 @@ export const AppShell: React.FC<AppShellProps> = ({
             <div className="snow-topbar-search" style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#A1A1AA' }} />
               <input
+                ref={searchInputRef}
                 type="text"
                 className="snow-input"
                 style={{ height: 34, paddingLeft: 30, paddingRight: 40, width: 180, fontSize: 13 }}
                 placeholder="Search..."
               />
-              <span
+              <button
+                type="button"
                 className="snow-micro"
                 style={{
                   position: 'absolute',
                   right: 8,
-                  top: 8,
+                  top: 7,
                   background: '#F4F5F7',
+                  border: 'none',
+                  cursor: 'pointer',
                   padding: '2px 5px',
                   borderRadius: 4,
                   color: '#71717A',
+                  fontSize: 11,
+                  fontWeight: 600,
                 }}
+                onClick={() => searchInputRef.current?.focus()}
+                title="Press ⌘K or Ctrl+K to search"
               >
                 ⌘K
-              </span>
+              </button>
             </div>
 
-            <Tooltip content="Notifications">
-              <button
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
-                aria-label="Notifications"
-              >
-                <Bell size={18} />
-              </button>
-            </Tooltip>
+            {/* Notification Bell with Dropdown Popover */}
+            <div style={{ position: 'relative' }} ref={notificationsRef}>
+              <Tooltip content="Notifications" position="bottom">
+                <button
+                  type="button"
+                  style={{
+                    background: notificationsOpen ? '#E4E4E7' : 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#71717A',
+                    position: 'relative',
+                    padding: '6px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  aria-label="Notifications"
+                  onClick={() => setNotificationsOpen(!notificationsOpen)}
+                >
+                  <Bell size={18} />
+                  {notifications.some((n) => n.unread) && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: 4,
+                        right: 4,
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        backgroundColor: '#10B981',
+                      }}
+                    />
+                  )}
+                </button>
+              </Tooltip>
+
+              {notificationsOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: 'calc(100% + 8px)',
+                    zIndex: 1300,
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid #EBECEF',
+                    borderRadius: 14,
+                    width: 320,
+                    boxShadow: '0 12px 32px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04)',
+                    overflow: 'hidden',
+                    animation: 'snowFadeIn 0.12s ease-out',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      borderBottom: '1px solid #F4F4F5',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
+                      Notifications ({notifications.filter((n) => n.unread).length} unread)
+                    </div>
+                    {notifications.length > 0 && (
+                      <button
+                        type="button"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#007AFF',
+                          fontSize: 12,
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                        }}
+                        onClick={() =>
+                          setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
+                        }
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    {notifications.length === 0 ? (
+                      <div style={{ padding: '24px 16px', textAlign: 'center', color: '#A1A1AA', fontSize: 13 }}>
+                        No new notifications
+                      </div>
+                    ) : (
+                      notifications.map((n) => (
+                        <div
+                          key={n.id}
+                          style={{
+                            padding: '12px 16px',
+                            borderBottom: '1px solid #F4F5F7',
+                            backgroundColor: n.unread ? '#FBFBFC' : '#FFFFFF',
+                            transition: 'background-color 0.1s ease',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+                              {n.title}
+                            </div>
+                            <span className="snow-caption" style={{ fontSize: 11, color: '#A1A1AA' }}>
+                              {n.time}
+                            </span>
+                          </div>
+                          <div className="snow-caption" style={{ color: '#71717A', fontSize: 12 }}>
+                            {n.message}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {notifications.length > 0 && (
+                    <div style={{ padding: '8px 16px', textAlign: 'center', backgroundColor: '#FAFAFA', borderTop: '1px solid #F4F5F7' }}>
+                      <button
+                        type="button"
+                        style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: 12, cursor: 'pointer' }}
+                        onClick={() => setNotifications([])}
+                      >
+                        Clear notifications
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {Boolean(rightDrawerContent && !hideRightDrawer) && (
-              <Tooltip content={rightDrawerOpen ? 'Close Side Panel' : 'Open Side Panel'}>
+              <Tooltip content={rightDrawerOpen ? 'Close Side Panel' : 'Open Side Panel'} position="bottom">
                 <button
                   onClick={() => setRightDrawerOpen(!rightDrawerOpen)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
@@ -347,19 +533,6 @@ export const AppShell: React.FC<AppShellProps> = ({
         <main className="snow-content">
           {activeTitle && <h1 className="snow-h1" style={{ marginBottom: 20 }}>{activeTitle}</h1>}
           {children}
-
-          {/* Footer */}
-          <footer
-            className="snow-flex snow-justify-between snow-items-center"
-            style={{ marginTop: 40, paddingTop: 20, borderTop: '1px solid #EBECEF', color: '#A1A1AA', fontSize: 12 }}
-          >
-            <div>© 2026 ApexCare Claims Platform</div>
-            <div className="snow-flex snow-gap-4">
-              <a href="#">About</a>
-              <a href="#">Support</a>
-              <a href="#">Contact Us</a>
-            </div>
-          </footer>
         </main>
       </div>
 
@@ -374,35 +547,13 @@ export const AppShell: React.FC<AppShellProps> = ({
       {mobileMenuOpen && (
         <div className="snow-mobile-drawer-overlay" onClick={() => setMobileMenuOpen(false)}>
           <div className="snow-mobile-drawer" onClick={(e) => e.stopPropagation()}>
-            {/* Header with Close Button */}
-            <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-              <div className="snow-flex snow-items-center snow-gap-2">
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    backgroundColor: '#1C1C1C',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 600,
-                    fontSize: 13,
-                  }}
-                >
-                  {user?.full_name ? user.full_name[0] : (role ? role[0] : 'U')}
-                </div>
-                <div>
-                  <div className="snow-body" style={{ fontWeight: 600, fontSize: 14 }}>
-                    {user?.full_name || user?.email || 'User'}
-                  </div>
-                  <div className="snow-caption" style={{ textTransform: 'capitalize', fontSize: 11 }}>
-                    {role ? role.toLowerCase() : ''}
-                  </div>
-                </div>
-              </div>
-
+            {/* Header with Brand Logo & Close Button */}
+            <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+              <img
+                src="/primary-logo.png"
+                alt="IntelliClaim"
+                style={{ width: 155, height: 'auto', objectFit: 'contain' }}
+              />
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}
@@ -412,10 +563,42 @@ export const AppShell: React.FC<AppShellProps> = ({
                   color: '#71717A',
                   cursor: 'pointer',
                   padding: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
+                aria-label="Close navigation"
               >
                 <X size={20} />
               </button>
+            </div>
+
+            {/* User profile row */}
+            <div className="snow-flex snow-items-center snow-gap-2" style={{ marginBottom: 20 }}>
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  backgroundColor: '#1C1C1C',
+                  color: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 600,
+                  fontSize: 13,
+                }}
+              >
+                {user?.full_name ? user.full_name[0] : (role ? role[0] : 'U')}
+              </div>
+              <div>
+                <div className="snow-body" style={{ fontWeight: 600, fontSize: 14 }}>
+                  {user?.full_name || user?.email || 'User'}
+                </div>
+                <div className="snow-caption" style={{ textTransform: 'capitalize', fontSize: 11 }}>
+                  {role ? role.toLowerCase() : ''}
+                </div>
+              </div>
             </div>
 
             <div className="snow-caption" style={{ color: '#A1A1AA', marginBottom: 8, paddingLeft: 8 }}>

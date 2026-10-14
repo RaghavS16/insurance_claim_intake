@@ -63,6 +63,7 @@ def _request_payload(row: ClaimEvidenceRequest, db: Session) -> Dict[str, Any]:
 
 
 class UpdateClaimRequest(BaseModel):
+    title: Optional[str] = None
     policy_id: Optional[str] = None
     insurance_type: Optional[str] = None
     event_date: Optional[str] = None
@@ -84,6 +85,7 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
     return {
         "id": str(claim.id) if claim.id else None,
         "ticket_id": claim.ticket_id,
+        "title": state.get("title"),
         "status": claim.status,
         "conversation_status": claim.conversation_status,
         "insurance_type": claim.insurance_type,
@@ -134,13 +136,14 @@ def _conversation_payload(db: Session, claim: Claim) -> List[Dict[str, Any]]:
 
 @router.get("")
 @router.get("/")
-def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0)):
-    """List all claims belonging to the authenticated claimant, newest first."""
+def list_user_claims(request: Request, submitted: Optional[bool] = Query(None), submitted_only: Optional[bool] = Query(None), db: Session = Depends(get_db), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    """List claims belonging to the authenticated claimant, with optional submitted filter."""
     current_user = _resolve_user(request, db)
+    q = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id, Claim.status != "discarded")
+    if submitted or submitted_only:
+        q = q.filter(Claim.status.notin_(["draft", "pending_confirmation", "discarded"]))
     claims = (
-        db.query(Claim)
-        .filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id)
-        .order_by(Claim.updated_at.desc())
+        q.order_by(Claim.updated_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -157,9 +160,32 @@ def list_user_claims(request: Request, db: Session = Depends(get_db), limit: int
         turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id).count()
         payload["last_message"] = last_turn.text if last_turn else None
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
+        payload["last_message_time"] = last_turn.created_at.isoformat() if (last_turn and last_turn.created_at) else (c.updated_at.isoformat() if c.updated_at else None)
         payload["turn_count"] = turn_count
+
+        # Resolve title: explicit title > first user message > description > fallback
+        c_state = dict(getattr(c, "pipeline_state", None) or {})
+        explicit_title = c_state.get("title")
+        if explicit_title:
+            payload["title"] = explicit_title
+        else:
+            first_user_turn = (
+                db.query(ConversationTurn)
+                .filter(ConversationTurn.claim_id == c.id, ConversationTurn.speaker.in_(["user", "claimant"]))
+                .order_by(ConversationTurn.turn_number.asc(), ConversationTurn.created_at.asc())
+                .first()
+            )
+            if first_user_turn and first_user_turn.text and first_user_turn.text.strip():
+                clean_text = first_user_turn.text.strip().replace("\n", " ")
+                payload["title"] = clean_text[:45] + ("..." if len(clean_text) > 45 else "")
+            elif c.event_description and c.event_description.strip():
+                clean_desc = c.event_description.strip().replace("\n", " ")
+                payload["title"] = clean_desc[:45] + ("..." if len(clean_desc) > 45 else "")
+            else:
+                date_str = c.created_at.strftime("%b %d, %Y") if c.created_at else "Recent"
+                payload["title"] = f"Claim Intake ({date_str})"
         result.append(payload)
-    total = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id).count()
+    total = q.count()
     return {"items": result, "total": total, "limit": limit, "offset": offset}
 
 
@@ -316,29 +342,86 @@ def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depe
 
 @router.delete("/{ticket_id}")
 def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
-    """Allow claimant to discard their own draft session."""
+    """Allow claimant or admin to discard or delete a chat session."""
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found.")
     enforce_claim_ownership(claim, current_user)
-    if current_user.role != "CLAIMANT":
-        raise HTTPException(status_code=403, detail="Only the claimant can discard a claim session.")
-    if claim.status not in {"draft", "pending_confirmation"}:
-        raise HTTPException(status_code=400, detail="Only an unsubmitted draft can be discarded.")
+    if current_user.role not in {"CLAIMANT", "ADMIN"}:
+        raise HTTPException(status_code=403, detail="Only the claimant or admin can delete a claim session.")
 
-    # Insurance records must remain durable. Discard is therefore a terminal
-    # domain transition rather than a hard delete of the claim or transcript.
     try:
-        transition_claim(db, claim, "discarded", current_user.id, "Claimant discarded unsubmitted draft.")
+        if claim.status in {"draft", "pending_confirmation"}:
+            transition_claim(db, claim, "discarded", current_user.id, "Claimant discarded unsubmitted draft.")
+        else:
+            claim.status = "discarded"
         db.commit()
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to discard claim session.")
-    return {"message": f"Claim #{ticket_id} was discarded.", "success": True}
+        try:
+            db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).delete(synchronize_session=False)
+            db.delete(claim)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to delete claim session %s", ticket_id)
+            raise HTTPException(status_code=500, detail="Failed to delete claim session.")
+    return {"message": f"Claim #{ticket_id} was deleted.", "success": True}
+
+
+@router.patch("/{ticket_id}")
+def update_claim_session(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
+    """Update claim fields or session title."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found.")
+    enforce_claim_ownership(claim, current_user)
+
+    state = dict(claim.pipeline_state or {})
+    extracted = dict(state.get("extracted_data") or {})
+
+    if payload.title is not None:
+        state["title"] = payload.title.strip()
+    if payload.policy_id is not None:
+        claim.policy_id = payload.policy_id
+        extracted["policy_id"] = payload.policy_id
+    if payload.insurance_type is not None:
+        claim.insurance_type = payload.insurance_type
+        extracted["insurance_type"] = payload.insurance_type
+    if payload.event_date is not None:
+        from datetime import datetime
+        try:
+            claim.event_date = datetime.strptime(payload.event_date, "%Y-%m-%d").date()
+            extracted["event_date"] = payload.event_date
+        except Exception:
+            pass
+    if payload.event_description is not None:
+        claim.event_description = payload.event_description
+        extracted["event_description"] = payload.event_description
+    if payload.event_location is not None:
+        claim.event_location = payload.event_location
+        extracted["event_location"] = payload.event_location
+    if payload.estimated_claim_amount is not None:
+        claim.estimated_claim_amount = payload.estimated_claim_amount
+        extracted["estimated_claim_amount"] = payload.estimated_claim_amount
+    if payload.extracted_data is not None:
+        extracted.update(payload.extracted_data)
+
+    state["extracted_data"] = extracted
+    claim.pipeline_state = state
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(claim, "pipeline_state")
+
+    try:
+        db.commit()
+        db.refresh(claim)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update claim session %s", ticket_id)
+        raise HTTPException(status_code=500, detail="Failed to update claim session.")
+    return _claim_payload(claim)
 
 
 @router.get("/{ticket_id}")

@@ -1,17 +1,28 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Download, ShieldCheck, FileSpreadsheet, Trash2, AlertTriangle, Inbox } from 'lucide-react';
+import { Plus, Upload, Download, ShieldCheck, FileSpreadsheet, Trash2, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { Policy } from '@/lib/types';
 import { api } from '@/lib/api';
+
+const POLICY_FORM_OPTIONS = [
+  { value: 'motor', label: 'Motor / Auto' },
+  { value: 'home', label: 'Home / Property' },
+  { value: 'health', label: 'Health' },
+  { value: 'senior_health', label: 'Senior Health' },
+  { value: 'travel', label: 'Travel' },
+  { value: 'cyber', label: 'Cyber' },
+];
 
 export default function AdminPoliciesPage() {
   const { showToast } = useToast();
@@ -40,6 +51,18 @@ export default function AdminPoliciesPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
 
+  // Edit Policy Modal
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
+  const [editHolderName, setEditHolderName] = useState('');
+  const [editPolType, setEditPolType] = useState('motor');
+  const [editCoverageAmt, setEditCoverageAmt] = useState('50000');
+  const [editDeductibleAmt, setEditDeductibleAmt] = useState('500');
+  const [editEffectiveDate, setEditEffectiveDate] = useState('2026-01-01');
+  const [editExpiryDate, setEditExpiryDate] = useState('2027-01-01');
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const fetchPolicies = async () => {
     setLoading(true);
     setError(null);
@@ -58,6 +81,58 @@ export default function AdminPoliciesPage() {
   useEffect(() => {
     fetchPolicies();
   }, []);
+
+  const handleOpenEdit = (p: Policy) => {
+    setEditingPolicy(p);
+    setEditHolderName(p.policyholder_name || '');
+    setEditPolType(p.policy_type || 'motor');
+    setEditCoverageAmt(String(p.coverage_amount || 50000));
+    setEditDeductibleAmt(String(p.deductible || 500));
+    setEditEffectiveDate(p.effective_date || '2026-01-01');
+    setEditExpiryDate(p.expiry_date || '2027-01-01');
+    setEditIsActive(p.is_active !== false);
+    setEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPolicy) return;
+    setSavingEdit(true);
+    try {
+      const targetId = editingPolicy.policy_number || editingPolicy.id;
+      await api.put(`/api/v1/admin/policies/${targetId}`, {
+        policyholder_name: editHolderName.trim(),
+        policy_type: editPolType,
+        coverage_amount: Number(editCoverageAmt),
+        deductible: Number(editDeductibleAmt),
+        effective_date: editEffectiveDate,
+        expiry_date: editExpiryDate,
+        is_active: editIsActive,
+      });
+      setPolicies((prev) =>
+        prev.map((p) =>
+          p.id === editingPolicy.id || p.policy_number === editingPolicy.policy_number
+            ? {
+                ...p,
+                policyholder_name: editHolderName.trim(),
+                policy_type: editPolType,
+                coverage_amount: Number(editCoverageAmt),
+                deductible: Number(editDeductibleAmt),
+                effective_date: editEffectiveDate,
+                expiry_date: editExpiryDate,
+                is_active: editIsActive,
+              }
+            : p
+        )
+      );
+      showToast(`Policy ${editingPolicy.policy_number} updated successfully.`, 'success');
+      setEditModalOpen(false);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update policy.', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -252,6 +327,7 @@ export default function AdminPoliciesPage() {
           data={policies}
           keyField="id"
           searchPlaceholder="Filter policy registry..."
+          onEditRow={(p) => handleOpenEdit(p)}
         />
       )}
 
@@ -270,21 +346,13 @@ export default function AdminPoliciesPage() {
             required
           />
 
-          <div className="snow-form-group">
-            <label className="snow-label">Policy Form Type</label>
-            <select
-              className="snow-select"
-              value={polType}
-              onChange={(e) => setPolType(e.target.value)}
-            >
-              <option value="motor">Motor / Auto</option>
-              <option value="home">Home / Property</option>
-              <option value="health">Health</option>
-              <option value="senior_health">Senior Health</option>
-              <option value="travel">Travel</option>
-              <option value="cyber">Cyber</option>
-            </select>
-          </div>
+          <Select
+            label="Policy Form Type"
+            value={polType}
+            options={POLICY_FORM_OPTIONS}
+            onChange={setPolType}
+            required
+          />
 
           <Input
             label="Policyholder Full Name"
@@ -295,11 +363,10 @@ export default function AdminPoliciesPage() {
           />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input
+            <DatePicker
               label="Policyholder DOB"
-              type="date"
               value={holderDob}
-              onChange={(e) => setHolderDob(e.target.value)}
+              onChange={setHolderDob}
               required
             />
             <Input
@@ -338,18 +405,16 @@ export default function AdminPoliciesPage() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input
+            <DatePicker
               label="Effective Date"
-              type="date"
               value={effectiveDate}
-              onChange={(e) => setEffectiveDate(e.target.value)}
+              onChange={setEffectiveDate}
               required
             />
-            <Input
+            <DatePicker
               label="Expiry Date"
-              type="date"
               value={expiryDate}
-              onChange={(e) => setExpiryDate(e.target.value)}
+              onChange={setExpiryDate}
               required
             />
           </div>
@@ -397,6 +462,79 @@ export default function AdminPoliciesPage() {
             </Button>
             <Button type="submit" variant="primary" disabled={importing}>
               {importing ? 'Processing Bulk File...' : 'Upload & Import'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Edit Policy Modal */}
+      <Modal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        title={`Edit Policy #${editingPolicy?.policy_number || ''}`}
+      >
+        <form onSubmit={handleSaveEdit}>
+          <Input
+            label="Policyholder Full Name"
+            placeholder="Jane Doe"
+            value={editHolderName}
+            onChange={(e) => setEditHolderName(e.target.value)}
+            required
+          />
+
+          <Select
+            label="Insurance Line / Form Type"
+            value={editPolType}
+            onChange={(val) => setEditPolType(val)}
+            options={POLICY_FORM_OPTIONS}
+          />
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Input
+              label="Coverage Limit ($)"
+              type="number"
+              value={editCoverageAmt}
+              onChange={(e) => setEditCoverageAmt(e.target.value)}
+              required
+            />
+            <Input
+              label="Deductible ($)"
+              type="number"
+              value={editDeductibleAmt}
+              onChange={(e) => setEditDeductibleAmt(e.target.value)}
+              required
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <DatePicker
+              label="Effective Date"
+              value={editEffectiveDate}
+              onChange={(d) => setEditEffectiveDate(d)}
+            />
+            <DatePicker
+              label="Expiry Date"
+              value={editExpiryDate}
+              onChange={(d) => setEditExpiryDate(d)}
+            />
+          </div>
+
+          <Select
+            label="Underwriting Policy Status"
+            value={editIsActive ? 'active' : 'expired'}
+            onChange={(val) => setEditIsActive(val === 'active')}
+            options={[
+              { value: 'active', label: 'Active (Valid coverage)' },
+              { value: 'expired', label: 'Expired / Inactive' },
+            ]}
+          />
+
+          <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
+            <Button type="button" variant="secondary" onClick={() => setEditModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={savingEdit}>
+              {savingEdit ? 'Saving Policy Changes...' : 'Save Policy Changes'}
             </Button>
           </div>
         </form>

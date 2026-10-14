@@ -149,11 +149,11 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
             aggregate_id=str(invite.id),
             payload={
                 "to": email,
-                "subject": "Your InsureClaim AI adjuster invitation",
+                "subject": "Your IntelliClaim adjuster invitation",
                 "body": (
                     f"Hi {name},\n\n"
-                    "You have been invited to join InsureClaim AI as a claims adjuster.\n\n"
-                    f"Complete your account and passkey setup here:\n{invite_url}\n\n"
+                    "You have been invited to join IntelliClaim as a claims adjuster.\n\n"
+                    f"Complete your account setup here:\n{invite_url}\n\n"
                     "This invitation expires in 3 days.\n"
                 ),
                 "invitation_id": str(invite.id),
@@ -236,11 +236,11 @@ def resend_invitation(invitation_id: str, request: Request, db: Session = Depend
             aggregate_id=str(invite.id),
             payload={
                 "to": invite.email,
-                "subject": "Your InsureClaim AI adjuster invitation",
+                "subject": "Your IntelliClaim adjuster invitation",
                 "body": (
                     f"Hi {invite.name},\n\n"
-                    "Your InsureClaim AI adjuster invitation has been refreshed.\n\n"
-                    f"Complete your account and passkey setup here:\n{invite_url}\n\n"
+                    "Your IntelliClaim adjuster invitation has been refreshed.\n\n"
+                    f"Complete your account setup here:\n{invite_url}\n\n"
                     "This invitation expires in 3 days.\n"
                 ),
                 "invitation_id": str(invite.id),
@@ -352,11 +352,14 @@ async def import_strict_policies(request: Request, file: UploadFile = File(...),
     return {"created":created,"updated":updated,"total_processed":created+updated,"errors":errors}
 
 @router.get("/claims")
-def admin_claims(request: Request, status: Optional[str] = None, adjuster_id: Optional[str] = None, db: Session = Depends(get_db)):
+def admin_claims(request: Request, status: Optional[str] = None, adjuster_id: Optional[str] = None, include_drafts: bool = False, db: Session = Depends(get_db)):
     admin = _admin(request, db)
     q = db.query(Claim).filter(Claim.tenant_id == admin.tenant_id)
     if status:
         q = q.filter(Claim.status == status.strip().lower())
+    elif not include_drafts:
+        # Filter to show only filed/submitted claims in Enterprise Claims Oversight
+        q = q.filter(Claim.status.notin_(["draft", "pending_confirmation", "discarded"]))
     claims = q.order_by(Claim.updated_at.desc()).limit(500).all()
     active_assignments = {str(a.claim_id): a for a in db.query(ClaimAssignment).filter(ClaimAssignment.tenant_id == admin.tenant_id, ClaimAssignment.is_active.is_(True)).all()}
     items = []

@@ -399,3 +399,23 @@ def publish_document(
     doc.metadata_json = meta
     db.commit()
     return {"document_id": str(doc.id), "publication_status": "published"}
+
+
+@router.delete("/documents/{document_id}")
+def delete_document(
+    document_id: str,
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Delete a knowledge document and cascade delete its chunks."""
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == document_id,
+        KnowledgeDocument.tenant_id == user.tenant_id,
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+
+    db.delete(doc)
+    db.commit()
+    return {"document_id": document_id, "message": "Knowledge document deleted successfully.", "success": True}
+

@@ -71,7 +71,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try {
       await api.post('/api/v1/auth/logout');
-    } catch {}
+    } catch {
+      // Ignore backend logout network error when clearing local session
+    }
     api.clearTokens();
     setUser(null);
     setRole(null);

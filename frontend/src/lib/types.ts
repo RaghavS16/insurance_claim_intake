@@ -33,7 +33,10 @@ export type ClaimStatus =
   | 'pending_evidence' 
   | 'approved' 
   | 'rejected' 
-  | 'escalated';
+  | 'escalated'
+  | 'evaluated'
+  | 'verified'
+  | 'discarded';
 
 export interface ConversationTurn {
   id?: string;

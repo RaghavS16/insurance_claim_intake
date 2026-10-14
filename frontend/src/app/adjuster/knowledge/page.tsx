@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Upload, Search, RefreshCw, CheckCircle2, FileText, Plus, AlertTriangle, Inbox } from 'lucide-react';
+import { BookOpen, Upload, Search, RefreshCw, CheckCircle2, FileText, Plus, AlertTriangle, Inbox, Trash2 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { Card } from '@/components/ui/Card';
 import { BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
@@ -107,6 +108,20 @@ export default function KnowledgeBasePage() {
       showToast('Document published to Copilot RAG pool!', 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to publish document.', 'error');
+    }
+  };
+
+  const handleDeleteDocument = async (docId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this knowledge document? This will remove all indexed chunks.')) {
+      return;
+    }
+    try {
+      await api.delete(`/api/v1/knowledge/documents/${docId}`);
+      setDocuments((prev) => prev.filter((d) => d.id !== docId));
+      showToast('Knowledge document deleted successfully.', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete knowledge document.', 'error');
     }
   };
 
@@ -264,6 +279,16 @@ export default function KnowledgeBasePage() {
           data={documents}
           keyField="id"
           searchPlaceholder="Filter knowledge base..."
+          renderRowActions={(doc) => (
+            <Button
+              size="sm"
+              variant="danger"
+              icon={<Trash2 size={13} />}
+              onClick={(e) => handleDeleteDocument(doc.id, e)}
+            >
+              Delete
+            </Button>
+          )}
         />
       )}
 
@@ -274,19 +299,17 @@ export default function KnowledgeBasePage() {
         title="Ingest Policy Knowledge Document"
       >
         <form onSubmit={handleUpload}>
-          <div className="snow-form-group">
-            <label className="snow-label">Document Form Type</label>
-            <select
-              className="snow-select"
-              value={docType}
-              onChange={(e) => setDocType(e.target.value)}
-            >
-              <option value="policy_wording">Policy Master Wording</option>
-              <option value="endorsement">Endorsement / Addendum</option>
-              <option value="guideline">Adjudication Underwriting Guideline</option>
-              <option value="statutory">Statutory / Regulatory Code</option>
-            </select>
-          </div>
+          <Select
+            label="Document Form Type"
+            value={docType}
+            onChange={(val) => setDocType(val)}
+            options={[
+              { value: 'policy_wording', label: 'Policy Master Wording' },
+              { value: 'endorsement', label: 'Endorsement / Addendum' },
+              { value: 'guideline', label: 'Adjudication Underwriting Guideline' },
+              { value: 'statutory', label: 'Statutory / Regulatory Code' },
+            ]}
+          />
 
           <Input
             label="Line of Business"

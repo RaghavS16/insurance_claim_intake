@@ -2,9 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, ChevronRight, FileText } from 'lucide-react';
+import { ShieldAlert, Inbox, Plus } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { BadgeDot } from '@/components/ui/Badge';
 import { Claim } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -16,10 +18,16 @@ export default function TrackClaimsPage() {
 
   useEffect(() => {
     setLoading(true);
-    api.get<any>('/api/v1/claims')
+    api.get<any>('/api/v1/claims?submitted=true')
       .then((data) => {
-        const list = Array.isArray(data) ? data : data?.items || [];
-        setClaims(list);
+        const raw = Array.isArray(data) ? data : data?.items || [];
+        // Only filed / submitted claims (exclude drafts / unsubmitted chat sessions)
+        const submittedOnly = raw.filter(
+          (c: Claim) =>
+            c.status &&
+            !['draft', 'pending_confirmation', 'discarded', 'not_started'].includes(c.status.toLowerCase())
+        );
+        setClaims(submittedOnly);
       })
       .catch(() => {
         setClaims([]);
@@ -40,7 +48,7 @@ export default function TrackClaimsPage() {
       case 'rejected':
         return <BadgeDot status="rejected" label="Rejected" />;
       default:
-        return <BadgeDot status="neutral" label="Draft" />;
+        return <BadgeDot status="neutral" label={status || 'Submitted'} />;
     }
   };
 
@@ -75,15 +83,37 @@ export default function TrackClaimsPage() {
 
   return (
     <AppShell breadcrumbs={['Claimant', 'Track Claims']} activeTitle="Track Submitted Claims">
-      <Table
-        columns={columns}
-        data={claims}
-        keyField="ticket_id"
-        addLabel="File New Claim"
-        onAdd={() => router.push('/claimant/file-claim')}
-        onRowClick={(item) => router.push(`/claimant/claims/${item.ticket_id}`)}
-        searchPlaceholder="Search claims..."
-      />
+      {loading ? (
+        <Card style={{ padding: 48, textAlign: 'center', color: '#71717A' }}>
+          <div className="snow-caption">Loading submitted claims...</div>
+        </Card>
+      ) : claims.length === 0 ? (
+        <Card style={{ padding: 48, textAlign: 'center' }}>
+          <Inbox size={40} color="#A1A1AA" style={{ margin: '0 auto 12px' }} />
+          <h3 className="snow-h2" style={{ fontSize: 16, marginBottom: 4 }}>No Submitted Claims</h3>
+          <p className="snow-caption" style={{ color: '#71717A', marginBottom: 20 }}>
+            You do not have any filed claims in the adjudication pipeline. Draft chat sessions are not listed here.
+          </p>
+          <Button
+            size="sm"
+            variant="primary"
+            pill
+            icon={<Plus size={14} />}
+            onClick={() => router.push('/claimant/file-claim?fresh=true')}
+          >
+            File New Claim
+          </Button>
+        </Card>
+      ) : (
+        <Table
+          columns={columns}
+          data={claims}
+          keyField="ticket_id"
+          hideToolbar={true}
+          hideRowActions={true}
+          onRowClick={(item) => router.push(`/claimant/claims/${item.ticket_id}`)}
+        />
+      )}
     </AppShell>
   );
 }

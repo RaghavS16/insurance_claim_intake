@@ -33,13 +33,13 @@ def _send_transactional_email(event: OutboxEvent) -> None:
     from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
     if not from_email:
         raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
-    from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
+    from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
-    msg["X-InsureClaim-Event-ID"] = str(event.id)
+    msg["X-IntelliClaim-Event-ID"] = str(event.id)
     password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
 
     if settings.SMTP_USE_SSL:
@@ -74,13 +74,13 @@ def _send_email(to_email: str, subject: str, body: str, event_id: str) -> None:
     from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
     if not from_email:
         raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
-    from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
+    from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
-    msg["X-InsureClaim-Event-ID"] = event_id
+    msg["X-IntelliClaim-Event-ID"] = event_id
     password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
     if settings.SMTP_USE_SSL:
         with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:

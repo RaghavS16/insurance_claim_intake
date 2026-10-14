@@ -1,13 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, KeyRound, Smartphone, LogOut, Check, QrCode } from 'lucide-react';
+import { LogOut, Check } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { PinInput } from '@/components/ui/PinInput';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
@@ -16,7 +15,7 @@ export default function SettingsPage() {
   const { user, role, logout } = useAuth();
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'settings' | 'security' | 'notifications'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'notifications'>('settings');
 
   // Profile fields
   const [firstName, setFirstName] = useState('');
@@ -36,21 +35,6 @@ export default function SettingsPage() {
     }
   }, [user]);
 
-  // Security modals
-  const [mfaModalOpen, setMfaModalOpen] = useState(false);
-  const [mfaStep, setMfaStep] = useState<'qr' | 'codes'>('qr');
-  const [mfaOtp, setMfaOtp] = useState('');
-  const [mfaSecret, setMfaSecret] = useState('');
-  const [provisioningUri, setProvisioningUri] = useState('');
-  const [mfaEnabled, setMfaEnabled] = useState(Boolean((user as any)?.mfa_enabled));
-  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (user && (user as any).mfa_enabled !== undefined) {
-      setMfaEnabled(Boolean((user as any).mfa_enabled));
-    }
-  }, [user]);
-
   // Log out of all devices modal
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
@@ -64,59 +48,12 @@ export default function SettingsPage() {
     showToast('Profile updated successfully', 'success');
   };
 
-  const handleSetupMfa = async () => {
-    try {
-      const res = await api.post<any>('/api/v1/auth/mfa/setup');
-      setMfaSecret(res.secret || '');
-      setProvisioningUri(res.provisioning_uri || '');
-      setMfaStep('qr');
-      setMfaOtp('');
-      setMfaModalOpen(true);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to start MFA setup.', 'error');
-    }
-  };
-
-  const handleConfirmMfa = async () => {
-    if (mfaOtp.length < 6) return;
-    try {
-      const res = await api.post<any>('/api/v1/auth/mfa/enable', { code: mfaOtp });
-      setMfaEnabled(true);
-      if (Array.isArray(res.recovery_codes)) {
-        setRecoveryCodes(res.recovery_codes);
-      }
-      setMfaStep('codes');
-      showToast('Multi-factor authentication enabled successfully!', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to verify MFA code.', 'error');
-    }
-  };
-
-  const handleDisableMfa = async () => {
-    try {
-      await api.post<any>('/api/v1/auth/mfa/disable');
-      setMfaEnabled(false);
-      setRecoveryCodes([]);
-      showToast('MFA has been disabled.', 'info');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to disable MFA.', 'error');
-    }
-  };
-
-  const handleRegisterPasskey = async () => {
-    try {
-      showToast('Registering WebAuthn Passkey on this browser...', 'info');
-      await api.post('/api/v1/auth/passkey/registration/options');
-      showToast('Passkey registered successfully!', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Passkey registration failed or cancelled.', 'error');
-    }
-  };
-
   const handleLogoutAll = async () => {
     try {
       await api.post('/api/v1/auth/logout');
-    } catch {}
+    } catch {
+      // Ignore network errors during remote session invalidation
+    }
     logout();
     setLogoutModalOpen(false);
     window.location.href = '/signin';
@@ -124,7 +61,7 @@ export default function SettingsPage() {
 
   return (
     <AppShell breadcrumbs={['Account', 'Settings']} activeTitle="Account Settings">
-      {/* Top Navigation Tabs matching account-setting.png */}
+      {/* Top Navigation Tabs */}
       <div
         className="snow-flex snow-gap-4"
         style={{
@@ -147,22 +84,6 @@ export default function SettingsPage() {
           }}
         >
           Profile Details
-        </button>
-
-        <button
-          onClick={() => setActiveTab('security')}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: 14,
-            fontWeight: activeTab === 'security' ? 600 : 500,
-            color: activeTab === 'security' ? '#1C1C1C' : '#71717A',
-            borderBottom: activeTab === 'security' ? '2px solid #1C1C1C' : 'none',
-          }}
-        >
-          Security & MFA
         </button>
 
         <button
@@ -268,76 +189,6 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Security Tab */}
-      {activeTab === 'security' && (
-        <div className="snow-flex-col snow-gap-6" style={{ maxWidth: 760 }}>
-          <Card title="Hardware Passkeys (WebAuthn / FIDO2)">
-            <p className="snow-caption" style={{ color: '#71717A', marginBottom: 16 }}>
-              Passkeys provide phishing-resistant, biometric authentication using Touch ID, Face ID, or a YubiKey.
-            </p>
-            <div
-              className="snow-flex snow-items-center snow-justify-between"
-              style={{
-                padding: '14px 16px',
-                borderRadius: 12,
-                backgroundColor: '#FAFAFB',
-                marginBottom: 16,
-              }}
-            >
-              <div className="snow-flex snow-items-center snow-gap-3">
-                <KeyRound size={20} color="#007AFF" />
-                <div>
-                  <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-                    Primary Security Key (MacBook TouchID / Windows Hello)
-                  </div>
-                  <div className="snow-micro">Enrolled Oct 2026 • Last used today</div>
-                </div>
-              </div>
-              <span className="snow-badge-pill mint">Active</span>
-            </div>
-
-            <Button
-              variant="secondary"
-              icon={<KeyRound size={14} />}
-              onClick={handleRegisterPasskey}
-            >
-              Add New Passkey
-            </Button>
-          </Card>
-
-          <Card title="Multi-Factor Authentication (MFA)">
-            <div className="snow-flex snow-items-center snow-justify-between">
-              <div>
-                <div className="snow-body" style={{ fontWeight: 600 }}>Authenticator App (TOTP)</div>
-                <div className="snow-caption" style={{ color: '#71717A' }}>
-                  {mfaEnabled
-                    ? 'MFA is active. Your account is secured with time-based verification codes.'
-                    : 'Add an extra layer of protection when signing into your account.'}
-                </div>
-              </div>
-              <div className="snow-flex snow-gap-2">
-                {mfaEnabled && (
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={handleDisableMfa}
-                  >
-                    Disable MFA
-                  </Button>
-                )}
-                <Button
-                  variant={mfaEnabled ? 'secondary' : 'primary'}
-                  onClick={handleSetupMfa}
-                  icon={<Smartphone size={14} />}
-                >
-                  {mfaEnabled ? 'Reconfigure' : 'Enable MFA'}
-                </Button>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
       {/* Notifications Tab */}
       {activeTab === 'notifications' && (
         <div className="snow-flex-col snow-gap-6" style={{ maxWidth: 760 }}>
@@ -391,103 +242,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* MFA Modal */}
-      <Modal
-        isOpen={mfaModalOpen}
-        onClose={() => setMfaModalOpen(false)}
-        title={mfaStep === 'qr' ? 'Configure Authenticator App' : 'Emergency Recovery Codes'}
-      >
-        {mfaStep === 'qr' ? (
-          <div style={{ textAlign: 'center' }}>
-            <div
-              style={{
-                width: 140,
-                height: 140,
-                borderRadius: 16,
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #EBECEF',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: 16,
-              }}
-            >
-              <QrCode size={110} />
-            </div>
-            <p className="snow-caption" style={{ color: '#71717A', marginBottom: 12 }}>
-              Scan this QR code with Google Authenticator or enter the secret key manually, then enter the 6-digit code:
-            </p>
-
-            {mfaSecret && (
-              <div style={{ marginBottom: 16 }}>
-                <span className="snow-caption" style={{ color: '#71717A' }}>Secret Key:</span>
-                <div
-                  style={{
-                    fontFamily: 'monospace',
-                    fontWeight: 600,
-                    fontSize: 13,
-                    background: '#F4F5F7',
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    marginTop: 4,
-                    wordBreak: 'break-all',
-                    letterSpacing: 1,
-                  }}
-                >
-                  {mfaSecret}
-                </div>
-              </div>
-            )}
-
-            <PinInput length={6} value={mfaOtp} onChange={setMfaOtp} />
-
-            <Button
-              variant="primary"
-              pill
-              style={{ width: '100%', marginTop: 20 }}
-              onClick={handleConfirmMfa}
-              disabled={mfaOtp.length < 6}
-            >
-              Confirm & Enable
-            </Button>
-          </div>
-        ) : (
-          <div>
-            <p className="snow-caption" style={{ color: '#71717A', marginBottom: 16 }}>
-              Save these one-time recovery codes in a secure location. Each code can be redeemed once if you lose access to your authenticator app:
-            </p>
-            <div
-              className="snow-card"
-              style={{
-                padding: 16,
-                backgroundColor: '#FAFAFB',
-                marginBottom: 20,
-                fontFamily: 'monospace',
-                fontSize: 14,
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: 8,
-              }}
-            >
-              {recoveryCodes.map((code, idx) => (
-                <div key={idx} style={{ color: '#1C1C1C', fontWeight: 600 }}>
-                  {code}
-                </div>
-              ))}
-            </div>
-            <Button
-              variant="primary"
-              pill
-              style={{ width: '100%' }}
-              onClick={() => setMfaModalOpen(false)}
-            >
-              I Have Saved These Codes
-            </Button>
-          </div>
-        )}
-      </Modal>
-
-      {/* Log out all devices modal matching log out.png */}
+      {/* Log out all devices modal */}
       <Modal
         isOpen={logoutModalOpen}
         onClose={() => setLogoutModalOpen(false)}

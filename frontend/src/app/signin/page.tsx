@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { KeyRound, ShieldAlert } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/lib/auth-context';
@@ -26,20 +26,10 @@ export default function SignInPage() {
     setLoading(true);
 
     try {
-      const res = await api.post<{ access_token: string; refresh_token: string; user: any; mfa_required?: boolean }>(
+      const res = await api.post<{ access_token: string; refresh_token: string; user: any }>(
         '/api/v1/auth/login',
         { email, password }
       );
-
-      if (res.mfa_required) {
-        showToast('Multi-factor authentication required', 'info');
-        const token = (res as any).challenge_token || '';
-        if (typeof window !== 'undefined' && token) {
-          sessionStorage.setItem('mfa_challenge_token', token);
-        }
-        router.push(`/mfa-challenge?challenge_token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`);
-        return;
-      }
 
       login(res.access_token, res.user, res.refresh_token);
       showToast('Signed in successfully', 'success');
@@ -56,25 +46,6 @@ export default function SignInPage() {
     }
   };
 
-  const handlePasskeyAuth = async () => {
-    if (!email.trim()) {
-      showToast('Please enter your email to sign in with passkey', 'error');
-      return;
-    }
-    try {
-      showToast('Authenticating with WebAuthn Passkey...', 'info');
-      const options = await api.post<any>('/api/v1/auth/passkey/auth/options', { email });
-      const verifyRes = await api.post<any>('/api/v1/auth/passkey/auth/verify', { email, challenge_id: options?.challenge_id });
-      login(verifyRes.access_token, verifyRes.user, verifyRes.refresh_token);
-      showToast('Passkey verified successfully', 'success');
-      if (verifyRes.user.role === 'CLAIMANT') router.push('/claimant/dashboard');
-      else if (verifyRes.user.role === 'ADJUSTER') router.push('/adjuster/dashboard');
-      else router.push('/admin/claims');
-    } catch (err: any) {
-      showToast(err.message || 'Passkey authentication failed.', 'error');
-    }
-  };
-
   return (
     <div
       style={{
@@ -83,87 +54,37 @@ export default function SignInPage() {
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
-        padding: '24px 40px',
+        padding: '32px 16px',
       }}
     >
-      {/* Top Header */}
-      <header
-        className="snow-flex snow-justify-between snow-items-center"
-        style={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}
-      >
-        <div className="snow-flex snow-items-center snow-gap-2">
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #007AFF 0%, #00D1FF 100%)',
-            }}
+      {/* Header Logo */}
+      <header className="snow-flex snow-justify-center" style={{ paddingTop: 24 }}>
+        <Link href="/">
+          <img
+            src="/primary-logo.png"
+            alt="IntelliClaim"
+            style={{ width: 220, maxWidth: '85vw', height: 'auto', objectFit: 'contain', display: 'block' }}
           />
-          <span className="snow-body" style={{ fontWeight: 700, letterSpacing: -0.5 }}>
-            ApexCare
-          </span>
-        </div>
-
-        <nav className="snow-flex snow-items-center snow-gap-6 snow-caption" style={{ color: '#71717A' }}>
-          <span style={{ cursor: 'pointer' }}>Product</span>
-          <span style={{ cursor: 'pointer' }}>Solutions</span>
-          <span style={{ cursor: 'pointer' }}>Resources</span>
-          <span style={{ cursor: 'pointer' }}>Download</span>
-          <span style={{ cursor: 'pointer' }}>Pricing</span>
-        </nav>
-
-        <div className="snow-flex snow-items-center snow-gap-2">
-          <Link href="/signup">
-            <Button size="sm" variant="ghost">Sign up</Button>
-          </Link>
-          <Link href="/signin">
-            <Button size="sm" variant="primary" pill>Sign in</Button>
-          </Link>
-        </div>
+        </Link>
       </header>
 
       {/* Main Sign In Card */}
-      <main style={{ margin: 'auto 0', display: 'flex', justifyContent: 'center' }}>
+      <main className="snow-flex snow-justify-center snow-items-center">
         <div
           className="snow-card"
           style={{
             width: '100%',
-            maxWidth: 440,
-            borderRadius: 24,
-            padding: '40px 36px',
+            maxWidth: 420,
+            padding: '36px 32px',
+            borderRadius: 20,
             boxShadow: '0 8px 30px rgba(0,0,0,0.04)',
           }}
         >
           <div style={{ textAlign: 'center', marginBottom: 28 }}>
             <h1 className="snow-h1" style={{ fontSize: 24, marginBottom: 8 }}>Sign In</h1>
             <p className="snow-caption" style={{ color: '#71717A' }}>
-              Claims Intake & Adjudication System
+              Voice-Driven AI Insurance Intake & Adjudication
             </p>
-          </div>
-
-          {/* Social / Passkey Sign In */}
-          <div className="snow-flex snow-gap-2" style={{ marginBottom: 20 }}>
-            <Button
-              type="button"
-              variant="secondary"
-              pill
-              style={{ flex: 1, fontSize: 13, height: 42 }}
-              onClick={handlePasskeyAuth}
-              icon={<KeyRound size={16} />}
-            >
-              Passkey Sign In
-            </Button>
-          </div>
-
-          {/* Divider */}
-          <div
-            className="snow-flex snow-items-center snow-gap-3"
-            style={{ margin: '20px 0', color: '#A1A1AA', fontSize: 12 }}
-          >
-            <div style={{ flex: 1, height: 1, backgroundColor: '#EBECEF' }} />
-            <span>Or with Email</span>
-            <div style={{ flex: 1, height: 1, backgroundColor: '#EBECEF' }} />
           </div>
 
           {error && (
@@ -238,7 +159,7 @@ export default function SignInPage() {
 
       {/* Footer */}
       <footer style={{ textAlign: 'center', color: '#A1A1AA', fontSize: 12 }}>
-        © 2026 ApexCare Claims Platform
+        © 2026 IntelliClaim Platform
       </footer>
     </div>
   );

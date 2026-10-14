@@ -2,7 +2,6 @@
 
 import React, { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { UserCheck, KeyRound, ShieldCheck } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/lib/auth-context';
@@ -18,19 +17,7 @@ function AdjusterOnboardingContent() {
 
   const [password, setPassword] = useState('');
   const [repeatPassword, setRepeatPassword] = useState('');
-  const [passkeyEnrolled, setPasskeyEnrolled] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const handleEnrollPasskey = async () => {
-    try {
-      showToast('Enrolling WebAuthn Passkey on this device...', 'info');
-      await api.post('/api/v1/auth/passkey/registration/options');
-      setPasskeyEnrolled(true);
-      showToast('Passkey enrolled successfully!', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Passkey enrollment unavailable or cancelled.', 'error');
-    }
-  };
 
   const handleAccept = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,10 +31,10 @@ function AdjusterOnboardingContent() {
       const res = await api.post<any>('/api/v1/auth/onboarding/adjuster/accept', {
         token,
         password,
-        passkey_enrolled: passkeyEnrolled,
+        confirm_password: repeatPassword,
       });
       login(res.access_token, res.user);
-      showToast('Onboarding complete! Welcome to Adjuster Workspace.', 'success');
+      showToast('Onboarding complete! Welcome to IntelliClaim Adjuster Workspace.', 'success');
       router.push('/adjuster/dashboard');
     } catch (err: any) {
       showToast(err.message || 'Onboarding failed. Please check your invitation link.', 'error');
@@ -79,26 +66,16 @@ function AdjusterOnboardingContent() {
         }}
       >
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              backgroundColor: '#E5ECF6',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: 16,
-              color: '#3B82F6',
-            }}
-          >
-            <UserCheck size={28} />
-          </div>
+          <img
+            src="/primary-logo.png"
+            alt="IntelliClaim"
+            style={{ width: 190, height: 'auto', objectFit: 'contain', margin: '0 auto 16px auto', display: 'block' }}
+          />
           <h1 className="snow-h1" style={{ fontSize: 24, marginBottom: 8 }}>
             Adjuster Onboarding
           </h1>
           <p className="snow-caption" style={{ color: '#71717A' }}>
-            Activate your profile, establish your credentials, and configure hardware security.
+            Activate your profile and set up your secure credentials to enter the workspace.
           </p>
         </div>
 
@@ -121,42 +98,11 @@ function AdjusterOnboardingContent() {
             required
           />
 
-          {/* Passkey enrollment block */}
-          <div
-            className="snow-card"
-            style={{
-              padding: 16,
-              backgroundColor: '#FAFAFB',
-              marginBottom: 20,
-              borderRadius: 12,
-            }}
-          >
-            <div className="snow-flex snow-justify-between snow-items-center">
-              <div>
-                <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-                  Hardware Passkey (WebAuthn)
-                </div>
-                <div className="snow-caption" style={{ color: '#71717A' }}>
-                  Required for adjuster sign-in & decision authorizations
-                </div>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant={passkeyEnrolled ? 'secondary' : 'primary'}
-                onClick={handleEnrollPasskey}
-                icon={passkeyEnrolled ? <ShieldCheck size={14} color="#10B981" /> : <KeyRound size={14} />}
-              >
-                {passkeyEnrolled ? 'Enrolled' : 'Enroll Key'}
-              </Button>
-            </div>
-          </div>
-
           <Button
             type="submit"
             variant="primary"
             pill
-            style={{ width: '100%', height: 44, fontSize: 15 }}
+            style={{ width: '100%', height: 44, fontSize: 15, marginTop: 12 }}
             disabled={loading}
           >
             {loading ? 'Activating Profile...' : 'Complete Onboarding & Enter'}

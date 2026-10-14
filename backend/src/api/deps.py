@@ -152,17 +152,6 @@ def get_current_user(
     request.state.auth_amr = list(payload.get("amr") or []) if (token and payload) else []
     if settings.REQUIRE_EMAIL_VERIFICATION and not getattr(user, "email_verified_at", None):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email verification is required.")
-    if (
-        settings.PRIVILEGED_PASSKEY_REQUIRED
-        and user.role.upper() in {"ADMIN", "ADJUSTER"}
-        and not request.url.path.startswith("/api/v1/auth/passkey/")
-    ):
-        amr = payload.get("amr", []) if (token and payload) else []
-        if "webauthn" not in amr:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="A registered passkey is required for privileged access.",
-            )
     return user
 
 def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
@@ -170,8 +159,8 @@ def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
     return current_user.id
 
 
-def require_role(allowed_roles: List[str], *, require_phishing_resistant: bool = False):
-    """Enforce role access and, for privileged roles, optional passkey authentication."""
+def require_role(allowed_roles: List[str]):
+    """Enforce role access for authenticated users."""
 
     def dependency(
         request: Request = cast(Request, None),
@@ -181,17 +170,6 @@ def require_role(allowed_roles: List[str], *, require_phishing_resistant: bool =
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: Role '{current_user.role}' not permitted.",
-            )
-        privileged = current_user.role.upper() in {"ADMIN", "ADJUSTER"}
-        auth_amr = set(getattr(request.state, "auth_amr", []) or []) if (request and hasattr(request, "state")) else set()
-        if (
-            (require_phishing_resistant or (privileged and settings.PRIVILEGED_PASSKEY_REQUIRED))
-            and privileged
-            and "webauthn" not in auth_amr
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Phishing-resistant passkey authentication is required for this privileged operation.",
             )
         return current_user
 
@@ -210,11 +188,6 @@ def resolve_bearer_user(
     """Extract the Bearer token from the Authorization header, authenticate the
     caller via ``get_current_user``, and assert the user's role is in
     ``allowed_roles``.
-
-    This consolidates the three near-identical ``_resolve_admin``,
-    ``_resolve_adjuster``, and ``_resolve_user`` functions that were
-    copy-pasted across admin_routes, adjuster_routes, claim_routes, and
-    policy_routes.
     """
     auth_header = request.headers.get("authorization", "")
     credentials: Optional[HTTPAuthorizationCredentials] = None
@@ -227,16 +200,6 @@ def resolve_bearer_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: Role '{user.role}' is not permitted.",
-        )
-    privileged = user.role.upper() in {"ADMIN", "ADJUSTER"}
-    if (
-        privileged
-        and settings.PRIVILEGED_PASSKEY_REQUIRED
-        and "webauthn" not in set(getattr(request.state, "auth_amr", []) or [])
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Phishing-resistant passkey authentication is required for this privileged operation.",
         )
     return user
 

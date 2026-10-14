@@ -250,6 +250,7 @@ export default function AdjusterQueuePage() {
           columns={columns}
           data={claims}
           keyField="ticket_id"
+          hideRowActions={true}
           onRowClick={(c) => router.push(`/adjuster/claims/${c.ticket_id}`)}
           searchPlaceholder="Filter queue..."
         />

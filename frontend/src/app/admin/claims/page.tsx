@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, Filter, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox } from 'lucide-react';
+import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { Select } from '@/components/ui/Select';
 import { Card } from '@/components/ui/Card';
 import { BadgeDot } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
@@ -36,7 +37,11 @@ export default function AdminClaimsOversightPage() {
         api.get<any>('/api/v1/admin/claims'),
         api.get<any>('/api/v1/admin/adjusters').catch(() => []),
       ]);
-      const claimsList: Claim[] = Array.isArray(claimsRes) ? claimsRes : claimsRes?.items || [];
+      const rawList: Claim[] = Array.isArray(claimsRes) ? claimsRes : claimsRes?.items || [];
+      // Only filed/submitted claims appear in Enterprise Claims Oversight
+      const claimsList = rawList.filter(
+        (c) => c.status && !['draft', 'pending_confirmation', 'discarded', 'not_started'].includes(c.status.toLowerCase())
+      );
       const adjList: Adjuster[] = Array.isArray(adjustersRes) ? adjustersRes : adjustersRes?.items || [];
       setClaims(claimsList);
       setAdjusters(adjList);
@@ -182,6 +187,7 @@ export default function AdminClaimsOversightPage() {
           columns={columns}
           data={claims}
           keyField="ticket_id"
+          hideRowActions={true}
           searchPlaceholder="Filter enterprise claims..."
         />
       )}
@@ -193,27 +199,25 @@ export default function AdminClaimsOversightPage() {
         title={`Reassign Claim #${selectedTicket}`}
       >
         <form onSubmit={handleReassign}>
-          <div className="snow-form-group">
-            <label className="snow-label">Select Target Adjuster</label>
-            {adjusters.length === 0 ? (
+          {adjusters.length === 0 ? (
+            <div className="snow-form-group">
+              <label className="snow-label">Select Target Adjuster</label>
               <p className="snow-caption" style={{ color: '#71717A' }}>
                 No active adjusters available for reassignment.
               </p>
-            ) : (
-              <select
-                className="snow-select"
-                value={targetAdjusterId}
-                onChange={(e) => setTargetAdjusterId(e.target.value)}
-                required
-              >
-                {adjusters.map((adj) => (
-                  <option key={adj.id} value={adj.id}>
-                    {adj.name} ({adj.email}) — {adj.specialization}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
+            </div>
+          ) : (
+            <Select
+              label="Select Target Adjuster"
+              value={targetAdjusterId}
+              onChange={(val) => setTargetAdjusterId(val)}
+              options={adjusters.map((adj) => ({
+                value: adj.id,
+                label: `${adj.name} (${adj.email}) — ${adj.specialization}`,
+              }))}
+              required
+            />
+          )}
 
           <div className="snow-form-group">
             <label className="snow-label">Reason for Reassignment</label>

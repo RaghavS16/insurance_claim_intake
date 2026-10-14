@@ -36,7 +36,7 @@ def otp_expiry() -> datetime:
 
 
 def otp_subject_body(otp: str, full_name: Optional[str] = None, purpose: str = "password_reset") -> tuple[str, str]:
-    subject = "Verify your InsureClaimAI email" if purpose == "email_verification" else "Your InsureClaimAI password reset code"
+    subject = "Verify your IntelliClaim email" if purpose == "email_verification" else "Your IntelliClaim password reset code"
     greeting = f"Hi {full_name}," if full_name else "Hi,"
     label = "email verification" if purpose == "email_verification" else "password reset verification"
     body = (
@@ -64,7 +64,7 @@ def queue_otp_email(db, *, to_email: str, otp: str, full_name: Optional[str], pu
 def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     """Send an email using configured EMAIL_BACKEND (mailpit vs real SMTP) with retry logic."""
     from_email = settings.SMTP_FROM_EMAIL or "raghavradhakrishnan.d@gmail.com"
-    from_name = getattr(settings, "SMTP_FROM_NAME", "InsureClaim AI") or "InsureClaim AI"
+    from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
 
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -116,11 +116,11 @@ def send_otp_email(to_email: str, otp: str, full_name: Optional[str] = None, pur
 
 def send_invitation_email(to_email: str, name: str, invite_url: str) -> bool:
     """Send adjuster invitation email with onboarding link."""
-    subject = "Your InsureClaim AI adjuster invitation"
+    subject = "Your IntelliClaim adjuster invitation"
     body = (
         f"Hi {name},\n\n"
-        "You have been invited to join InsureClaim AI as a claims adjuster.\n\n"
-        f"Complete your account and passkey setup here:\n{invite_url}\n\n"
+        "You have been invited to join IntelliClaim as a claims adjuster.\n\n"
+        f"Complete your account setup here:\n{invite_url}\n\n"
         "This invitation expires in 3 days.\n"
     )
     return _send_email_smtp(to_email, subject, body)

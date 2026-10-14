@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: str = "no-reply@insurance-claims.local"
-    SMTP_FROM_NAME: str = "InsureClaim AI"
+    SMTP_FROM_NAME: str = "IntelliClaim AI"
     SMTP_USE_TLS: bool = False
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = Field(15, ge=3, le=60)
@@ -38,11 +38,6 @@ class Settings(BaseSettings):
     OTP_MAX_ATTEMPTS: int = Field(5, ge=1, le=20)
     OTP_RESEND_COOLDOWN_SECONDS: int = Field(60, ge=0)
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = Field(10, ge=1, le=60)
-    MFA_CHALLENGE_EXPIRE_SECONDS: int = Field(120, ge=30, le=600)
-    MFA_MAX_ATTEMPTS: int = Field(5, ge=1, le=10)
-    MFA_ISSUER: str = "InsureClaim AI"
-    MFA_ENCRYPTION_KEY: Optional[str] = None
-    MFA_RECOVERY_CODE_COUNT: int = Field(10, ge=5, le=20)
 
     DATABASE_URL: str = Field("postgresql://postgres:DBpassword@localhost:5433/insurance_claims")
     DB_POOL_SIZE: int = Field(5, ge=1, le=50)
@@ -156,12 +151,6 @@ class Settings(BaseSettings):
     AI_ALLOWED_MODELS: str = ""  # optional comma-separated approved exact model identifiers
     AI_ALLOW_LOCAL_FALLBACK: bool = True
     AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION: bool = True
-    PASSKEY_ENABLED: bool = True
-    PASSKEY_RP_ID: str = "localhost"
-    PASSKEY_RP_NAME: str = "InsureClaim AI"
-    PASSKEY_ORIGIN: str = "http://localhost:3000"
-    PASSKEY_REQUIRE_USER_VERIFICATION: bool = True
-    PRIVILEGED_PASSKEY_REQUIRED: bool = False
 
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -246,14 +235,6 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT in ("production", "staging"):
             if not self.PUBLIC_APP_URL.startswith("https://"):
                 raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
-            if self.PASSKEY_ENABLED:
-                public_origin = self.PUBLIC_APP_URL.rstrip("/")
-                passkey_origin = self.PASSKEY_ORIGIN.rstrip("/")
-                if public_origin != passkey_origin:
-                    raise RuntimeError("PUBLIC_APP_URL and PASSKEY_ORIGIN must match exactly for WebAuthn.")
-                hostname = urlparse(passkey_origin).hostname
-                if hostname and self.PASSKEY_RP_ID != hostname:
-                    raise RuntimeError("PASSKEY_RP_ID must match the WebAuthn origin hostname.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.S3_SERVER_SIDE_ENCRYPTION == "aws:kms" and not self.S3_KMS_KEY_ID:
@@ -273,8 +254,6 @@ class Settings(BaseSettings):
             ice = [x.strip() for x in self.VOICE_ICE_SERVERS.split(",") if x.strip()]
             if not any(x.lower().startswith(("turn:", "turns:")) for x in ice):
                 raise RuntimeError("VOICE_ICE_SERVERS must include a TURN server in production/staging.")
-            if self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ENABLED:
-                raise RuntimeError("PASSKEY_ENABLED must remain true when privileged passkeys are required.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY is required only when the direct Groq provider is selected.")
@@ -284,10 +263,6 @@ class Settings(BaseSettings):
             raise RuntimeError("OpenRouter cannot be used as the embedding endpoint; configure a real embedding provider.")
         if self.ENVIRONMENT in ("production", "staging") and self.AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION and not self.AI_ALLOWED_MODELS:
             raise RuntimeError("AI_ALLOWED_MODELS must be configured in production/staging.")
-        if self.ENVIRONMENT in ("production", "staging") and self.PRIVILEGED_PASSKEY_REQUIRED and not self.PASSKEY_ORIGIN.startswith("https://"):
-            raise RuntimeError("PASSKEY_ORIGIN must use HTTPS when privileged passkeys are required in production/staging.")
-        if self.ENVIRONMENT == "production" and not self.PRIVILEGED_PASSKEY_REQUIRED:
-            raise RuntimeError("PRIVILEGED_PASSKEY_REQUIRED must be true in production. Privileged accounts require phishing-resistant authentication.")
 
 
 settings = Settings()
