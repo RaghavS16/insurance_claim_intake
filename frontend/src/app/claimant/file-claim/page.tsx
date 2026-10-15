@@ -52,7 +52,7 @@ function FileClaimContent() {
     {
       id: 'welcome',
       speaker: 'assistant',
-      text: "Hello! I am your IntelliClaim AI Assistant. Please describe what happened and when the incident took place, or click the microphone to speak your claim details.",
+      text: "Hello! I am your IntelliClaim AI Assistant. How can I assist you with your claim today? You can type your request or click the microphone to speak.",
       time: 'Just now',
     },
   ]);
@@ -465,7 +465,7 @@ function FileClaimContent() {
         {
           id: `welcome-${Date.now()}`,
           speaker: 'assistant',
-          text: "Hello! I am your IntelliClaim AI Assistant. Please describe what happened and when the incident took place, or click the microphone to speak your claim details.",
+          text: "Hello! I am your IntelliClaim AI Assistant. How can I assist you with your claim today? You can type your request or click the microphone to speak.",
           time: 'Just now',
         },
       ]);

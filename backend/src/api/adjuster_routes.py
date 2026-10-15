@@ -381,6 +381,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
     return {
         "claim": _item(c, db=db),
         "extracted_data": extracted,
+        "extracted_fields": state.get("extracted_fields", []),
         "policy": policy_payload,
         "conversation": [{"speaker": "Claimant" if t.speaker in {"user", "claimant"} else "Agent", "text": t.text, "turn": t.turn_number, "timestamp": t.created_at.isoformat() if t.created_at else None} for t in turns],
         "requirements": state.get("dynamic_requirements", []),
@@ -392,7 +393,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "copilot": state.get("copilot", {}),
         "copilot_chat": state.get("copilot_chat", []),
         "submission_package": package,
-        "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "conversation_phase": state.get("conversation_phase", "source_of_truth_intake"),
         "gap_analysis": state.get("gap_analysis", {}),
     }
 

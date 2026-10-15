@@ -12,7 +12,7 @@ class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
-    def retrieve(self, *, insurance_type: str, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None) -> dict:
+    def retrieve(self, *, insurance_type: str | None = None, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None) -> dict:
         tenant_id = (tenant_id or "").strip()
         if not tenant_id:
             if settings.ENVIRONMENT == "test":
@@ -26,9 +26,9 @@ class KnowledgeRetriever:
             for key, value in facts.items()
             if value not in (None, "", "UNKNOWN") and key not in {"event_description"}
         )
-        q = " ".join(part for part in (insurance_type, incident_description, searchable_facts) if part).strip()[:4000]
-        if not insurance_type:
-            return {"available": False, "status": "INVALID_CONTEXT", "requirements": [], "policy": [], "regulations": []}
+        q = " ".join(part for part in (insurance_type or "", incident_description, searchable_facts) if part).strip()[:4000]
+        if not q:
+            q = "insurance claim intake requirements and filing procedure"
         
         policy = []
         guidance = []
@@ -40,12 +40,14 @@ class KnowledgeRetriever:
         try:
             policy_docs = list_policy_documents(insurance_type=insurance_type, policy_number=policy_number, incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
             policy_docs_found = bool(policy_docs)
+            if not insurance_type and policy_docs:
+                insurance_type = policy_docs[0].get("insurance_type")
             for doc in policy_docs:
                 cached = get_cached_requirement_manifest(doc["document_id"], tenant_id)
                 if not cached:
                     chunks = get_document_chunks(doc["document_id"], tenant_id)
                     try:
-                        cached = compile_policy_requirements(document_id=doc["document_id"], insurance_type=insurance_type, chunks=chunks)
+                        cached = compile_policy_requirements(document_id=doc["document_id"], insurance_type=insurance_type or "general", chunks=chunks)
                         if cached: save_requirement_manifest(doc["document_id"], cached, tenant_id)
                     except Exception:
                         cached = []
@@ -138,25 +140,10 @@ class KnowledgeRetriever:
                 pass
 
         if not policy and not guidance:
-            try:
-                provisional_llm = get_fast_llm()
-            except Exception:
-                provisional_llm = None
-            provisional = get_provisional_requirements(
-                provisional_llm,
-                insurance_type=insurance_type,
-                claim_facts={
-                    **facts,
-                    "policy_number": policy_number,
-                    "incident_date": str(incident_date) if incident_date else None,
-                    "incident": incident_description,
-                },
-                conversation=incident_description,
-            )
             return {
-                "available": bool(provisional),
-                "status": "PROVISIONAL" if provisional else "NO_RELEVANT_KNOWLEDGE",
-                "requirements": provisional,
+                "available": False,
+                "status": "NO_RELEVANT_KNOWLEDGE",
+                "requirements": [],
                 "policy": [],
                 "regulations": [],
                 "authoritative": False,

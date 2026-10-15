@@ -132,24 +132,13 @@ def _claim_intake_context_requested(state: ClaimState) -> bool:
 
 
 def _single_intake_follow_up(state: ClaimState) -> str:
-    labels = {
-        "policy_id": "your policy number",
-        "event_date": "the incident date",
-        "insurance_type": "the type of insurance",
-        "event_description": "what happened",
-        "event_location": "where the incident happened",
-        "estimated_claim_amount": "the approximate loss or repair amount",
-    }
-    missing = list(state.get("missing_fields") or [])
-    if missing:
-        field = missing[0]
-        return f"To start the claim, could you share {labels.get(field, field.replace('_', ' '))}?"
     dynamic = list(state.get("dynamic_missing") or [])
     if dynamic:
         hint = dynamic[0].get("question_hint")
         if hint:
             return str(hint).strip()
-        return f"Could you provide {str(dynamic[0].get('label') or dynamic[0].get('key') or 'the next required detail').lower()}?"
+        label = str(dynamic[0].get('label') or dynamic[0].get('key') or 'the next required detail').lower()
+        return f"Could you provide {label}?"
     evidence = list(state.get("missing_evidence") or [])
     if evidence:
         hint = evidence[0].get("question_hint")
@@ -160,21 +149,13 @@ def _single_intake_follow_up(state: ClaimState) -> str:
 
 
 def _confirmation_summary(data: dict[str, Any]) -> str:
-    """Produce a compact deterministic summary for explicit claimant confirmation."""
-    labels = {
-        "policy_id": "policy number",
-        "event_date": "incident date",
-        "insurance_type": "insurance type",
-        "event_description": "what happened",
-        "event_location": "incident location",
-        "estimated_claim_amount": "estimated loss",
-    }
-    parts = [
-        f"{labels[key]}: {value}"
-        for key, value in data.items()
-        if key in labels and value not in (None, "", "UNKNOWN")
-    ]
-    return "Here is the claim summary: " + "; ".join(parts[:6]) + "." if parts else "Here is the current claim summary."
+    """Produce a compact dynamic summary for explicit claimant confirmation."""
+    parts = []
+    for key, value in data.items():
+        if value not in (None, "", "UNKNOWN") and not key.startswith("_"):
+            label = key.replace("_", " ").title()
+            parts.append(f"{label}: {value}")
+    return "Here is the claim summary: " + "; ".join(parts[:8]) + "." if parts else "Here is the current claim summary."
 
 
 def _rag_question_responder(state: ClaimState) -> ClaimState:
@@ -259,7 +240,7 @@ def _model_response(state: ClaimState) -> str:
     ]
     gap_data = state.get("gap_analysis") or analyze_claim_gaps(state)
     sentiment = gap_data.get("user_sentiment", "normal")
-    phase = state.get("conversation_phase", "1_baseline")
+    phase = state.get("conversation_phase", "source_of_truth_intake")
 
     prompt = (
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
@@ -316,46 +297,30 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         return state
 
     # Requirement planning is available as soon as an insurance type is known.
-    # Policy verification remains a submission gate, not a conversation gate.
-
-    data = state.get("extracted_data") or {}
-    insurance_type = data.get("insurance_type")
-    if not insurance_type:
-        state["dynamic_requirements"] = []
-        state["dynamic_missing"] = []
-        state["missing_evidence"] = []
-        state["pending_evidence_review"] = []
-        state["rag_status"] = "NO_INSURANCE_TYPE"
+def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
+    if state.get("_skip_all") or state.get("_rag_question_only"):
         return state
 
-    # Bump when requirement-planning workflow semantics change so claims do not
-    # reuse a stale RAG plan generated under an older intake context.
-    # Requirement planning should be stable across ordinary claim-specific
-    # answers. Re-running the reasoning model after every dynamic answer caused a
-    # transient RAG failure to erase an already-valid requirement plan (for example
-    # after the claimant answered an alcohol question). Re-plan only when baseline
-    # claim context or evidence state changes.
-    planning_fact_keys = (
-        "policy_id",
-        "event_date",
-        "insurance_type",
-        "event_description",
-        "event_location",
-        "estimated_claim_amount",
-    )
-    # Only baseline context determines the requirement plan. Answers to
-    # requirements and evidence verification state must not invalidate the plan.
+    data = state.get("extracted_data") or {}
+    previous_requirements = list(state.get("dynamic_requirements") or [])
+    previous_knowledge = state.get("knowledge_context") or {}
+    previous_rag_status = str(state.get("rag_status") or "")
+
+    # Re-plan when claim facts, query, or policy context change
+    planning_fact_keys = tuple(sorted(data.keys()))
     context_payload = {
-        "baseline_facts": {
+        "facts": {
             key: data.get(key)
             for key in planning_fact_keys
-            if data.get(key) not in (None, "", "UNKNOWN")
+            if data.get(key) not in (None, "", "UNKNOWN") and not key.startswith("_")
         },
+        "query": str(state.get("last_user_utterance") or "")[:200],
     }
     context_digest = hashlib.sha256(
         json.dumps(context_payload, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:24]
-    context_key = f"intake-channel-v4|{context_digest}"
+    context_key = f"intake-channel-v5|{context_digest}"
+
     if (
         state.get("rag_context_key") == context_key
         and state.get("rag_status") in {"OK", "PROVISIONAL"}
@@ -364,13 +329,10 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         extract_answers(state)
         state["pending_evidence_review"] = pending_evidence_review(state)
         if state.get("dynamic_missing") or state.get("missing_evidence") or state.get("pending_evidence_review"):
-            state["conversation_phase"] = "3_rag_intake"
-            state["conversation_status"] = "collecting_dynamic"
+            state["conversation_phase"] = "source_of_truth_intake"
+            state["conversation_status"] = "collecting"
         return state
 
-    previous_requirements = list(state.get("dynamic_requirements") or [])
-    previous_knowledge = state.get("knowledge_context") or {}
-    previous_rag_status = str(state.get("rag_status") or "")
     context = build_dynamic_context(state)
     state["rag_status"] = context.get("status", "UNKNOWN")
     state["dynamic_requirements"] = context.get("requirements", [])
@@ -378,32 +340,29 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     state["rag_context_key"] = context_key
 
     if not context.get("available", False):
-        # Never discard an already-generated requirement plan just because a later
-        # RAG refresh is temporarily unavailable. This is especially important after
-        # an evidence upload, where the plan itself has not changed but its
-        # satisfaction state has.
         if previous_requirements and previous_rag_status in {"OK", "PROVISIONAL"}:
             state["dynamic_requirements"] = previous_requirements
             state["knowledge_context"] = previous_knowledge
             state["rag_status"] = previous_rag_status
             extract_answers(state)
             state["pending_evidence_review"] = pending_evidence_review(state)
-            state["conversation_status"] = "collecting_dynamic"
-            state["conversation_phase"] = "3_rag_intake"
+            state["conversation_status"] = "collecting"
+            state["conversation_phase"] = "source_of_truth_intake"
             return state
         state["dynamic_missing"] = []
         state["missing_evidence"] = []
         state["pending_evidence_review"] = []
         state["conversation_status"] = "waiting_for_knowledge"
+        state["conversation_phase"] = "source_of_truth_intake"
         return state
 
     extract_answers(state)
     state["pending_evidence_review"] = pending_evidence_review(state)
     if state.get("dynamic_missing") or state.get("missing_evidence"):
-        state["conversation_phase"] = "3_rag_intake"
-        state["conversation_status"] = "collecting_dynamic"
+        state["conversation_phase"] = "source_of_truth_intake"
+        state["conversation_status"] = "collecting"
     elif not state.get("dynamic_missing") and not state.get("missing_evidence"):
-        state["conversation_phase"] = "4_gap_analysis"
+        state["conversation_phase"] = "gap_analysis"
         state["conversation_status"] = "ready_for_submission"
     return state
 
@@ -412,17 +371,41 @@ def _response_planner(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
 
-    missing = list(state.get("missing_fields", []))
     data = state.get("extracted_data", {})
     dynamic_missing = list(state.get("dynamic_missing", []))
     missing_evidence = list(state.get("missing_evidence") or [])
     pending_review = list(state.get("pending_evidence_review") or [])
-    plan_ready = bool(state.get("dynamic_requirements")) and state.get("rag_status") in {"OK", "PROVISIONAL"}
+    requirements = list(state.get("dynamic_requirements") or [])
+    rag_status = str(state.get("rag_status") or "")
+    policy_id = data.get("policy_id") or data.get("policy_number")
+    policy_valid = state.get("policy_valid")
 
     # Continuous Gap & Validation Analysis
     gaps_result = analyze_claim_gaps(state)
     state["gap_analysis"] = gaps_result
 
+    # 1. If policy verification failed, report it clearly and do not proceed
+    if policy_id and policy_valid is False:
+        state["conversation_phase"] = "policy_verification"
+        state["conversation_status"] = "verification_failed"
+        verif = state.get("policy_verification") or {}
+        reason = verif.get("reason")
+        if reason == "ownership_mismatch":
+            msg = f"The policy number '{policy_id}' does not match your registered user account. Please provide your correct policy number."
+        elif reason == "policy_not_found":
+            msg = f"I could not find policy '{policy_id}' in our records. Please verify the policy number and try again."
+        elif reason == "policy_expired":
+            msg = f"Policy '{policy_id}' has expired. Please check your policy status or provide an active policy number."
+        elif reason == "policy_inactive":
+            msg = f"Policy '{policy_id}' is currently inactive. Please check your policy status or provide an active policy number."
+        else:
+            msg = f"The policy number '{policy_id}' could not be verified ({reason or 'verification failed'}). Please provide a valid policy number."
+        state["next_question_field"] = "policy_id"
+        state["next_question"] = msg
+        state["message"] = msg
+        return state
+
+    # 2. Claimant Q&A answer takes precedence if present
     rag_answer = str(state.get("rag_answer") or "").strip()
     if rag_answer:
         reply = rag_answer
@@ -433,42 +416,41 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["next_question_field"] = "question"
         state["next_question"] = reply
         state["message"] = reply
-        state["conversation_phase"] = "3_rag_intake" if (dynamic_missing or missing_evidence) else "4_gap_analysis"
+        state["conversation_phase"] = "source_of_truth_intake" if (dynamic_missing or missing_evidence) else "gap_analysis"
         return state
 
-    # Baseline facts are reviewed continuously; there is no mandatory confirmation phase.
-    # The claimant may correct any fact at any time, and the deterministic verifier/readiness
-    # service decides whether the case can advance.
-    if missing:
-        state["conversation_phase"] = "1_baseline"
-        state["next_question_field"] = missing[0]
-        state["next_question"] = _natural_fallback(missing, data)
-    elif dynamic_missing:
-        state["conversation_phase"] = "3_rag_intake"
+    # 3. Honest fallback if the knowledge base has no requirements
+    if not requirements and rag_status in {"NO_RELEVANT_KNOWLEDGE", "REQUIREMENT_PLAN_UNAVAILABLE", "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE", "NO_POLICY_WORDING"}:
+        state["conversation_phase"] = "source_of_truth_intake"
+        state["conversation_status"] = "waiting_for_knowledge"
+        reply = (
+            "I cannot determine the filing requirements for this claim because the applicable policy wording "
+            "and regulatory guidelines have not been indexed in our knowledge base. I have flagged this for an "
+            "administrator or claims specialist to review and index the necessary policy documentation."
+        )
+        state["next_question_field"] = "escalate"
+        state["next_question"] = reply
+        state["message"] = reply
+        return state
+
+    # 4. Dynamic requirements intake
+    if dynamic_missing:
+        state["conversation_phase"] = "source_of_truth_intake"
         state["next_question_field"] = dynamic_missing[0].get("key")
         state["conversation_status"] = "collecting_dynamic"
         state["next_question"] = _dynamic_fallback(state)
     elif missing_evidence:
-        state["conversation_phase"] = "3_rag_intake"
+        state["conversation_phase"] = "source_of_truth_intake"
         state["next_question_field"] = "evidence:" + str(missing_evidence[0].get("key"))
         state["conversation_status"] = "collecting_dynamic"
         state["next_question"] = _dynamic_fallback(state)
+    elif pending_review:
+        state["conversation_phase"] = "source_of_truth_intake"
+        state["conversation_status"] = "collecting"
+        state["next_question_field"] = "evidence_review"
+        state["next_question"] = "Your uploaded evidence is queued for review. There are no other claim details needed from you right now; we’ll keep the claim open until that review is resolved."
     else:
-        state["conversation_phase"] = "4_gap_analysis"
-        state["next_question_field"] = "submission"
-        state["conversation_status"] = "ready_for_submission" if plan_ready else "waiting_for_knowledge"
-        if not plan_ready:
-            state["next_question"] = "I have the claim details so far. I need the applicable policy requirements to finish checking what is needed before filing can be completed."
-
-    if (
-        not missing
-        and plan_ready
-        and state.get("rag_status") == "OK"
-        and not dynamic_missing
-        and not missing_evidence
-        and not pending_review
-    ):
-        state["conversation_phase"] = "4_gap_analysis"
+        state["conversation_phase"] = "gap_analysis"
         state["next_question_field"] = "submission"
         if state.get("final_submission_confirmed"):
             state["conversation_status"] = "submission_requested"
@@ -489,15 +471,7 @@ def _response_planner(state: ClaimState) -> ClaimState:
                 "I have the required claim details and evidence, and the policy check is complete. "
                 "Your claim is ready whenever you want to submit it."
             )
-        state["message"] = state["next_question"]
-        return state
 
-    if pending_review and not missing_evidence and not dynamic_missing:
-        state["conversation_phase"] = "3_rag_intake"
-        state["conversation_status"] = "collecting_dynamic"
-        state["next_question_field"] = "evidence_review"
-        state["next_question"] = "Your uploaded evidence is queued for review. There are no other claim details needed from you right now; we’ll keep the claim open until that review is resolved."
-        state["message"] = state["next_question"]
     state["message"] = state.get("next_question", "")
     return state
 
@@ -510,26 +484,26 @@ def _build_conversation_graph():
     graph = StateGraph(ClaimState)  # type: ignore
     graph.add_node("workflow_event_router", lambda state: state)
     graph.add_node("conversation_turn_processor", conversation_turn_processor)
-    graph.add_node("claim_extractor", nodes.claim_extractor)
-    graph.add_node("rag_question_responder", _rag_question_responder)
-    graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
     graph.add_node("dynamic_requirement_enrichment", _dynamic_requirement_enrichment)
+    graph.add_node("claim_extractor", nodes.claim_extractor)
+    graph.add_node("mandatory_field_checker", nodes.mandatory_field_checker)
+    graph.add_node("rag_question_responder", _rag_question_responder)
     graph.add_node("next_question_generator", _response_planner)
     graph.set_entry_point("workflow_event_router")
     graph.add_conditional_edges(
         "workflow_event_router",
         _workflow_event_router,
-        {"user_turn": "conversation_turn_processor", "workflow_event": "mandatory_field_checker"},
+        {"user_turn": "conversation_turn_processor", "workflow_event": "dynamic_requirement_enrichment"},
     )
     graph.add_conditional_edges(
         "conversation_turn_processor",
         lambda state: "done" if state.get("_skip_all") else "continue",
-        {"continue": "claim_extractor", "done": END},
+        {"continue": "dynamic_requirement_enrichment", "done": END},
     )
-    graph.add_edge("claim_extractor", "rag_question_responder")
-    graph.add_edge("rag_question_responder", "mandatory_field_checker")
-    graph.add_edge("mandatory_field_checker", "dynamic_requirement_enrichment")
-    graph.add_edge("dynamic_requirement_enrichment", "next_question_generator")
+    graph.add_edge("dynamic_requirement_enrichment", "claim_extractor")
+    graph.add_edge("claim_extractor", "mandatory_field_checker")
+    graph.add_edge("mandatory_field_checker", "rag_question_responder")
+    graph.add_edge("rag_question_responder", "next_question_generator")
     graph.add_edge("next_question_generator", END)
     return graph.compile()
 

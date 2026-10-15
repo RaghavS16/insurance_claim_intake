@@ -2,6 +2,13 @@
 from typing import Any, Dict, List, Optional, TypedDict
 
 
+class DynamicFieldEntry(TypedDict, total=False):
+    field_key: str
+    field_label: str
+    value: Any
+    source_requirement_id: Optional[str]
+
+
 class ClaimState(TypedDict, total=False):
     ticket_id: str
     claim_text: str
@@ -9,6 +16,7 @@ class ClaimState(TypedDict, total=False):
     insurance_type_hint: Optional[str]
 
     extracted_data: Dict[str, Any]
+    extracted_fields: List[Dict[str, Any]]  # Dynamic collection of {field_key, field_label, value, source_requirement_id}
     field_status: Dict[str, str]
     field_metadata: Dict[str, Dict[str, Any]]
     missing_fields: List[str]
@@ -79,7 +87,7 @@ class ClaimState(TypedDict, total=False):
     response_message: str
     spoken_response: str
 
-    conversation_phase: str  # "1_baseline" | "2_verification" | "3_rag_intake" | "4_gap_analysis" | "5_completed"
+    conversation_phase: str  # "source_of_truth_intake" | "policy_verification" | "gap_analysis" | "completed"
     policy_verification: Dict[str, Any]
     policyholder_verification: Dict[str, Any]
     gap_analysis: Dict[str, Any]

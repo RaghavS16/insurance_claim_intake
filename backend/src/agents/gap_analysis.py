@@ -22,15 +22,8 @@ def analyze_claim_gaps(state: Dict[str, Any]) -> Dict[str, Any]:
     gaps: List[Dict[str, Any]] = []
     consistency_notes: List[str] = []
 
-    for field in missing_fields:
-        gaps.append({
-            "category": "baseline_missing",
-            "field": field,
-            "severity": "high",
-            "message": f"Core detail required: {field.replace('_', ' ')}",
-        })
-    if not missing_fields:
-        consistency_notes.append("Baseline claim foundation is complete.")
+    if not dynamic_missing and not missing_evidence:
+        consistency_notes.append("All policy-derived claim requirements and evidence are satisfied.")
 
     for requirement in dynamic_missing:
         gaps.append({

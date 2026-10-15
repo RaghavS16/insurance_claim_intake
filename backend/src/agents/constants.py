@@ -11,19 +11,11 @@ SUPPORTED_INSURANCE_TYPES = {
 
 INSURANCE_TYPE_KEYS = set(SUPPORTED_INSURANCE_TYPES.keys())
 
-# Per the project flow, Phase 1 collects the common baseline fields. Incident
-# location is intentionally included here because it is part of the baseline,
-# while claim-type-specific questions/documents remain Phase 2.
-COMMON_REQUIRED_FIELDS = [
-    "policy_id",
-    "event_date",
-    "insurance_type",
-    "event_description",
-    "event_location",
-    "estimated_claim_amount",
-]
+# Zero hardcoded baseline fields: everything required must come entirely
+# from authoritative policy wording and regulatory documents via RAG.
+COMMON_REQUIRED_FIELDS: list[str] = []
 
-FIELD_HUMAN_NAMES = {
+FIELD_HUMAN_NAMES: dict[str, str] = {
     "policy_id": "policy number",
     "event_date": "incident date",
     "insurance_type": "insurance type",

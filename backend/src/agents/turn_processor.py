@@ -184,19 +184,21 @@ async def process_claimant_turn(
             "grounded": bool(result.get("rag_answer_grounded")),
         }
 
-    # Policy verification is triggered by complete baseline facts, not by a conversational
-    # confirmation flag. The claimant can correct facts at any time; verification is rerun
-    # after each correction before submission.
-    missing_baseline = list(result.get("missing_fields") or [])
-    if not missing_baseline and extracted.get("policy_id") and extracted.get("event_date") and extracted.get("insurance_type"):
+    # Policy verification is triggered as soon as a policy identifier is captured
+    # by the source-of-truth requirement flow.
+    policy_id_val = extracted.get("policy_id") or next(
+        (f.get("value") for f in (result.get("extracted_fields") or []) if f.get("field_key") in ("policy_id", "policy_number")),
+        None,
+    )
+    if policy_id_val and not (result.get("policy_verification") or {}).get("valid"):
         try:
             claim.pipeline_state = dict(result)
             flag_modified(claim, "pipeline_state")
             verification = verify_policy_for_claim(
-                policy_id=extracted.get("policy_id"),
-                event_date_str=extracted.get("event_date"),
+                policy_id=policy_id_val,
+                event_date_str=extracted.get("event_date") or next((f.get("value") for f in (result.get("extracted_fields") or []) if "date" in str(f.get("field_key", "")).lower()), None),
                 claimant_user_id=str(claim.claimant_id),
-                insurance_type=extracted.get("insurance_type"),
+                insurance_type=extracted.get("insurance_type") or next((f.get("value") for f in (result.get("extracted_fields") or []) if "type" in str(f.get("field_key", "")).lower()), None),
                 db=db,
                 claim_id=claim.id,
             )
@@ -210,7 +212,7 @@ async def process_claimant_turn(
                         claim.status = "verified"
                 result["conversation_status"] = (
                     "collecting_dynamic"
-                    if result.get("dynamic_missing") or result.get("missing_evidence")
+                    if result.get("dynamic_missing") or result.get("missing_evidence") or result.get("unresolved_requirements")
                     else "ready_for_submission"
                 )
             else:
@@ -220,6 +222,16 @@ async def process_claimant_turn(
                     except ValueError:
                         claim.status = "verification_failed"
                 result["conversation_status"] = "verification_failed"
+                reason_msg = {
+                    "policy_not_found": f"I couldn't find an active policy with number '{policy_id_val}'. Please verify and provide a valid policy number.",
+                    "ownership_mismatch": f"Policy '{policy_id_val}' is not registered under your account. Please provide the policy number belonging to your account.",
+                    "policy_inactive": f"Policy '{policy_id_val}' is inactive or lapsed. We cannot process claims for inactive policies.",
+                    "policy_expired": f"Policy '{policy_id_val}' was expired on the incident date.",
+                    "policy_not_yet_effective": f"Policy '{policy_id_val}' was not yet effective on the incident date.",
+                    "insurance_type_mismatch": f"Policy '{policy_id_val}' does not match this claim type.",
+                }.get(verification.get("reason"), f"Policy verification failed: {verification.get('reason')}. Please provide a valid policy.")
+                result["next_question"] = reason_msg
+                result["message"] = reason_msg
         except Exception as exc:
             logger.exception("Policy verification failed unexpectedly")
             result["policy_verification"] = {
@@ -229,9 +241,15 @@ async def process_claimant_turn(
             }
             result["policy_valid"] = False
 
-    # Persist canonical facts independently of the conversational JSON cache.
+    # Persist dynamic facts independently of the conversational JSON cache.
+    dynamic_facts = dict(extracted)
+    for entry in (result.get("extracted_fields") or []):
+        fk = entry.get("field_key")
+        fv = entry.get("value")
+        if fk and fv not in (None, "", "UNKNOWN"):
+            dynamic_facts[str(fk)] = fv
     persist_canonical_facts(
-        db, claim, extracted,
+        db, claim, dynamic_facts,
         source_type="CLAIMANT",
         source_id=str(logical_turn),
         confidence=result.get("extraction_confidence"),
@@ -377,17 +395,15 @@ async def process_claimant_turn(
         from src.agents.gap_analysis import analyze_claim_gaps
         result["gap_analysis"] = analyze_claim_gaps(result)
         if claim.status in {"submitted", "assigned", "under_review", "closed"} or result.get("conversation_status") == "submitted":
-            result["conversation_phase"] = "5_completed"
-        elif result.get("missing_fields"):
-            result["conversation_phase"] = "1_baseline"
-        elif claim.status != "verified":
-            result["conversation_phase"] = "2_verification"
-        elif dynamic_rem or missing_ev or pending_review:
-            result["conversation_phase"] = "3_rag_intake"
+            result["conversation_phase"] = "completed"
+        elif result.get("conversation_status") == "verification_failed" or (result.get("policy_verification") and not result.get("policy_verification", {}).get("valid")):
+            result["conversation_phase"] = "policy_verification"
+        elif dynamic_rem or missing_ev or pending_review or result.get("unresolved_requirements") or result.get("missing_fields"):
+            result["conversation_phase"] = "source_of_truth_intake"
         elif not result.get("final_submission_confirmed"):
-            result["conversation_phase"] = "4_gap_analysis"
+            result["conversation_phase"] = "gap_analysis"
         else:
-            result["conversation_phase"] = "5_completed"
+            result["conversation_phase"] = "completed"
     except Exception as exc:
         logger.debug("Gap analysis / phase mapping error: %s", exc)
 

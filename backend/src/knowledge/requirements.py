@@ -78,7 +78,7 @@ Based SOLELY on these retrieved documents:
 3. Do not summarize the checklist into a small number of "representative" items. Preserve every distinct source-backed claimant detail, document, notification, add-on obligation, and conditional requirement that appears in the supplied evidence.
 4. When a requirement is conditional and the condition is not resolved by the known claim facts, keep it in the plan with its condition so the conversation can collect the fact needed to resolve it.
 
-Do NOT repeat the 6 baseline fields already collected: policy number, incident date, insurance type, incident description, incident location, estimated loss amount.
+Include ALL required claimant details and supporting evidence mandated by the retrieved sources to process, identify, or assess the claim (such as policy number/identifier, incident dates, loss amounts, event descriptions, or specific documentation if required by the source text). Do not assume any pre-collected baseline fields.
 
 Insurance Type: {insurance_type}
 Claimant Incident Summary: {incident_description}
@@ -215,8 +215,6 @@ reasonable to collect from the claimant based ONLY on the claimant's own inciden
 facts and the insurance type.
 
 This is NOT a policy decision. Do not state that anything is mandatory or covered.
-Do not repeat baseline fields: policy number, incident date, insurance type,
-incident description, incident location, estimated loss amount.
 Do not ask when the claimant reported this claim to the insurer through the
 current intake application.
 Only identify details or documents that are directly suggested by the incident

@@ -261,6 +261,10 @@ def test_dossier_turn_sequence_only_asks_for_truly_missing_baseline_fields():
         "field_status": {},
         "field_metadata": {},
         "conversation_history": [],
+        "dynamic_requirements": [
+            {"key": "policy_id", "label": "Policy ID", "required": True},
+            {"key": "estimated_claim_amount", "label": "Estimated Claim Amount", "required": True},
+        ],
     }
     state = nodes.conversation_turn_processor(state)
     state = nodes.mandatory_field_checker(state)

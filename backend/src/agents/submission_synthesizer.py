@@ -202,12 +202,53 @@ def synthesize_claims_package(
             "Determine coverage authorization based on primary policy terms.",
         ])
 
-    # 7. Executive Summary
+    # 7. Dynamic Collected Fields (Source-of-truth requirement answers)
+    collected_fields: List[Dict[str, Any]] = []
+    seen_keys = set()
+    for entry in (state.get("extracted_fields") or []):
+        fk = str(entry.get("field_key") or "")
+        val = entry.get("value")
+        if fk and val not in (None, "", "UNKNOWN"):
+            seen_keys.add(fk)
+            collected_fields.append({
+                "field_key": fk,
+                "field_label": str(entry.get("field_label") or fk.replace("_", " ").title()),
+                "value": val,
+                "source_requirement_id": entry.get("source_requirement_id"),
+            })
+    for k, v in data.items():
+        if k not in seen_keys and v not in (None, "", "UNKNOWN"):
+            collected_fields.append({
+                "field_key": k,
+                "field_label": k.replace("_", " ").title(),
+                "value": v,
+                "source_requirement_id": None,
+            })
+
+    # 8. Executive Summary
+    summary_parts = [f"Claim #{ticket_id}"]
+    if verified_policyholder_details.get("insurance_type") and verified_policyholder_details["insurance_type"] != "Unknown":
+        summary_parts.append(f"for {verified_policyholder_details['insurance_type']} coverage")
+    if policy_id:
+        summary_parts.append(f"under Policy {policy_id}")
+    summary_intro = " ".join(summary_parts) + "."
+
+    details_parts = []
+    if event_date and event_date != "Not specified":
+        details_parts.append(f"Incident date: {event_date}")
+    if event_location and event_location != "Not specified":
+        details_parts.append(f"Location: {event_location}")
+    if est_amount and est_amount > 0:
+        details_parts.append(f"Estimated loss: {est_amount:,.2f}")
+    if event_desc and event_desc != "No incident description provided.":
+        details_parts.append(f"Claimant statement: \"{event_desc}\"")
+
     executive_summary = (
-        f"Claim #{ticket_id} submitted for {verified_policyholder_details['insurance_type']} coverage under "
-        f"Policy {policy_id}. Incident occurred on {event_date} at {event_location}. "
-        f"Claimant reports: \"{event_desc}\". Estimated loss is {est_amount:,.2f}. "
-        f"Policy verification status: {verified_policyholder_details['policy_status']}. {len(evidence_index)} evidence item(s) on file. "
+        f"{summary_intro} "
+        + (f"{'. '.join(details_parts)}. " if details_parts else "")
+        + f"Policy verification status: {verified_policyholder_details['policy_status']}. "
+        f"{len(evidence_index)} evidence item(s) on file. "
+        f"{len(collected_fields)} requirement field(s) documented. "
         f"Recommended Action: {next_steps[0] if next_steps else 'Proceed with standard adjuster assessment.'}"
     )
 
@@ -220,6 +261,7 @@ def synthesize_claims_package(
         "verified_policyholder_details": verified_policyholder_details,
         "qa_transcript": turns,
         "evidence_index": evidence_index,
+        "collected_fields": collected_fields,
         "risk_assessment_flags": risk_flags,
         "recommended_next_steps": next_steps,
         "metadata": {
@@ -228,6 +270,7 @@ def synthesize_claims_package(
             "location": event_location,
             "total_turns": len(turns),
             "evidence_count": len(evidence_index),
+            "fields_count": len(collected_fields),
         },
     }
     return package

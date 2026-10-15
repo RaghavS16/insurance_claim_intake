@@ -94,6 +94,7 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "event_location": claim.event_location,
         "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
         "extracted_data": state.get("extracted_data") or {},
+        "extracted_fields": state.get("extracted_fields") or [],
         "missing_fields": state.get("missing_fields") or [],
         "dynamic_requirements": state.get("dynamic_requirements") or [],
         "dynamic_missing": state.get("dynamic_missing") or [],
@@ -103,7 +104,7 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "field_status": state.get("field_status") or {},
         "awaiting_confirmation": bool(state.get("awaiting_confirmation")),
         "confirmed": bool(state.get("confirmed")),
-        "conversation_phase": state.get("conversation_phase", "1_baseline"),
+        "conversation_phase": state.get("conversation_phase", "source_of_truth_intake"),
         "chat_intent": state.get("chat_intent") or {},
         "chat_retrieval": state.get("chat_retrieval") or {},
         "gap_analysis": state.get("gap_analysis") or {},
@@ -1082,7 +1083,7 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
     state["dynamic_requirements"] = []
     state["dynamic_missing"] = []
     state["missing_evidence"] = []
-    state["conversation_phase"] = "1_baseline"
+    state["conversation_phase"] = "source_of_truth_intake"
     state["conversation_status"] = "collecting"
     state["next_question_field"] = None
     state["next_question"] = "I updated that detail. I’ll re-check the claim requirements and coverage from the corrected information.";

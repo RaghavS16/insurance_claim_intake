@@ -23,17 +23,19 @@ def _get_llm():
     return _llm
 
 T = TypeVar("T", bound=BaseModel)
-REQUIRED_FIELDS = list(COMMON_REQUIRED_FIELDS)
+REQUIRED_FIELDS: List[str] = []
 UNKNOWN_SENTINEL = "UNKNOWN"
 IntentType = Literal["claim_detail", "correction", "confirmation", "rejection", "question", "repeat", "defer", "filler", "greeting", "gratitude", "closing", "escalation", "submit", "unclear"]
 
 class FieldChange(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    field: Literal["policy_id", "event_date", "insurance_type", "event_description", "event_location", "estimated_claim_amount"]
+    field: str
     operation: Literal["set", "replace", "append", "remove", "ignore"]
     value: Any = None
     evidence: str = ""
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_requirement_id: Optional[str] = None
+    field_label: Optional[str] = None
 
 class ExtractionPatch(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -560,6 +562,11 @@ def _validate_change(change: FieldChange, state: ClaimState) -> Optional[FieldCh
     if change.field == "event_description":
         if change.operation == "remove": return change
         clean = _normalize_description(change.value, state.get("last_user_utterance") or ""); return change.model_copy(update={"value":clean}) if clean else None
+    if change.operation == "remove": return change
+    if change.value not in (None, "", UNKNOWN_SENTINEL):
+        from src.agents.dynamic_requirements import clean_extracted_value
+        cleaned_val = clean_extracted_value(change.field, change.value)
+        return change.model_copy(update={"value": cleaned_val})
     return None
 
 
@@ -698,44 +705,56 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     return state
 
 
-def claim_extractor(state: ClaimState) -> ClaimState: return state
+def claim_extractor(state: ClaimState) -> ClaimState:
+    if state.get("_skip_all"):
+        return state
+    from src.agents.dynamic_requirements import extract_answers, sync_extracted_fields
+    extract_answers(state)
+    sync_extracted_fields(state)
+    return state
 
 def mandatory_field_checker(state: ClaimState) -> ClaimState:
     if state.get("_skip_all"):
         return state
+    from src.agents.dynamic_requirements import unresolved, missing_evidence, sync_extracted_fields
+    sync_extracted_fields(state)
+
+    dynamic_missing = unresolved(state)
+    state["dynamic_missing"] = dynamic_missing
+    state["missing_evidence"] = missing_evidence(state)
+
+    missing = [str(r.get("key")) for r in dynamic_missing if r.get("key")]
+    state["missing_fields"] = missing
+
     data = state.get("extracted_data", {})
     statuses = dict(state.get("field_status", {}))
     metadata = state.setdefault("field_metadata", {})
-    missing: List[str] = []
-    for field in REQUIRED_FIELDS:
-        value = data.get(field)
-        if value in (None, "", UNKNOWN_SENTINEL):
-            statuses[field] = "missing"
-            missing.append(field)
+
+    for req in state.get("dynamic_requirements") or []:
+        key = str(req.get("key") or "")
+        if not key:
+            continue
+        val = data.get(key)
+        if val in (None, "", UNKNOWN_SENTINEL):
+            statuses[key] = "missing"
         else:
-            statuses[field] = statuses.get(field, "provided")
-            metadata.setdefault(field, {"status": statuses[field], "confidence": 1.0})
-    state["missing_fields"] = missing
+            statuses[key] = statuses.get(key, "provided")
+            metadata.setdefault(key, {"status": statuses[key], "confidence": 1.0})
+
     state["field_status"] = statuses
-    confidences = [
-        float(metadata.get(f, {}).get("confidence", 0.0))
-        for f in REQUIRED_FIELDS
-        if f not in missing
-    ]
-    if len(confidences) == len(REQUIRED_FIELDS):
-        state["extraction_confidence"] = round(min(confidences), 2)
-    elif confidences:
-        state["extraction_confidence"] = round(sum(confidences) / len(confidences), 2)
-    else:
-        state["extraction_confidence"] = 0.0
-    # Baseline facts are confirmed naturally. Final submission confirmation is separate
-    # and is never inferred from the baseline field-completeness state.
+
+    policy_id = data.get("policy_id") or data.get("policy_number")
+    policy_verified = state.get("policy_valid")
+
     state["awaiting_confirmation"] = False
     if state.get("_rejection_active"):
         state["conversation_status"] = "collecting"
         state["confirmed"] = False
-    elif not missing:
-        state["conversation_status"] = "pending_verification"
+    elif policy_id and policy_verified is False:
+        state["conversation_status"] = "verification_failed"
+        state["confirmed"] = False
+    elif not missing and not state.get("missing_evidence") and (not policy_id or policy_verified is True):
+        state["conversation_status"] = "ready_for_submission"
         state["confirmed"] = True
     else:
         state["conversation_status"] = "collecting"

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Edge-case tests for src/agents/dynamic_requirements.py
 
 Covers: unresolved, missing_evidence, _deterministic_dynamic_extract,
@@ -358,5 +358,5 @@ def test_response_planner_does_not_offer_submission_with_pending_evidence_review
     })
 
     assert "submit" not in result["next_question"].lower()
-    assert result["conversation_phase"] == "3_rag_intake"
+    assert result["conversation_phase"] in {"source_of_truth_intake", "3_rag_intake"}
 

@@ -75,18 +75,29 @@ class TestVerifyPolicyForClaim:
         assert result["valid"] is False
         assert result["reason"] == "claim_policy_mismatch"
 
-    def test_confirmation_not_given_returns_invalid(self):
+    def test_confirmation_not_required_for_early_verification(self):
         from src.agents.policy_check import verify_policy_for_claim
+        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
             "confirmed": False,
         })
-        db.query.return_value.filter.return_value.filter.return_value.first.return_value = candidate
+        policy = self._make_policy(number="POL-001", customer_id="user-1")
+
+        def query_side_effect(model_class):
+            if model_class is Claim:
+                mock = MagicMock()
+                mock.filter.return_value.filter.return_value.first.return_value = candidate
+                return mock
+            else:
+                mock = MagicMock()
+                mock.filter.return_value.first.return_value = policy
+                return mock
+        db.query.side_effect = query_side_effect
         result = verify_policy_for_claim(policy_id="POL-001", event_date_str="2025-01-01",
-                                         claimant_user_id="u1", db=db, claim_id="claim-1")
-        assert result["valid"] is False
-        assert result["reason"] == "claimant_confirmation_required"
+                                         claimant_user_id="user-1", db=db, claim_id="claim-1")
+        assert result["valid"] is True
 
     def test_policy_not_found_in_db_returns_invalid(self):
         from src.agents.policy_check import verify_policy_for_claim
@@ -271,7 +282,7 @@ class TestVerifyPolicyForClaim:
         assert result["valid"] is False
         assert result["reason"] == "insurance_type_mismatch"
 
-    def test_missing_event_date_returns_invalid(self):
+    def test_missing_event_date_allows_early_active_policy_verification(self):
         from src.agents.policy_check import verify_policy_for_claim
         from src.database.models import Claim, Policy
         db = self._make_db()
@@ -293,8 +304,7 @@ class TestVerifyPolicyForClaim:
         db.query.side_effect = query_side_effect
         result = verify_policy_for_claim(policy_id="POL-001", event_date_str=None,
                                          claimant_user_id="user-1", db=db, claim_id="claim-1")
-        assert result["valid"] is False
-        assert result["reason"] == "missing_event_date"
+        assert result["valid"] is True
 
     def test_policy_id_case_normalized(self):
         """Lowercase policy IDs should be normalized to uppercase before comparison."""
@@ -305,10 +315,10 @@ class TestVerifyPolicyForClaim:
             "extracted_data": {"policy_id": "pol-001"},  # lowercase in state
             "confirmed": True,
         })
-        # Function normalizes both — so "pol-001".upper() == "POL-001"
+        # Function normalizes both - so "pol-001".upper() == "POL-001"
         db.query.return_value.filter.return_value.filter.return_value.first.return_value = candidate
         # This triggers claim_policy_mismatch because "pol-001".upper() == "POL-001" and
-        # normalized_policy == "pol-001".strip().upper() == "POL-001" — they match
+        # normalized_policy == "pol-001".strip().upper() == "POL-001" - they match
         # So the check proceeds to policy lookup which returns None
         db.query.return_value.filter.return_value.first.return_value = None
         result = verify_policy_for_claim(policy_id="pol-001", event_date_str="2025-01-01",

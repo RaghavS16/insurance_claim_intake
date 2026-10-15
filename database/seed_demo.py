@@ -100,6 +100,20 @@ Clause 2.2: Evidence requests should be recorded against the claim and the claim
 Clause 2.3: Claim decisions should be recorded by an authorized human reviewer with a reason and supporting evidence.
 """,
             ),
+            (
+                "demo-health-policy-wording.txt",
+                "policy_wording",
+                "health",
+                "DEMO-HEALTH-1.0",
+                "Demo Health Policy, Section 3, Clause 3.1",
+                """DEMO HEALTH POLICY WORDING — NOT AN ACTUAL INSURANCE CONTRACT.
+Section 3. Inpatient Hospitalization Claims
+Clause 3.1: To submit an inpatient medical claim, the claimant must specify the active Health Policy Number for verification.
+Clause 3.2: The claimant must provide the hospital name, hospital admission date, treating doctor or diagnosis description, and estimated hospital bills or treatment expense.
+Clause 3.3: Inpatient admission must exceed 24 hours unless daycare procedures apply. A standard copayment or deductible applies to eligible room and pharmacy charges.
+Clause 3.4: The claimant must furnish a copy of the hospital discharge summary and original medical receipts before claim settlement.
+""",
+            ),
         ]
         for filename, doc_type, insurance_type, version, citation, body in demo_sources:
             existing = db.query(KnowledgeDocument).filter(

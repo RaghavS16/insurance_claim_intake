@@ -239,6 +239,7 @@ export default function AdjusterClaimWorkspacePage({
   const evidenceList = claimData?.evidence || claim?.evidence || [];
   const openExceptions = claim?.open_exceptions || [];
   const notesList = claimData?.notes || [];
+  const collectedFields = claimData?.submission_package?.collected_fields || claimData?.extracted_fields || [];
 
   return (
     <AppShell
@@ -396,6 +397,62 @@ export default function AdjusterClaimWorkspacePage({
                   <p className="snow-body" style={{ marginTop: 4, lineHeight: 1.6 }}>
                     {extracted?.incident_description || claim?.event_description || 'Detailed incident description provided during intake conversation.'}
                   </p>
+                </Card>
+
+                {/* Dynamically Rendered Policy & Regulatory Requirement Answers */}
+                <Card title="Source-of-Truth Requirements & Collected Answers">
+                  <p className="snow-caption" style={{ color: '#71717A', marginBottom: 14 }}>
+                    Requirements and verified answers dynamically surfaced from indexed policy wording and regulatory sources for this specific claim.
+                  </p>
+                  {collectedFields.length === 0 ? (
+                    <div className="snow-caption" style={{ color: '#A1A1AA', padding: 8 }}>
+                      No dynamic requirements or answers recorded yet.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+                      {collectedFields.map((field: any, idx: number) => (
+                        <div
+                          key={field.field_key || idx}
+                          style={{
+                            padding: 14,
+                            backgroundColor: '#FAFAFB',
+                            borderRadius: 10,
+                            border: '1px solid #EBECEF',
+                          }}
+                        >
+                          <div
+                            className="snow-caption"
+                            style={{
+                              color: '#71717A',
+                              marginBottom: 6,
+                              fontSize: 11,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {field.field_label || field.field_key}
+                          </div>
+                          <div
+                            className="snow-body"
+                            style={{
+                              fontWeight: 600,
+                              color: '#1C1C1C',
+                              fontSize: 14,
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {String(field.value ?? '—')}
+                          </div>
+                          {field.source_requirement_id && (
+                            <div className="snow-caption" style={{ color: '#A1A1AA', fontSize: 10, marginTop: 6 }}>
+                              Policy Rule: {field.source_requirement_id}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </Card>
 
                 {/* Blocking Exceptions Alert */}

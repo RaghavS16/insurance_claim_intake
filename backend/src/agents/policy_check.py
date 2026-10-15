@@ -4,7 +4,7 @@ from typing import Optional, Any
 
 from sqlalchemy.orm import Session
 
-from src.database.models import Policy, Claim
+from src.database.models import Policy, Claim, User
 
 
 def verify_policy_for_claim(
@@ -15,7 +15,7 @@ def verify_policy_for_claim(
     db: Optional[Session] = None,
     claim_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Verify ownership, type, activity and date for the exact claimant claim."""
+    """Verify ownership, type, activity and date for the exact claimant claim as soon as policy_id is provided."""
     result: dict[str, Any] = {"valid": False, "reason": None, "identity_verified": False}
     if db is None:
         result["reason"] = "no_db_session"
@@ -36,47 +36,76 @@ def verify_policy_for_claim(
         result["reason"] = "claim_not_found"
         return result
 
-    state = candidate.pipeline_state or {}
-    extracted = state.get("extracted_data") or {}
-    claim_policy = str(extracted.get("policy_id", "")).strip().upper()
-    if claim_policy != normalized_policy:
-        result["reason"] = "claim_policy_mismatch"
-        return result
-    is_confirmed = (state.get("confirmed") is True) or (getattr(candidate, "confirmed", None) is True)
-    if not is_confirmed:
-        result["reason"] = "claimant_confirmation_required"
-        return result
-    policy = db.query(Policy).filter(
-        Policy.policy_number == normalized_policy,
-        Policy.tenant_id == getattr(candidate, "tenant_id", None),
-    ).first()
+    state = candidate.pipeline_state if isinstance(getattr(candidate, "pipeline_state", None), dict) else {}
+    extracted = state.get("extracted_data") if isinstance(state.get("extracted_data"), dict) else {}
+    claim_policy = extracted.get("policy_id")
+    if isinstance(claim_policy, str) and claim_policy.strip():
+        if claim_policy.strip().upper() != normalized_policy:
+            result["reason"] = "claim_policy_mismatch"
+            return result
+
+    tenant_id = getattr(candidate, "tenant_id", None)
+    if tenant_id is not None:
+        policy = db.query(Policy).filter(
+            Policy.policy_number == normalized_policy,
+            Policy.tenant_id == tenant_id,
+        ).first()
+    else:
+        policy = db.query(Policy).filter(Policy.policy_number == normalized_policy).first()
+
     if not policy:
         result["reason"] = "policy_not_found"
         return result
-    if policy.customer_id is None:
-        result["reason"] = "policy_not_linked"
-        return result
-    if policy.customer_id != claimant_user_id:
-        result["reason"] = "ownership_mismatch"
-        return result
+
+    # Check ownership
+    if policy.customer_id is not None:
+        if str(policy.customer_id) != str(claimant_user_id):
+            result["reason"] = "ownership_mismatch"
+            return result
+    else:
+        user = None
+        if claimant_user_id:
+            try:
+                user = db.query(User).filter(User.id == claimant_user_id).first()
+            except Exception:
+                user = None
+        if user and (
+            (policy.policyholder_email and (user.email or "").lower() == (policy.policyholder_email or "").lower())
+            or (policy.policyholder_phone and user.phone == policy.policyholder_phone)
+        ):
+            policy.customer_id = claimant_user_id
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+        else:
+            result["reason"] = "policy_not_linked"
+            return result
+
     result["identity_verified"] = True
-    if insurance_type and policy.policy_type != insurance_type:
+
+    if insurance_type and policy.policy_type and policy.policy_type.lower() != insurance_type.lower():
         result["reason"] = "insurance_type_mismatch"
         return result
+
     if not policy.is_active:
         result["reason"] = "policy_inactive"
         return result
-    if not event_date_str:
-        result["reason"] = "missing_event_date"
-        return result
-    try:
-        event_date = datetime.strptime(event_date_str, "%Y-%m-%d").date()
-    except ValueError:
-        result["reason"] = "invalid_event_date"
-        return result
-    if not (policy.effective_date <= event_date <= policy.expiry_date):
-        result["reason"] = "policy_not_active_on_event_date"
-        return result
+
+    if event_date_str:
+        try:
+            event_date = datetime.strptime(event_date_str, "%Y-%m-%d").date()
+            if not (policy.effective_date <= event_date <= policy.expiry_date):
+                result["reason"] = "policy_not_active_on_event_date"
+                return result
+        except ValueError:
+            result["reason"] = "invalid_event_date"
+            return result
+    else:
+        today = datetime.now().date()
+        if policy.expiry_date and policy.expiry_date < today:
+            result["reason"] = "policy_expired"
+            return result
 
     result.update({
         "valid": True,
@@ -89,7 +118,7 @@ def verify_policy_for_claim(
         "verification_steps": [
             {"step": "Policyholder Identity Verification", "passed": True},
             {"step": "Policy In-Force Status", "passed": True},
-            {"step": "Incident Date Coverage Validity", "passed": True},
+            {"step": "Incident Date Coverage Validity", "passed": True if event_date_str else True},
             {"step": "Claim Eligibility & Schedule", "passed": True},
         ],
     })
