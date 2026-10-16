@@ -39,6 +39,7 @@ def build_dynamic_context(state: ClaimState | dict[str, Any]) -> dict[str, Any]:
         claim_facts=data,
         tenant_id=state.get("tenant_id"),
         jurisdiction=state.get("jurisdiction"),
+        claimant_id=state.get("claimant_id"),
     )
 
 def is_evidence_req(r: dict[str, Any]) -> bool:

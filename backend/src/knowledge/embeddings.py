@@ -12,11 +12,11 @@ class EmbeddingService:
 
     def _embed_gemini(self, texts: list[str], api_key: str, model_name: str | None = None) -> list[list[float]]:
         import time
-        model = model_name or "gemini-embedding-001"
+        model = model_name or "text-embedding-004"
         if model.startswith("models/"):
             model = model[len("models/"):]
-        if model == "text-embedding-004":
-            model = "gemini-embedding-001"
+        if not model or model == "nomic-embed-text":
+            model = "text-embedding-004"
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents?key={api_key}"
         all_embeddings: list[list[float]] = []
@@ -114,25 +114,26 @@ class EmbeddingService:
         if not texts:
             return []
 
-        provider = (settings.EMBEDDING_PROVIDER or "ollama").lower().strip()
-        gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or (settings.EMBEDDING_API_KEY if provider == "gemini" else None)
+        raw_provider = (getattr(settings, "EMBEDDING_PROVIDER", None) or "").lower().strip()
+        gemini_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or settings.EMBEDDING_API_KEY
 
-        # 1. Google Gemini (100% Free Production Tier - 1500 RPM, 768-dim)
-        if provider == "gemini" or (gemini_key and (provider not in ("ollama", "openai", "fastembed"))):
+        # 1. Google Gemini (100% Free Production Tier - 1500 RPM, 768-dim, Zero Container RAM)
+        # Auto-fallback to gemini whenever gemini_key is set and provider is not explicitly forced to local ollama/fastembed
+        use_gemini = (raw_provider in ("gemini", "cloud", "google")) or (
+            bool(gemini_key) and raw_provider not in ("ollama", "fastembed", "openai", "local")
+        )
+        if use_gemini:
             if not gemini_key:
-                raise RuntimeError("GEMINI_API_KEY is required when EMBEDDING_PROVIDER=gemini.")
+                raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required when EMBEDDING_PROVIDER=gemini.")
             try:
-                return self._embed_gemini(texts, gemini_key, settings.EMBEDDING_MODEL if "text-embedding" in (settings.EMBEDDING_MODEL or "") else "text-embedding-004")
+                target_model = settings.EMBEDDING_MODEL if "text-embedding" in (settings.EMBEDDING_MODEL or "") else "text-embedding-004"
+                return self._embed_gemini(texts, gemini_key, target_model)
             except Exception as exc:
-                logger.warning("Gemini embedding endpoint unreachable (%s); falling back to local embeddings.", exc)
-                try:
-                    ollama_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
-                    return self._embed_openai_compatible(texts, ollama_url, "nomic-embed-text", "")
-                except Exception:
-                    return self._embed_fastembed(texts, settings.EMBEDDING_MODEL)
+                logger.warning("Gemini embedding endpoint unreachable (%s); falling back to FastEmbed.", exc)
+                return self._embed_fastembed(texts, settings.EMBEDDING_MODEL)
 
-        # 2. In-Memory Embedded ONNX (100% Free, zero external network dependency)
-        if provider in ("fastembed", "local", "inmemory"):
+        # 2. In-Memory Embedded ONNX FastEmbed (100% Free, zero external network dependency)
+        if raw_provider in ("fastembed", "local", "inmemory") or not raw_provider:
             return self._embed_fastembed(texts, settings.EMBEDDING_MODEL)
 
         # 3. OpenAI-compatible / Ollama / Cloud
@@ -165,5 +166,10 @@ _embeddings = EmbeddingService()
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
     return _embeddings.embed(texts)
+
+def embed(text_or_texts: list[str] | str) -> list[list[float]] | list[float]:
+    if isinstance(text_or_texts, str):
+        return _embeddings.embed([text_or_texts])[0]
+    return _embeddings.embed(text_or_texts)
 
 

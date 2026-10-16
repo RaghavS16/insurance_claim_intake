@@ -429,6 +429,15 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["conversation_phase"] = "source_of_truth_intake" if (dynamic_missing or missing_evidence) else "gap_analysis"
         return state
 
+    if rag_status == "CONTEXT_RESOLUTION_REQUIRED":
+        state["conversation_phase"] = "source_of_truth_intake"
+        state["conversation_status"] = "collecting"
+        state["next_question_field"] = "policy_id"
+        msg = (state.get("knowledge_context") or {}).get("question") or "Could you provide your policy number or specify which type of policy you are filing a claim under?"
+        state["next_question"] = msg
+        state["message"] = msg
+        return state
+
     # 3. Honest fallback if the knowledge base has no requirements
     if not requirements and rag_status in {"NO_RELEVANT_KNOWLEDGE", "REQUIREMENT_PLAN_UNAVAILABLE", "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE", "NO_POLICY_WORDING"}:
         state["conversation_phase"] = "source_of_truth_intake"

@@ -20,6 +20,8 @@ import {
   User,
   Paperclip,
   Inbox,
+  Printer,
+  Copy,
 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Card } from '@/components/ui/Card';
@@ -29,6 +31,7 @@ import { Input } from '@/components/ui/Input';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
+import { downloadDossierFile, printAdjudicationCertificate } from '@/lib/dossier-export';
 
 interface CopilotChat {
   id: string;
@@ -78,6 +81,31 @@ export default function AdjusterClaimWorkspacePage({
   // Note Modal
   const [newNote, setNewNote] = useState('');
 
+  // Export Dossier Modal
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [dossierText, setDossierText] = useState('');
+  const [certificateData, setCertificateData] = useState<any>(null);
+  const [exportingDossier, setExportingDossier] = useState(false);
+
+  const handleExportDossier = async () => {
+    setExportingDossier(true);
+    try {
+      const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/export`);
+      setDossierText(res?.formatted_text || (typeof res === 'string' ? res : JSON.stringify(res, null, 2)));
+      setCertificateData(res?.certificate || null);
+      setExportModalOpen(true);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to export claim dossier.', 'error');
+    } finally {
+      setExportingDossier(false);
+    }
+  };
+
+  const handleCopyDossier = () => {
+    navigator.clipboard.writeText(dossierText);
+    showToast('Dossier copied to clipboard', 'success');
+  };
+
   const loadClaim = async () => {
     setLoading(true);
     setError(null);
@@ -86,6 +114,10 @@ export default function AdjusterClaimWorkspacePage({
       setClaimData(data);
       if (data?.claim?.estimated_claim_amount) {
         setPayoutAmount(String(data.claim.estimated_claim_amount));
+      }
+
+      if (data?.copilot && Object.keys(data.copilot).length > 0) {
+        setCopilotSynopsis((prev: any) => prev || data.copilot);
       }
 
       // Populate copilot chat history if stored in pipeline state
@@ -130,7 +162,18 @@ export default function AdjusterClaimWorkspacePage({
     setFetchingCopilot(true);
     try {
       const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/copilot`);
-      setCopilotSynopsis(res?.copilot || res);
+      const synopsis = res?.analysis || res?.copilot || (res?.executive_summary ? res : null);
+      setCopilotSynopsis(synopsis);
+      if (Array.isArray(res?.chat) && res.chat.length > 0 && copilotChats.length === 0) {
+        setCopilotChats(
+          res.chat.map((msg: any, i: number) => ({
+            id: msg.id || `msg-${i}`,
+            sender: msg.speaker === 'adjuster' ? 'adjuster' : 'copilot',
+            text: msg.text || msg.message || '',
+            citations: msg.citations || [],
+          }))
+        );
+      }
     } catch (err: any) {
       console.debug('Copilot synopsis fetch non-fatal:', err);
     } finally {
@@ -271,6 +314,16 @@ export default function AdjusterClaimWorkspacePage({
         </Link>
 
         <div className="snow-flex snow-gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={handleExportDossier}
+            disabled={exportingDossier}
+            icon={<Download size={14} />}
+          >
+            {exportingDossier ? 'Exporting...' : 'Export Dossier / Certificate'}
+          </Button>
+
           <Button
             size="sm"
             variant="secondary"
@@ -601,7 +654,13 @@ export default function AdjusterClaimWorkspacePage({
                                 onClick={async () => {
                                   try {
                                     const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/evidence/${ev.id}/url`);
-                                    if (res?.url) window.open(res.url, '_blank');
+                                    if (res?.url) {
+                                      if (res.url.startsWith('/api/')) {
+                                        await api.downloadFile(res.url, ev.original_filename || ev.name || 'evidence');
+                                      } else {
+                                        window.open(res.url, '_blank');
+                                      }
+                                    }
                                   } catch (err: any) {
                                     showToast(err.message || 'Failed to get document download URL', 'error');
                                   }
@@ -1015,6 +1074,71 @@ export default function AdjusterClaimWorkspacePage({
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Export Dossier & Certificate Modal */}
+      <Modal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        title={`Claim Dossier & Settlement Certificate — #${ticketId}`}
+        maxWidth={640}
+      >
+        <p className="snow-caption" style={{ color: '#71717A', marginBottom: 12 }}>
+          Export the complete intake transcript dossier or print/save an official adjudication certificate with verified checksums.
+        </p>
+
+        <div style={{ position: 'relative' }}>
+          <pre
+            style={{
+              backgroundColor: '#FAFAFB',
+              border: '1px solid #EBECEF',
+              borderRadius: 12,
+              padding: 16,
+              fontSize: 12,
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              maxHeight: 280,
+              overflowY: 'auto',
+            }}
+          >
+            {dossierText}
+          </pre>
+        </div>
+
+        <div className="snow-flex snow-justify-between snow-items-center snow-gap-2" style={{ marginTop: 20, flexWrap: 'wrap' }}>
+          <div className="snow-flex snow-gap-2">
+            <Button
+              variant="secondary"
+              icon={<Download size={14} />}
+              onClick={() => downloadDossierFile(dossierText, `claim_${ticketId}_dossier.md`, 'text/markdown')}
+            >
+              .MD
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Download size={14} />}
+              onClick={() => downloadDossierFile(dossierText, `claim_${ticketId}_dossier.txt`, 'text/plain')}
+            >
+              .TXT
+            </Button>
+            <Button
+              variant="primary"
+              icon={<Printer size={14} />}
+              onClick={() => printAdjudicationCertificate(certificateData)}
+              disabled={!certificateData}
+            >
+              Print / Save PDF Certificate
+            </Button>
+          </div>
+          <div className="snow-flex snow-gap-2">
+            <Button variant="secondary" icon={<Copy size={14} />} onClick={handleCopyDossier}>
+              Copy Text
+            </Button>
+            <Button variant="secondary" onClick={() => setExportModalOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
       </Modal>
     </AppShell>
   );

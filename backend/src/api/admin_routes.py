@@ -627,6 +627,13 @@ def get_admin_dashboard(
             "capacity": total_capacity,
             "utilization_pct": workload_utilization,
         },
+        "total_active_policies": active_policies,
+        "linked_policies_count": linked_policies,
+        "total_claims": total_claims,
+        "claims_by_stage": stage_counts,
+        "approved_settlement_volume": round(approved_volume, 2),
+        "active_adjusters": active_adjusters,
+        "total_assigned_workload": total_claims_assigned,
     }
 
 
@@ -884,36 +891,5 @@ def list_system_audit_events(
             }
             for row in rows
         ]
-    }
-
-
-@router.get("/dashboard")
-def get_admin_dashboard(request: Request, db: Session = Depends(get_db)):
-    """Admin dashboard metrics showing active policies, claims by stage, settlement volume, and active adjusters."""
-    admin = _require_admin(request, db)
-    total_active_policies = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id, Policy.is_active == True).count()
-    linked_policies = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id, Policy.customer_id.isnot(None)).count()
-
-    claims = db.query(Claim).filter(Claim.tenant_id == admin.tenant_id).all()
-    stages: dict[str, int] = {}
-    total_settlement = 0.0
-    for c in claims:
-        st = c.status or "draft"
-        stages[st] = stages.get(st, 0) + 1
-        if st in ("approved", "settled", "paid"):
-            total_settlement += float(c.estimated_amount or 0.0)
-
-    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == admin.tenant_id).all()
-    active_adjusters = sum(1 for a in adjusters if a.is_active)
-    total_assigned = sum(a.claims_assigned or 0 for a in adjusters)
-
-    return {
-        "total_active_policies": total_active_policies,
-        "linked_policies_count": linked_policies,
-        "total_claims": len(claims),
-        "claims_by_stage": stages,
-        "approved_settlement_volume": total_settlement,
-        "active_adjusters": active_adjusters,
-        "total_assigned_workload": total_assigned,
     }
 

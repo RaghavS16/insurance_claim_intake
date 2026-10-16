@@ -38,7 +38,7 @@ from src.middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware
 from src.services.observability import configure_otel
 
 # Route modules
-from src.api import auth_routes, auth_onboarding_routes, claim_routes, policy_routes, admin_routes, admin_workflow_routes, adjuster_routes, knowledge_routes
+from src.api import auth_routes, auth_onboarding_routes, claim_routes, policy_routes, admin_routes, admin_workflow_routes, adjuster_routes, knowledge_routes, notification_routes
 
 # Shared auth dependencies (also exported for backward compatibility)
 from src.api.deps import get_current_user, get_current_user_id, require_role  # noqa: F401
@@ -359,6 +359,7 @@ app.include_router(
 
 app.include_router(adjuster_routes.router)
 app.include_router(knowledge_routes.router)
+app.include_router(notification_routes.router)
 
 # Voice WebSocket router
 app.include_router(voice_router)

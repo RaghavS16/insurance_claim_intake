@@ -33,7 +33,7 @@ function AdjusterOnboardingContent() {
         password,
         confirm_password: repeatPassword,
       });
-      login(res.access_token, res.user);
+      login(res.access_token, res.user, res.refresh_token);
       showToast('Onboarding complete! Welcome to IntelliClaim Adjuster Workspace.', 'success');
       router.push('/adjuster/dashboard');
     } catch (err: any) {

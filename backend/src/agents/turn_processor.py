@@ -79,6 +79,7 @@ async def process_claimant_turn(
     graph_input = {
         **prior_state,
         "tenant_id": str(getattr(claim, "tenant_id", "") or ""),
+        "claimant_id": str(getattr(claim, "claimant_id", "") or ""),
         "claim_text": "" if workflow_event else user_text,
         "ticket_id": claim.ticket_id,
         "input_mode": input_mode,
@@ -252,11 +253,32 @@ async def process_claimant_turn(
 
     # Sync canonical role fields directly to Claim SQL columns
     if extracted.get("policy_id"):
-        claim.policy_id = str(extracted["policy_id"])
+        from src.database.models import Policy
+        raw_pol = str(extracted["policy_id"]).strip()
+        pol_row = (
+            db.query(Policy)
+            .filter(
+                (Policy.policy_number == raw_pol.upper()) | (Policy.id == raw_pol),
+                Policy.tenant_id == claim.tenant_id,
+            )
+            .first()
+        )
+        if not pol_row:
+            pol_row = db.query(Policy).filter((Policy.policy_number == raw_pol.upper()) | (Policy.id == raw_pol)).first()
+        if pol_row:
+            claim.policy_id = pol_row.id
     if extracted.get("insurance_type"):
         claim.insurance_type = str(extracted["insurance_type"])
     if extracted.get("event_date"):
-        claim.event_date = str(extracted["event_date"])
+        from datetime import datetime, date as py_date
+        val_date = extracted["event_date"]
+        if isinstance(val_date, py_date):
+            claim.event_date = val_date
+        else:
+            try:
+                claim.event_date = datetime.strptime(str(val_date)[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                pass
     if extracted.get("event_description"):
         claim.event_description = str(extracted["event_description"])
     if extracted.get("event_location"):
@@ -285,6 +307,38 @@ async def process_claimant_turn(
     # receives the same RAG authority marker used by the readiness engine.
     claim.pipeline_state = dict(result)
     flag_modified(claim, "pipeline_state")
+
+    # If the claimant intake halted on waiting_for_knowledge, record an escalation exception
+    if result.get("conversation_status") == "waiting_for_knowledge":
+        try:
+            from src.database.hardening_models import ClaimException
+            existing_exc = db.query(ClaimException).filter(
+                ClaimException.claim_id == claim.id,
+                ClaimException.event_type == "missing_policy_knowledge",
+                ClaimException.status == "open",
+            ).first()
+            if not existing_exc:
+                pol_str = str(extracted.get("policy_id") or extracted.get("insurance_type") or "unspecified")
+                db.add(ClaimException(
+                    tenant_id=str(claim.tenant_id or ""),
+                    claim_id=claim.id,
+                    event_type="missing_policy_knowledge",
+                    severity="high",
+                    reason=f"Missing indexed policy wording for policy {pol_str}",
+                    source_type="RAG_ENGINE",
+                    source_id="retriever",
+                    blocking=True,
+                    status="open",
+                    resolution_json={
+                        "ticket_id": claim.ticket_id,
+                        "policy_number": str(extracted.get("policy_id") or ""),
+                        "insurance_type": str(extracted.get("insurance_type") or ""),
+                    },
+                ))
+                db.flush()
+        except Exception:
+            pass
+
     # Durable requirements are synchronized before readiness is evaluated.
     sync_claim_requirements(db, claim, result.get("dynamic_requirements") or [])
 

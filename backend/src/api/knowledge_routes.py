@@ -498,3 +498,39 @@ def delete_document(
     db.commit()
     return {"document_id": document_id, "message": "Knowledge document deleted successfully.", "success": True}
 
+
+@router.get("/escalations")
+def get_missing_knowledge_escalations(
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    """Return all open missing_policy_knowledge exceptions across claims."""
+    from src.database.hardening_models import ClaimException
+    from src.database.models import Claim
+
+    rows = (
+        db.query(ClaimException, Claim)
+        .join(Claim, ClaimException.claim_id == Claim.id)
+        .filter(
+            ClaimException.event_type == "missing_policy_knowledge",
+            ClaimException.status == "open",
+        )
+        .order_by(ClaimException.created_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    items = []
+    for exc, claim in rows:
+        res = exc.resolution_json or {}
+        items.append({
+            "id": exc.id,
+            "claim_id": claim.id,
+            "ticket_id": claim.ticket_id,
+            "policy_number": res.get("policy_number") or claim.policy_number or "",
+            "insurance_type": res.get("insurance_type") or claim.insurance_type or "motor",
+            "reason": exc.reason,
+            "created_at": exc.created_at.isoformat() if exc.created_at else None,
+        })
+    return {"items": items, "count": len(items)}
+

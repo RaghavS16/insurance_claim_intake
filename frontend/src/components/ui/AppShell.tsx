@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { api } from '@/lib/api';
 import { Button } from './Button';
 import { Tooltip } from './Tooltip';
 
@@ -53,11 +54,52 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [rightDrawerOpen, setRightDrawerOpen] = useState(Boolean(rightDrawerContent && !hideRightDrawer));
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState([
-    { id: '1', title: 'IntelliClaim Engine Active', message: 'Claims intake and policy verification pipeline operational.', time: 'Just now', unread: true },
-    { id: '2', title: 'System Security Verification', message: 'Audit trails and deterministic tenant role enforcement active.', time: '12m ago', unread: true },
-    { id: '3', title: 'Realtime Voice Adjudication', message: 'Pipecat voice streaming and local faster-whisper initialized.', time: '1h ago', unread: false },
-  ]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchNotifications = async () => {
+    try {
+      const res = await api.get<any>('/api/v1/notifications');
+      if (res && Array.isArray(res.items)) {
+        setNotifications(res.items);
+        setUnreadCount(typeof res.unread_count === 'number' ? res.unread_count : res.items.filter((n: any) => n.unread).length);
+      }
+    } catch {
+      // Ignore background notification fetch errors
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchNotifications();
+      const interval = setInterval(fetchNotifications, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user]);
+
+  const handleMarkAllRead = async () => {
+    try {
+      await api.post('/api/v1/notifications/mark-read', { all: true });
+      setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+      setUnreadCount(0);
+    } catch {}
+  };
+
+  const handleNotificationClick = async (notif: any) => {
+    if (notif.unread) {
+      try {
+        await api.post('/api/v1/notifications/mark-read', { notification_id: notif.id });
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notif.id ? { ...n, unread: false } : n))
+        );
+        setUnreadCount((c) => Math.max(0, c - 1));
+      } catch {}
+    }
+    setNotificationsOpen(false);
+    if (notif.url) {
+      router.push(notif.url);
+    }
+  };
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
 
@@ -405,7 +447,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                   onClick={() => setNotificationsOpen(!notificationsOpen)}
                 >
                   <Bell size={18} />
-                  {notifications.some((n) => n.unread) && (
+                  {(unreadCount > 0 || notifications.some((n) => n.unread)) && (
                     <span
                       style={{
                         position: 'absolute',
@@ -414,7 +456,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                         width: 7,
                         height: 7,
                         borderRadius: '50%',
-                        backgroundColor: '#10B981',
+                        backgroundColor: '#007AFF',
                       }}
                     />
                   )}
@@ -431,7 +473,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                     backgroundColor: '#FFFFFF',
                     border: '1px solid #EBECEF',
                     borderRadius: 14,
-                    width: 320,
+                    width: 330,
                     boxShadow: '0 12px 32px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04)',
                     overflow: 'hidden',
                     animation: 'snowFadeIn 0.12s ease-out',
@@ -447,7 +489,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                     }}
                   >
                     <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-                      Notifications ({notifications.filter((n) => n.unread).length} unread)
+                      Notifications ({unreadCount} unread)
                     </div>
                     {notifications.length > 0 && (
                       <button
@@ -460,16 +502,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                           cursor: 'pointer',
                           fontWeight: 500,
                         }}
-                        onClick={() =>
-                          setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
-                        }
+                        onClick={handleMarkAllRead}
                       >
                         Mark all read
                       </button>
                     )}
                   </div>
 
-                  <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                  <div style={{ maxHeight: 280, overflowY: 'auto' }}>
                     {notifications.length === 0 ? (
                       <div style={{ padding: '24px 16px', textAlign: 'center', color: '#A1A1AA', fontSize: 13 }}>
                         No new notifications
@@ -478,22 +518,25 @@ export const AppShell: React.FC<AppShellProps> = ({
                       notifications.map((n) => (
                         <div
                           key={n.id}
+                          onClick={() => handleNotificationClick(n)}
                           style={{
                             padding: '12px 16px',
                             borderBottom: '1px solid #F4F5F7',
-                            backgroundColor: n.unread ? '#FBFBFC' : '#FFFFFF',
+                            backgroundColor: n.unread ? '#F0F7FF' : '#FFFFFF',
                             transition: 'background-color 0.1s ease',
+                            cursor: 'pointer',
+                            position: 'relative',
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+                            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12, color: n.unread ? '#007AFF' : '#111827' }}>
                               {n.title}
                             </div>
                             <span className="snow-caption" style={{ fontSize: 11, color: '#A1A1AA' }}>
                               {n.time}
                             </span>
                           </div>
-                          <div className="snow-caption" style={{ color: '#71717A', fontSize: 12 }}>
+                          <div className="snow-caption" style={{ color: '#4B5563', fontSize: 12, lineHeight: 1.4 }}>
                             {n.message}
                           </div>
                         </div>
@@ -506,7 +549,10 @@ export const AppShell: React.FC<AppShellProps> = ({
                       <button
                         type="button"
                         style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: 12, cursor: 'pointer' }}
-                        onClick={() => setNotifications([])}
+                        onClick={() => {
+                          setNotifications([]);
+                          setUnreadCount(0);
+                        }}
                       >
                         Clear notifications
                       </button>

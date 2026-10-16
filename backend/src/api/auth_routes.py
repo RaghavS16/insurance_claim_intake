@@ -67,6 +67,11 @@ class ResetPasswordRequest(BaseModel):
     confirm_password: str = Field(..., min_length=8, max_length=128)
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = Field(None, min_length=2, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+
+
 def _issue_refresh_token(db: Session, user: User, family_id: str | None = None, *, auth_context: dict | None = None) -> str:
     """Create an opaque refresh token; only its SHA-256 hash is persisted."""
     raw = secrets.token_urlsafe(48)
@@ -623,3 +628,27 @@ def logout(request: Request, db: Session = Depends(get_db)):
             db.rollback()
 
     return {"message": "Logged out successfully. Token has been revoked."}
+ 
+ 
+@router.patch("/me")
+def update_current_user_profile(
+    payload: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update profile information (full_name and phone) for current user."""
+    if payload.full_name is not None:
+        current_user.full_name = validate_full_name(payload.full_name)
+    if payload.phone is not None:
+        clean_p = payload.phone.strip()
+        current_user.phone = validate_phone(clean_p) if clean_p else None
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "role": current_user.role,
+        "status": getattr(current_user, "status", "active"),
+    }

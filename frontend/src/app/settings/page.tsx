@@ -43,9 +43,27 @@ export default function SettingsPage() {
   const [exceptionAlerts, setExceptionAlerts] = useState(true);
   const [payoutReceipts, setPayoutReceipts] = useState(true);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    showToast('Profile updated successfully', 'success');
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
+    try {
+      const updated = await api.patch<any>('/api/v1/auth/me', {
+        full_name: fullName || undefined,
+        phone: contactPhone.trim() || undefined,
+      });
+      if (updated && typeof window !== 'undefined') {
+        const stored = localStorage.getItem('snow_user');
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            localStorage.setItem('snow_user', JSON.stringify({ ...parsed, ...updated }));
+          } catch {}
+        }
+      }
+      showToast('Profile updated successfully', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update profile', 'error');
+    }
   };
 
   const handleLogoutAll = async () => {

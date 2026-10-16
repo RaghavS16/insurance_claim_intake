@@ -209,19 +209,6 @@ class KnowledgeRetriever:
                 pass
 
         if not policy and not guidance:
-            try:
-                prov = get_provisional_requirements(insurance_type or "general")
-                if prov:
-                    return {
-                        "available": True,
-                        "status": "PROVISIONAL",
-                        "requirements": prov,
-                        "policy": [],
-                        "regulations": [],
-                        "authoritative": False,
-                    }
-            except Exception:
-                pass
             return {
                 "available": False,
                 "status": "NO_RELEVANT_KNOWLEDGE",

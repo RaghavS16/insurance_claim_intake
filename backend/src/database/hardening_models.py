@@ -263,3 +263,12 @@ class TenantMembership(Base):
     role: Mapped[str]=mapped_column(String(40),nullable=False)
     status: Mapped[str]=mapped_column(String(30),nullable=False,default="active")
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+
+class UserNotificationRead(Base):
+    __tablename__="user_notification_reads"
+    __table_args__=(Index("ix_user_notif_read","user_id","notification_id"),)
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
+    tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
+    user_id: Mapped[str]=_UUID(ForeignKey("users.id",ondelete="CASCADE"),nullable=False)
+    notification_id: Mapped[str]=mapped_column(String(100),nullable=False)
+    read_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
