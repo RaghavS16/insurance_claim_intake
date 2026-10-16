@@ -114,6 +114,7 @@ def calculate_readiness(
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
     claimant_confirmation: Optional[bool] = None,
+    rag_status: Optional[str] = None,
 ) -> ReadinessResult:
     if claimant_confirmation is None:
         claimant_confirmation = True if (policy_verification and policy_verification.get("valid") is True) else False
@@ -122,6 +123,18 @@ def calculate_readiness(
     exception_list = list(exceptions)
 
     blocking: list[dict[str, Any]] = []
+    if len(requirements_list) == 0 or (rag_status is not None and rag_status != "OK"):
+        blocking.append(
+            {
+                "id": "policy_manifest_unavailable",
+                "key": "policy_manifest",
+                "label": "Policy requirement manifest unavailable — escalate to admin/adjuster to index policy wording",
+                "type": "KNOWLEDGE",
+                "status": "knowledge_unavailable",
+                "required": True,
+            }
+        )
+
     for req in requirements_list:
         provenance = getattr(req, "provenance_json", None) or {}
         authoritative = provenance.get("authoritative", True)

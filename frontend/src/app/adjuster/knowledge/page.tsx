@@ -99,6 +99,45 @@ export default function KnowledgeBasePage() {
     }
   };
 
+  // Replace Modal State
+  const [replaceModalOpen, setReplaceModalOpen] = useState(false);
+  const [selectedDocIdForReplace, setSelectedDocIdForReplace] = useState<string>('');
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+  const [replacing, setReplacing] = useState(false);
+
+  const handleReindex = async (docId: string) => {
+    try {
+      showToast('Re-indexing document chunks...', 'info');
+      await api.post(`/api/v1/knowledge/documents/${docId}/reindex`, {});
+      showToast('Document re-indexed successfully!', 'success');
+      fetchDocuments();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to re-index document.', 'error');
+    }
+  };
+
+  const handleReplaceContent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replaceFile || !selectedDocIdForReplace) {
+      showToast('Please choose a replacement file.', 'error');
+      return;
+    }
+    setReplacing(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', replaceFile);
+      await api.put(`/api/v1/knowledge/documents/${selectedDocIdForReplace}/content`, formData);
+      showToast('Document content replaced and re-indexed!', 'success');
+      setReplaceModalOpen(false);
+      setReplaceFile(null);
+      fetchDocuments();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to replace document file.', 'error');
+    } finally {
+      setReplacing(false);
+    }
+  };
+
   const handlePublish = async (docId: string) => {
     try {
       await api.put(`/api/v1/knowledge/documents/${docId}`, {
@@ -161,17 +200,46 @@ export default function KnowledgeBasePage() {
       header: 'Actions',
       render: (d) => {
         const isPub = d.is_published || d.publication_status === 'published';
-        return !isPub ? (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => handlePublish(d.id)}
-            icon={<CheckCircle2 size={12} />}
-          >
-            Publish
-          </Button>
-        ) : (
-          <span className="snow-micro" style={{ color: '#10B981', fontWeight: 600 }}>Active</span>
+        return (
+          <div className="snow-flex snow-items-center snow-gap-2">
+            {!isPub && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => handlePublish(d.id)}
+                icon={<CheckCircle2 size={12} />}
+              >
+                Publish
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => handleReindex(d.id)}
+              title="Re-index document"
+            >
+              Re-index
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setSelectedDocIdForReplace(d.id);
+                setReplaceModalOpen(true);
+              }}
+              title="Replace file content"
+            >
+              Replace File
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={(e) => handleDeleteDocument(d.id, e)}
+              title="Delete document"
+            >
+              Delete
+            </Button>
+          </div>
         );
       },
     },
@@ -354,6 +422,43 @@ export default function KnowledgeBasePage() {
             </Button>
             <Button type="submit" variant="primary" disabled={uploading}>
               {uploading ? 'Processing Ingestion...' : 'Ingest & Index'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Replace Document Content Modal */}
+      <Modal
+        isOpen={replaceModalOpen}
+        onClose={() => setReplaceModalOpen(false)}
+        title="Replace Document Content File"
+      >
+        <form onSubmit={handleReplaceContent}>
+          <p className="snow-caption" style={{ color: '#71717A', marginBottom: 16 }}>
+            Upload an updated version of this policy document. Existing chunks will be re-parsed and re-indexed.
+          </p>
+
+          <div className="snow-form-group">
+            <label className="snow-label">Select Replacement File (.PDF, .TXT, .DOCX)</label>
+            <input
+              type="file"
+              className="snow-input"
+              style={{ paddingTop: 8 }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  setReplaceFile(e.target.files[0]);
+                }
+              }}
+              required
+            />
+          </div>
+
+          <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
+            <Button type="button" variant="secondary" onClick={() => setReplaceModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={replacing}>
+              {replacing ? 'Replacing & Indexing...' : 'Upload & Replace'}
             </Button>
           </div>
         </form>

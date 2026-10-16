@@ -10,7 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { DatePicker } from '@/components/ui/DatePicker';
-import { BadgePill } from '@/components/ui/Badge';
+import { BadgePill, BadgeDot } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { Policy } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -55,6 +55,9 @@ export default function AdminPoliciesPage() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [editHolderName, setEditHolderName] = useState('');
+  const [editHolderDob, setEditHolderDob] = useState('');
+  const [editHolderPhone, setEditHolderPhone] = useState('');
+  const [editHolderEmail, setEditHolderEmail] = useState('');
   const [editPolType, setEditPolType] = useState('motor');
   const [editCoverageAmt, setEditCoverageAmt] = useState('50000');
   const [editDeductibleAmt, setEditDeductibleAmt] = useState('500');
@@ -85,6 +88,9 @@ export default function AdminPoliciesPage() {
   const handleOpenEdit = (p: Policy) => {
     setEditingPolicy(p);
     setEditHolderName(p.policyholder_name || '');
+    setEditHolderDob(p.policyholder_dob || '');
+    setEditHolderPhone(p.policyholder_phone || '');
+    setEditHolderEmail(p.policyholder_email || '');
     setEditPolType(p.policy_type || 'motor');
     setEditCoverageAmt(String(p.coverage_amount || 50000));
     setEditDeductibleAmt(String(p.deductible || 500));
@@ -101,7 +107,10 @@ export default function AdminPoliciesPage() {
     try {
       const targetId = editingPolicy.policy_number || editingPolicy.id;
       await api.put(`/api/v1/admin/policies/${targetId}`, {
-        policyholder_name: editHolderName.trim(),
+        policyholder_name: editHolderName.trim() || undefined,
+        policyholder_dob: editHolderDob || undefined,
+        policyholder_phone: editHolderPhone.trim() || undefined,
+        policyholder_email: editHolderEmail.trim() || undefined,
         policy_type: editPolType,
         coverage_amount: Number(editCoverageAmt),
         deductible: Number(editDeductibleAmt),
@@ -115,6 +124,9 @@ export default function AdminPoliciesPage() {
             ? {
                 ...p,
                 policyholder_name: editHolderName.trim(),
+                policyholder_dob: editHolderDob || undefined,
+                policyholder_phone: editHolderPhone.trim() || undefined,
+                policyholder_email: editHolderEmail.trim() || undefined,
                 policy_type: editPolType,
                 coverage_amount: Number(editCoverageAmt),
                 deductible: Number(editDeductibleAmt),
@@ -131,6 +143,18 @@ export default function AdminPoliciesPage() {
       showToast(err.message || 'Failed to update policy.', 'error');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleDeletePolicy = async (p: Policy) => {
+    if (!confirm(`Are you sure you want to delete policy ${p.policy_number}? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/api/v1/admin/policies/${p.id || p.policy_number}`);
+      showToast(`Policy ${p.policy_number} deleted successfully.`, 'success');
+      setEditModalOpen(false);
+      fetchPolicies();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete policy.', 'error');
     }
   };
 
@@ -177,7 +201,13 @@ export default function AdminPoliciesPage() {
       const formData = new FormData();
       formData.append('file', importFile);
       const res = await api.post<any>('/api/v1/admin/policies/import', formData);
-      showToast(`Bulk policies imported! Created: ${res.created ?? 0}, Updated: ${res.updated ?? 0}`, 'success');
+      const createdCount = res.imported ?? res.created ?? 0;
+      const updatedCount = res.updated ?? 0;
+      let toastMsg = `Bulk policies imported! Created: ${createdCount}, Updated: ${updatedCount}`;
+      if (res.errors && Array.isArray(res.errors) && res.errors.length > 0) {
+        toastMsg += ` (${res.errors.length} error${res.errors.length > 1 ? 's' : ''}: ${res.errors.slice(0, 2).join('; ')})`;
+      }
+      showToast(toastMsg, res.errors && res.errors.length > 0 ? 'info' : 'success');
       setImportModalOpen(false);
       setImportFile(null);
       fetchPolicies();
@@ -188,16 +218,22 @@ export default function AdminPoliciesPage() {
     }
   };
 
-  const handleDownloadTemplate = () => {
-    const token = localStorage.getItem('token') || '';
-    window.open(`/api/v1/admin/policies/template?format=csv&token=${encodeURIComponent(token)}`, '_blank');
-    showToast('Policy import template download initiated', 'info');
+  const handleDownloadTemplate = async () => {
+    try {
+      await api.downloadFile('/api/v1/admin/policies/template?format=csv', 'policies_import_template.csv');
+      showToast('Policy import template download completed', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to download policy template.', 'error');
+    }
   };
 
-  const handleExportCSV = () => {
-    const token = localStorage.getItem('token') || '';
-    window.open(`/api/v1/admin/policies/export?format=csv&token=${encodeURIComponent(token)}`, '_blank');
-    showToast('Policies CSV export initiated', 'info');
+  const handleExportCSV = async () => {
+    try {
+      await api.downloadFile('/api/v1/admin/policies/export?format=csv', 'policies_export.csv');
+      showToast('Policies CSV export completed', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to export policies.', 'error');
+    }
   };
 
   const columns: Column<Policy>[] = [
@@ -214,7 +250,27 @@ export default function AdminPoliciesPage() {
     {
       key: 'policyholder_name',
       header: 'Policyholder',
-      render: (p) => <span style={{ fontWeight: 600 }}>{p.policyholder_name || 'Individual Insured'}</span>,
+      render: (p) => (
+        <div className="snow-flex-col">
+          <span style={{ fontWeight: 600 }}>{p.policyholder_name || 'Individual Insured'}</span>
+          <span className="snow-micro" style={{ color: '#71717A' }}>
+            {[p.policyholder_email, p.policyholder_phone].filter(Boolean).join(' • ') || 'No contact on file'}
+          </span>
+          {p.policyholder_dob && (
+            <span className="snow-micro" style={{ color: '#A1A1AA' }}>DOB: {p.policyholder_dob}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'is_linked',
+      header: 'Link Status',
+      render: (p) => (
+        <BadgeDot
+          status={p.is_linked ? 'complete' : 'neutral'}
+          label={p.is_linked ? 'Claimant Linked' : 'Unlinked'}
+        />
+      ),
     },
     { key: 'policy_type', header: 'Plan Form' },
     {
@@ -482,6 +538,29 @@ export default function AdminPoliciesPage() {
             required
           />
 
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <DatePicker
+              label="Policyholder DOB"
+              value={editHolderDob}
+              onChange={(d) => setEditHolderDob(d)}
+            />
+            <Input
+              label="Contact Phone"
+              type="tel"
+              placeholder="+1 555-0199"
+              value={editHolderPhone}
+              onChange={(e) => setEditHolderPhone(e.target.value)}
+            />
+          </div>
+
+          <Input
+            label="Policyholder Email"
+            type="email"
+            placeholder="policyholder@example.com"
+            value={editHolderEmail}
+            onChange={(e) => setEditHolderEmail(e.target.value)}
+          />
+
           <Select
             label="Insurance Line / Form Type"
             value={editPolType}
@@ -530,6 +609,14 @@ export default function AdminPoliciesPage() {
           />
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => editingPolicy && handleDeletePolicy(editingPolicy)}
+              style={{ marginRight: 'auto' }}
+            >
+              Delete Policy
+            </Button>
             <Button type="button" variant="secondary" onClick={() => setEditModalOpen(false)}>
               Cancel
             </Button>

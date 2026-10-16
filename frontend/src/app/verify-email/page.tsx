@@ -28,7 +28,7 @@ function VerifyEmailContent() {
 
     setLoading(true);
     try {
-      await api.post('/api/v1/auth/verify-email', { email, code: otp });
+      await api.post('/api/v1/auth/verify-email', { email, otp });
       showToast('Email verified successfully! You can now sign in.', 'success');
       router.push('/signin');
     } catch (err: any) {

@@ -31,14 +31,20 @@ def _find_invite(db: Session, raw_token: str):
 @router.get("/adjuster/{token}")
 def preview_adjuster_invitation(token: str, db: Session = Depends(get_db)):
     invite = _find_invite(db, token)
-    if not invite or invite.expires_at <= datetime.now(timezone.utc):
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation is invalid or expired.")
+    exp = invite.expires_at.replace(tzinfo=timezone.utc) if invite.expires_at.tzinfo is None else invite.expires_at
+    if exp <= datetime.now(timezone.utc):
         raise HTTPException(status_code=404, detail="Invitation is invalid or expired.")
     return {"valid": True, "name": invite.name, "email": invite.email, "specialization": invite.specialization, "expires_at": invite.expires_at.isoformat()}
 
 @router.post("/adjuster/accept")
 def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, db: Session = Depends(get_db)):
     invite = _find_invite(db, payload.token)
-    if not invite or invite.expires_at <= datetime.now(timezone.utc):
+    if not invite:
+        raise HTTPException(status_code=400, detail="Invitation is invalid or expired.")
+    exp = invite.expires_at.replace(tzinfo=timezone.utc) if invite.expires_at.tzinfo is None else invite.expires_at
+    if exp <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invitation is invalid or expired.")
     if payload.password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
@@ -80,9 +86,16 @@ def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Reque
             "amr": ["invite"],
         }
     )
+    from src.api.auth_routes import _issue_refresh_token
+    refresh_token = _issue_refresh_token(
+        db,
+        user,
+        auth_context={"mfa": False, "amr": ["invite"]},
+    )
     return {
         "accepted": True,
         "access_token": token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
         "message": "Account created and activated successfully.",

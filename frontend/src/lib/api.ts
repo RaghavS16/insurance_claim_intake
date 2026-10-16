@@ -57,6 +57,18 @@ class ApiClient {
             this.setToken(data.access_token, data.refresh_token);
             headers['Authorization'] = `Bearer ${data.access_token}`;
             const retryRes = await fetch(url, { ...options, headers });
+            if (!retryRes.ok) {
+              const errorData = await retryRes.json().catch(() => ({}));
+              let msg = `Request failed with status ${retryRes.status}`;
+              if (typeof errorData.detail === 'string') {
+                msg = errorData.detail;
+              } else if (Array.isArray(errorData.detail)) {
+                msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+              } else if (errorData.message) {
+                msg = errorData.message;
+              }
+              throw new Error(msg);
+            }
             return (await retryRes.json()) as T;
           }
         } catch {
@@ -119,6 +131,34 @@ class ApiClient {
 
   delete<T>(endpoint: string): Promise<T> {
     return this.request<T>(endpoint, { method: 'DELETE' });
+  }
+
+  async downloadFile(endpoint: string, filename: string): Promise<void> {
+    const url = `${API_BASE}${endpoint}`;
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      let msg = `Download failed with status ${res.status}`;
+      if (typeof err.detail === 'string') msg = err.detail;
+      else if (err.message) msg = err.message;
+      throw new Error(msg);
+    }
+
+    const blob = await res.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(blobUrl);
+    document.body.removeChild(a);
   }
 }
 

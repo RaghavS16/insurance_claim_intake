@@ -76,6 +76,8 @@ def get_bytes(key:str)->bytes:
             return p.read_bytes()
         raise
 
+download_bytes = get_bytes
+
 def delete_bytes(key: str) -> None:
     """Delete one private object after a successful durable handoff."""
     key = _safe_key(key)
@@ -88,6 +90,8 @@ def delete_bytes(key: str) -> None:
 
 
 def presigned_get(key:str,expires:int|None=None)->str:
+    if not settings.S3_BUCKET:
+        return f"/api/v1/adjuster/claims/evidence-file?key={key}"
     ttl=expires if expires is not None else settings.S3_PRESIGNED_URL_EXPIRE_SECONDS
     ttl=max(60,min(ttl,3600))
     return _client().generate_presigned_url("get_object",Params={"Bucket":settings.S3_BUCKET,"Key":_safe_key(key)},ExpiresIn=ttl)

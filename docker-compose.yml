@@ -202,14 +202,15 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-}
       S3_KMS_KEY_ID: ${S3_KMS_KEY_ID:-}
-      REQUIRE_S3_IN_PRODUCTION: ${REQUIRE_S3_IN_PRODUCTION:-true}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
+      REQUIRE_S3_IN_PRODUCTION: ${REQUIRE_S3_IN_PRODUCTION:-false}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-mailpit}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-no-reply@insurance-claims.local}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-IntelliClaim AI}
-      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
     command: ["python", "-m", "src.services.outbox_worker"]

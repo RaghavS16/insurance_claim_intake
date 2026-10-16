@@ -191,7 +191,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
         )
         db.add(record)
         db.flush()
-        queue_otp_email(
+        email_event = queue_otp_email(
             db,
             to_email=new_user.email,
             otp=verification_code,
@@ -199,10 +199,15 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             purpose="email_verification",
             event_key=f"email-verification:{new_user.id}:{record.id}",
         )
+        try:
+            if send_otp_email(to_email=new_user.email, otp=verification_code, full_name=new_user.full_name, purpose="email_verification"):
+                if email_event:
+                    email_event.status = "sent"
+                    email_event.processed_at = datetime.now(timezone.utc)
+        except Exception:
+            pass
     try:
         db.commit()
-        if verification_required:
-            send_otp_email(to_email=new_user.email, otp=verification_code, full_name=new_user.full_name, purpose="email_verification")
     except Exception:
         db.rollback()
         logger.exception("Failed to finalize claimant registration")
@@ -361,7 +366,7 @@ def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session
     )
     db.add(record)
     db.flush()
-    queue_otp_email(
+    event = queue_otp_email(
         db,
         to_email=user.email,
         otp=otp,
@@ -369,8 +374,14 @@ def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session
         purpose="email_verification",
         event_key=f"email-verification:{user.id}:{record.id}",
     )
+    try:
+        if send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="email_verification"):
+            if event:
+                event.status = "sent"
+                event.processed_at = datetime.now(timezone.utc)
+    except Exception:
+        pass
     db.commit()
-    send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="email_verification")
     return generic
 
 
@@ -427,7 +438,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     db.add(record)
     try:
         db.flush()
-        queue_otp_email(
+        event = queue_otp_email(
             db,
             to_email=user.email,
             otp=otp,
@@ -435,8 +446,14 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
             purpose="password_reset",
             event_key=f"password-reset:{user.id}:{record.id}",
         )
+        try:
+            if send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset"):
+                if event:
+                    event.status = "sent"
+                    event.processed_at = datetime.now(timezone.utc)
+        except Exception:
+            pass
         db.commit()
-        send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset")
     except Exception:
         db.rollback()
         logger.exception("Failed to queue password reset email for user %s", user.id)
@@ -465,7 +482,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 
     record = (
         db.query(PasswordResetOTP)
-        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.consumed == False)  # noqa: E712
+        .filter(PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id, PasswordResetOTP.purpose == "password_reset", PasswordResetOTP.consumed == False)  # noqa: E712
         .order_by(PasswordResetOTP.created_at.desc())
         .with_for_update()
         .first()

@@ -16,7 +16,8 @@ from sqlalchemy import select
 
 from src.config import settings
 from src.database.session import get_db
-from src.database.models import Claim, ConversationTurn, User
+from src.database.models import Claim, ConversationTurn, User, Policy
+from src.services.ai_governance import tenant_ai_guard
 from src.api.voice_ws import process_claimant_turn
 from src.agents.turn_processor import ClaimTurnConflict
 from src.utils.authorization import enforce_claim_ownership
@@ -79,9 +80,91 @@ def _resolve_user(request: Request, db: Session) -> User:
     return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
 
 
-def _claim_payload(claim: Claim) -> Dict[str, Any]:
+def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
+    evidence = (
+        db.query(ClaimEvidence)
+        .filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id)
+        .order_by(ClaimEvidence.created_at.desc())
+        .first()
+    )
+    return {
+        "id": row.id,
+        "claim_id": row.claim_id,
+        "adjuster_id": row.adjuster_id,
+        "request_text": row.request_text,
+        "notes": row.request_text,
+        "status": row.status,
+        "response_note": row.response_note,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
+        "evidence_id": str(evidence.id) if evidence else None,
+        "evidence_name": evidence.original_filename if evidence else None,
+    }
+
+
+def _claim_payload(claim: Claim, db: Optional[Session] = None) -> Dict[str, Any]:
     state = dict(getattr(claim, "pipeline_state", None) or {})
     readiness = dict(state.get("submission_readiness") or {})
+    extracted = dict(state.get("extracted_data") or {})
+
+    evidence_requests: list[dict[str, Any]] = []
+    pending_request: Optional[dict[str, Any]] = None
+    policy_row = None
+
+    if db is not None and claim.id:
+        req_rows = (
+            db.query(ClaimEvidenceRequest)
+            .filter(
+                ClaimEvidenceRequest.claim_id == claim.id,
+                ClaimEvidenceRequest.tenant_id == claim.tenant_id,
+            )
+            .order_by(ClaimEvidenceRequest.requested_at.desc())
+            .all()
+        )
+        evidence_requests = [_request_payload(r, db) for r in req_rows]
+        open_req = next((r for r in req_rows if r.status == "open"), None)
+        if open_req:
+            pending_request = {
+                "id": str(open_req.id),
+                "request_text": open_req.request_text,
+                "notes": open_req.request_text,
+                "status": open_req.status,
+                "requested_at": open_req.requested_at.isoformat() if open_req.requested_at else None,
+            }
+
+        pol_num = (
+            extracted.get("policy_id")
+            or (state.get("policy_verification") or {}).get("policy_number")
+            or claim.policy_id
+        )
+        if pol_num:
+            policy_row = (
+                db.query(Policy)
+                .filter(
+                    Policy.policy_number == str(pol_num).strip().upper(),
+                    Policy.tenant_id == claim.tenant_id,
+                )
+                .first()
+            )
+
+    policy_number = (
+        (policy_row.policy_number if policy_row else None)
+        or (state.get("policy_verification") or {}).get("policy_number")
+        or extracted.get("policy_id")
+        or claim.policy_id
+    )
+    coverage_amount = (
+        float(policy_row.coverage_amount)
+        if (policy_row and policy_row.coverage_amount is not None)
+        else (state.get("policy_verification") or {}).get("coverage_amount")
+    )
+    deductible = (
+        float(policy_row.deductible)
+        if (policy_row and policy_row.deductible is not None)
+        else (state.get("policy_verification") or {}).get("deductible")
+    )
+    assigned_adjuster = state.get("assigned_adjuster_name")
+
     return {
         "id": str(claim.id) if claim.id else None,
         "ticket_id": claim.ticket_id,
@@ -93,7 +176,7 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "event_description": claim.event_description,
         "event_location": claim.event_location,
         "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount is not None else None,
-        "extracted_data": state.get("extracted_data") or {},
+        "extracted_data": extracted,
         "extracted_fields": state.get("extracted_fields") or [],
         "missing_fields": state.get("missing_fields") or [],
         "dynamic_requirements": state.get("dynamic_requirements") or [],
@@ -111,6 +194,12 @@ def _claim_payload(claim: Claim) -> Dict[str, Any]:
         "submission_package": state.get("submission_package") or {},
         "requirements": state.get("requirements") or state.get("dynamic_requirements") or [],
         "submission_readiness": readiness,
+        "policy_number": policy_number,
+        "coverage_amount": coverage_amount,
+        "deductible": deductible,
+        "assigned_adjuster": assigned_adjuster,
+        "evidence_requests": evidence_requests,
+        "pending_request": pending_request,
         "created_at": claim.created_at.isoformat() if claim.created_at else None,
         "updated_at": claim.updated_at.isoformat() if claim.updated_at else None,
     }
@@ -371,67 +460,13 @@ def delete_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)
     return {"message": f"Claim #{ticket_id} was deleted.", "success": True}
 
 
-@router.patch("/{ticket_id}")
-def update_claim_session(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
-    """Update claim fields or session title."""
-    current_user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found.")
-    enforce_claim_ownership(claim, current_user)
-
-    state = dict(claim.pipeline_state or {})
-    extracted = dict(state.get("extracted_data") or {})
-
-    if payload.title is not None:
-        state["title"] = payload.title.strip()
-    if payload.policy_id is not None:
-        claim.policy_id = payload.policy_id
-        extracted["policy_id"] = payload.policy_id
-    if payload.insurance_type is not None:
-        claim.insurance_type = payload.insurance_type
-        extracted["insurance_type"] = payload.insurance_type
-    if payload.event_date is not None:
-        from datetime import datetime
-        try:
-            claim.event_date = datetime.strptime(payload.event_date, "%Y-%m-%d").date()
-            extracted["event_date"] = payload.event_date
-        except Exception:
-            pass
-    if payload.event_description is not None:
-        claim.event_description = payload.event_description
-        extracted["event_description"] = payload.event_description
-    if payload.event_location is not None:
-        claim.event_location = payload.event_location
-        extracted["event_location"] = payload.event_location
-    if payload.estimated_claim_amount is not None:
-        claim.estimated_claim_amount = payload.estimated_claim_amount
-        extracted["estimated_claim_amount"] = payload.estimated_claim_amount
-    if payload.extracted_data is not None:
-        extracted.update(payload.extracted_data)
-
-    state["extracted_data"] = extracted
-    claim.pipeline_state = state
-    from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(claim, "pipeline_state")
-
-    try:
-        db.commit()
-        db.refresh(claim)
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to update claim session %s", ticket_id)
-        raise HTTPException(status_code=500, detail="Failed to update claim session.")
-    return _claim_payload(claim)
-
-
 @router.get("/{ticket_id}")
 def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    return {**_claim_payload(claim), "conversation": _conversation_payload(db, claim)}
+    return {**_claim_payload(claim, db=db), "conversation": _conversation_payload(db, claim)}
 
 
 @router.post("/intake")
@@ -453,7 +488,7 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     except Exception as exc:
         logger.exception("Claim conversation processing failed")
         raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
-    return {**_claim_payload(claim), "message": result.get("next_question") or result.get("message", "")}
+    return {**_claim_payload(claim, db=db), "message": result.get("next_question") or result.get("message", "")}
 
 
 @router.post("/{ticket_id}/text-turn")
@@ -473,7 +508,7 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
         logger.exception("Text turn processing failed")
         raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {
-        **_claim_payload(claim),
+        **_claim_payload(claim, db=db),
         "agent_message": result.get("next_question") or result.get("message", ""),
         "grounded": bool(result.get("rag_answer_grounded") or (result.get("chat_retrieval") or {}).get("grounded")),
         "citation_status": result.get("rag_answer_status") or (result.get("chat_retrieval") or {}).get("status"),
@@ -696,6 +731,7 @@ async def respond_to_evidence_request(
     request_id: str,
     request: Request,
     response_note: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
 ):
@@ -711,7 +747,7 @@ async def respond_to_evidence_request(
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Evidence request is not open or does not belong to this claim.")
-    note_clean = (response_note or "").strip()
+    note_clean = (response_note or notes or "").strip()
     if not file and not note_clean:
         raise HTTPException(status_code=400, detail="Attach the requested evidence or add a response note.")
     evidence = None
@@ -741,6 +777,17 @@ async def respond_to_evidence_request(
             )
         except ValueError as exc:
             raise HTTPException(status_code=413, detail="Evidence file is too large.") from exc
+        analysis = await asyncio.to_thread(
+            verify_evidence,
+            content=content,
+            filename=file.filename or "evidence",
+            requested_evidence={"key": "adjuster_request", "label": row.request_text},
+            claim_context=dict(claim.pipeline_state or {}),
+        )
+        ver_status = str(analysis.get("status") or "REVIEW_REQUIRED").upper()
+        ver_conf = float(analysis.get("confidence") or 0.0) if analysis.get("confidence") is not None else None
+        doc_type = analysis.get("detected_document_type")
+
         evidence = ClaimEvidence(
             tenant_id=str(claim.tenant_id or ""),
             claim_id=str(claim.id),
@@ -751,11 +798,39 @@ async def respond_to_evidence_request(
             content_type=file.content_type or "application/octet-stream",
             size_bytes=len(content),
             status="uploaded",
-            verification_status="REVIEW_REQUIRED",
+            verification_status=ver_status,
+            verification_confidence=ver_conf,
+            detected_document_type=doc_type,
             requested_evidence_type="adjuster_request",
-            analysis_json={"request_text": row.request_text, "response_note": note_clean}
+            analysis_json={
+                "request_text": row.request_text,
+                "response_note": note_clean,
+                "verification": analysis,
+            }
         )
         db.add(evidence)
+        db.flush()
+
+        state = dict(claim.pipeline_state or {})
+        ev_list = list(state.get("evidence") or [])
+        ev_entry = {
+            "id": str(evidence.id),
+            "name": file.filename or "evidence",
+            "s3_uri": s3.get("uri") or f"s3://{settings.S3_BUCKET}/{s3['key']}",
+            "s3_key": s3["key"],
+            "content_type": file.content_type or "application/octet-stream",
+            "size": len(content),
+            "status": "uploaded",
+            "verification_status": ver_status.lower(),
+            "verification_confidence": ver_conf,
+            "detected_document_type": doc_type,
+            "request_id": str(row.id),
+        }
+        ev_list.append(ev_entry)
+        state["evidence"] = ev_list
+        claim.pipeline_state = state
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(claim, "pipeline_state")
     row.status = "responded"
     row.response_note = note_clean or None
     row.responded_at = datetime.now(timezone.utc)
@@ -1044,7 +1119,7 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
 
 @router.patch("/{ticket_id}")
 def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: Request, db: Session = Depends(get_db)):
-    """Apply a claimant correction and invalidate dependent verification/RAG state."""
+    """Apply a claimant correction or session title update and sync canonical fields."""
     current_user = _resolve_user(request, db)
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim:
@@ -1053,17 +1128,41 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
 
     state = dict(claim.pipeline_state or {})
     extracted = dict(state.get("extracted_data") or {})
-    allowed_baseline = {
-        "policy_id", "insurance_type", "event_date",
-        "event_description", "event_location", "estimated_claim_amount",
-    }
 
+    # Check if this is ONLY a title update
+    is_title_only = (
+        payload.title is not None
+        and payload.policy_id is None
+        and payload.insurance_type is None
+        and payload.event_date is None
+        and payload.event_description is None
+        and payload.event_location is None
+        and payload.estimated_claim_amount is None
+        and not payload.extracted_data
+    )
+
+    if payload.title is not None:
+        state["title"] = payload.title.strip()
+
+    if is_title_only:
+        claim.pipeline_state = state
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(claim, "pipeline_state")
+        db.commit()
+        db.refresh(claim)
+        return _claim_payload(claim, db=db)
+
+    # Accept edits to ANY dynamic field in extracted_data
     if payload.extracted_data:
         for key, value in payload.extracted_data.items():
-            if key in allowed_baseline:
-                extracted[key] = value
-    for field in allowed_baseline:
-        value = getattr(payload, field)
+            extracted[key] = value
+
+    canonical_fields = [
+        "policy_id", "insurance_type", "event_date",
+        "event_description", "event_location", "estimated_claim_amount",
+    ]
+    for field in canonical_fields:
+        value = getattr(payload, field, None)
         if value is not None:
             extracted[field] = value
 
@@ -1086,28 +1185,40 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
     state["conversation_phase"] = "source_of_truth_intake"
     state["conversation_status"] = "collecting"
     state["next_question_field"] = None
-    state["next_question"] = "I updated that detail. I’ll re-check the claim requirements and coverage from the corrected information.";
+    state["next_question"] = "I updated that detail. I’ll re-check the claim requirements and coverage from the corrected information."
     state["message"] = state["next_question"]
 
     claim.pipeline_state = state
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(claim, "pipeline_state")
+
     if claim.status == "verified":
         claim.status = "draft"
-    claim.insurance_type = extracted.get("insurance_type")
-    claim.event_description = extracted.get("event_description")
-    claim.event_location = extracted.get("event_location")
-    claim.estimated_claim_amount = extracted.get("estimated_claim_amount")
+    if extracted.get("policy_id"):
+        claim.policy_id = extracted.get("policy_id")
+    if extracted.get("insurance_type"):
+        claim.insurance_type = extracted.get("insurance_type")
+    if extracted.get("event_description"):
+        claim.event_description = extracted.get("event_description")
+    if extracted.get("event_location"):
+        claim.event_location = extracted.get("event_location")
+    if extracted.get("estimated_claim_amount") is not None:
+        try:
+            claim.estimated_claim_amount = float(extracted["estimated_claim_amount"])
+        except (ValueError, TypeError):
+            pass
     if extracted.get("event_date"):
         from datetime import datetime
         try:
             claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
         except ValueError:
             raise HTTPException(status_code=400, detail="event_date must use YYYY-MM-DD format.")
-    else:
+    elif "event_date" in extracted and extracted["event_date"] is None:
         claim.event_date = None
 
     db.commit()
     db.refresh(claim)
-    return {**_claim_payload(claim), "agent_message": state["next_question"]}
+    return {**_claim_payload(claim, db=db), "agent_message": state["next_question"]}
 
 
 @router.post("/message/{ticket_id}")

@@ -133,6 +133,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         { label: 'Claims Oversight', href: '/admin/claims', icon: FolderOpen },
         { label: 'Adjusters Management', href: '/admin/adjusters', icon: Users },
         { label: 'Policies Management', href: '/admin/policies', icon: ShieldCheck },
+        { label: 'Knowledge Base (RAG)', href: '/adjuster/knowledge', icon: BookOpen },
         { label: 'System Audit Trail', href: '/admin/audit', icon: Activity },
       ];
     }

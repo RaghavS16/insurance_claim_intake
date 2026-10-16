@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
-from src.database.models import Adjuster, Policy, User
+from src.database.models import Adjuster, Policy, User, Claim
 from src.utils.auth import get_password_hash
 from src.utils.validators import (
     validate_email,
@@ -88,6 +88,7 @@ class UpdatePolicyRequest(BaseModel):
     policyholder_dob: Optional[str] = Field(None, description="DOB YYYY-MM-DD")
     policyholder_phone: Optional[str] = Field(None, max_length=20, description="Full phone number")
     policyholder_phone_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of phone")
+    policyholder_email: Optional[str] = Field(None, max_length=254, description="Optional policyholder email")
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +534,102 @@ def delete_adjuster(
     }
 
 
+@router.get("/dashboard")
+def get_admin_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Provide high-level enterprise metrics for the admin dashboard."""
+    admin = _require_admin(request, db)
+    tenant_id = admin.tenant_id
+
+    # 1. Policies
+    policy_query = db.query(Policy).filter(Policy.tenant_id == tenant_id)
+    total_policies = policy_query.count()
+    today = date.today()
+    active_policies = db.query(Policy).filter(
+        Policy.tenant_id == tenant_id,
+        (Policy.is_active == True) | (Policy.is_active.is_(None)),
+        (Policy.expiry_date.is_(None)) | (Policy.expiry_date >= today),
+    ).count()
+    linked_policies = db.query(Policy).filter(
+        Policy.tenant_id == tenant_id,
+        Policy.customer_id.isnot(None),
+    ).count()
+
+    # 2. Claims
+    claim_query = db.query(Claim).filter(Claim.tenant_id == tenant_id)
+    total_claims = claim_query.count()
+    claims_all = claim_query.all()
+    stage_counts: Dict[str, int] = {
+        "draft": 0,
+        "submitted": 0,
+        "under_review": 0,
+        "approved": 0,
+        "rejected": 0,
+        "settled": 0,
+    }
+    for c in claims_all:
+        st = (c.status or "draft").lower()
+        if st in stage_counts:
+            stage_counts[st] += 1
+        else:
+            stage_counts[st] = stage_counts.get(st, 0) + 1
+
+    # 3. Settlement Volume
+    approved_volume = 0.0
+    approved_count = stage_counts.get("approved", 0) + stage_counts.get("settled", 0)
+    try:
+        from src.database.hardening_models import ClaimDecision
+        decisions = db.query(ClaimDecision).filter(
+            ClaimDecision.tenant_id == tenant_id,
+            ClaimDecision.decision.in_(["approve", "approved"]),
+        ).all()
+        if decisions:
+            approved_volume = sum(float(d.approved_amount or 0) for d in decisions)
+            approved_count = len(decisions)
+    except Exception:
+        pass
+
+    if approved_volume == 0.0:
+        approved_volume = sum(
+            float(c.estimated_claim_amount or 0)
+            for c in claims_all
+            if (c.status or "").lower() in ["approved", "settled"]
+        )
+
+    # 4. Adjusters & Workload Capacity
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == tenant_id).all()
+    total_adjusters = len(adjusters)
+    active_adjusters = sum(1 for a in adjusters if a.is_active)
+    total_claims_assigned = sum(int(a.claims_assigned or 0) for a in adjusters)
+    total_capacity = active_adjusters * 10
+    workload_utilization = round((total_claims_assigned / total_capacity * 100), 1) if total_capacity > 0 else 0.0
+
+    return {
+        "policies": {
+            "total": total_policies,
+            "active": active_policies,
+            "linked": linked_policies,
+        },
+        "claims": {
+            "total": total_claims,
+            "stages": stage_counts,
+        },
+        "settlement": {
+            "approved_volume": round(approved_volume, 2),
+            "approved_count": approved_count,
+        },
+        "workload": {
+            "total_adjusters": total_adjusters,
+            "active_adjusters": active_adjusters,
+            "assigned_claims": total_claims_assigned,
+            "capacity": total_capacity,
+            "utilization_pct": workload_utilization,
+        },
+    }
+
+
 @router.get("/policies")
 def list_all_policies(
     request: Request,
@@ -579,6 +676,7 @@ def list_all_policies(
             "policyholder_phone": p.policyholder_phone,
             "is_linked": p.customer_id is not None,
             "customer_id": p.customer_id if p.customer_id else None,
+            "policyholder_email": getattr(p, "policyholder_email", None),
             "linked_at": linked_at_val.isoformat() if linked_at_val else None,
             "link_attempts": p.link_attempts,
         })
@@ -708,6 +806,10 @@ def update_policy(
     if payload.policyholder_phone_last4 is not None:
         policy.policyholder_phone_last4 = payload.policyholder_phone_last4.strip()  # type: ignore[assignment]
 
+    if payload.policyholder_email is not None:
+        pem = payload.policyholder_email.strip()
+        policy.policyholder_email = pem or None  # type: ignore[assignment]
+
     db_commit_or_500(
         db, logger,
         "Failed to update policy in database.",
@@ -783,3 +885,35 @@ def list_system_audit_events(
             for row in rows
         ]
     }
+
+
+@router.get("/dashboard")
+def get_admin_dashboard(request: Request, db: Session = Depends(get_db)):
+    """Admin dashboard metrics showing active policies, claims by stage, settlement volume, and active adjusters."""
+    admin = _require_admin(request, db)
+    total_active_policies = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id, Policy.is_active == True).count()
+    linked_policies = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id, Policy.customer_id.isnot(None)).count()
+
+    claims = db.query(Claim).filter(Claim.tenant_id == admin.tenant_id).all()
+    stages: dict[str, int] = {}
+    total_settlement = 0.0
+    for c in claims:
+        st = c.status or "draft"
+        stages[st] = stages.get(st, 0) + 1
+        if st in ("approved", "settled", "paid"):
+            total_settlement += float(c.estimated_amount or 0.0)
+
+    adjusters = db.query(Adjuster).filter(Adjuster.tenant_id == admin.tenant_id).all()
+    active_adjusters = sum(1 for a in adjusters if a.is_active)
+    total_assigned = sum(a.claims_assigned or 0 for a in adjusters)
+
+    return {
+        "total_active_policies": total_active_policies,
+        "linked_policies_count": linked_policies,
+        "total_claims": len(claims),
+        "claims_by_stage": stages,
+        "approved_settlement_volume": total_settlement,
+        "active_adjusters": active_adjusters,
+        "total_assigned_workload": total_assigned,
+    }
+

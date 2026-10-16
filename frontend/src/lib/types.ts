@@ -23,6 +23,8 @@ export interface Policy {
   policyholder_dob?: string | null;
   policyholder_phone?: string | null;
   policyholder_phone_last4?: string | null;
+  policyholder_email?: string | null;
+  is_linked?: boolean;
   linked_at?: string | null;
 }
 

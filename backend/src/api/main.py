@@ -201,7 +201,28 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("REDIS_URL is required in production/staging.")
     else:
         _init_db_schema()
+
+    outbox_task = None
+    if getattr(settings, "RUN_EMBEDDED_OUTBOX_WORKER", True):
+        try:
+            import asyncio
+            from src.services.outbox_worker import run_worker
+            from src.services.outbox_handlers import HANDLERS
+            outbox_task = asyncio.create_task(run_worker(HANDLERS, poll_seconds=5.0))
+            logger.info("Embedded outbox worker started.")
+        except Exception as exc:
+            logger.warning("Could not start embedded outbox worker: %s", exc)
+
     yield
+
+    if outbox_task:
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        logger.info("Embedded outbox worker stopped.")
+
     # Graceful shutdown: dispose connection pool
     dispose_engine()
     logger.info("Application shutdown complete.")

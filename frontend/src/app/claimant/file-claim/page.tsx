@@ -44,10 +44,9 @@ function FileClaimContent() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const liveTranscribeIntervalRef = useRef<any>(null);
-  const isTranscribingChunkRef = useRef(false);
 
   const [ticketId, setTicketId] = useState<string>(queryTicketId || '');
+  const [claimData, setClaimData] = useState<any>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -121,6 +120,7 @@ function FileClaimContent() {
         .then((claim) => {
           if (claim && claim.ticket_id) {
             setTicketId(claim.ticket_id);
+            setClaimData(claim);
             if (claim.policy_id) setSelectedPolicyNumber(claim.policy_id);
 
             if (Array.isArray(claim.conversation) && claim.conversation.length > 0) {
@@ -195,10 +195,6 @@ function FileClaimContent() {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
-    }
-    if (liveTranscribeIntervalRef.current) {
-      clearInterval(liveTranscribeIntervalRef.current);
-      liveTranscribeIntervalRef.current = null;
     }
     if (recognitionRef.current) {
       try {
@@ -360,34 +356,6 @@ function FileClaimContent() {
         console.debug('SpeechRecognition start failed, relying on Whisper:', err);
       }
     }
-
-    // 3. Periodic real-time background chunk transcription (every 1.5s) to guarantee live updates even if Web Speech API fails
-    liveTranscribeIntervalRef.current = setInterval(async () => {
-      if (audioChunksRef.current.length > 0 && !isTranscribingChunkRef.current) {
-        const recorder = mediaRecorderRef.current;
-        if (!recorder || recorder.state === 'inactive') return;
-        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        if (blob.size > 2000) {
-          isTranscribingChunkRef.current = true;
-          try {
-            const formData = new FormData();
-            formData.append('file', blob, 'chunk.webm');
-            const res = await api.post<{ text: string }>('/api/v1/voice/transcribe', formData);
-            if (res.text && res.text.trim()) {
-              const trimmed = res.text.trim();
-              setLiveTranscript(trimmed);
-              liveTranscriptRef.current = trimmed;
-              setInputTurn(trimmed);
-              startSilenceTimer();
-            }
-          } catch {
-            // quiet fallback
-          } finally {
-            isTranscribingChunkRef.current = false;
-          }
-        }
-      }
-    }, 1500);
   };
 
   // Send turn (text or voice) to backend
@@ -404,6 +372,7 @@ function FileClaimContent() {
         });
         activeTicket = session.ticket_id;
         setTicketId(session.ticket_id);
+        setClaimData(session);
         window.history.replaceState(null, '', `/claimant/file-claim?ticket_id=${session.ticket_id}`);
       } catch (e: any) {
         showToast(e.message || 'Failed to start intake session.', 'error');
@@ -425,6 +394,7 @@ function FileClaimContent() {
 
     try {
       const res = await api.post<any>(`/api/v1/claims/${activeTicket}/text-turn`, { text });
+      setClaimData(res);
 
       const replyText =
         res.agent_message ||
@@ -461,6 +431,7 @@ function FileClaimContent() {
         }
       }
       setTicketId('');
+      setClaimData(null);
       setMessages([
         {
           id: `welcome-${Date.now()}`,
@@ -536,73 +507,154 @@ function FileClaimContent() {
       activeTitle="Conversational Claim Intake"
       hideRightDrawer
     >
-      {/* Full-Width Chat Container: Utilizes entire left and right space */}
+      {/* Top Bar Policy Selector */}
       <div
         style={{
-          width: '100%',
-          maxWidth: '100%',
-          margin: 0,
           display: 'flex',
-          flexDirection: 'column',
-          height: 'calc(100vh - 170px)',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 12,
+          padding: '10px 16px',
+          backgroundColor: '#FFFFFF',
+          borderRadius: 12,
+          border: '1px solid #E5E7EB',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
+          <ShieldCheck size={18} color="#007AFF" />
+          <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>
+            Filing Against Policy:
+          </span>
+          <select
+            className="snow-select"
+            style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #D1D5DB', fontSize: 13, minWidth: 260 }}
+            value={selectedPolicyNumber}
+            onChange={(e) => setSelectedPolicyNumber(e.target.value)}
+          >
+            <option value="">-- No Specific Policy (General Inquiry / Auto-Resolve) --</option>
+            {userPolicies.map((p) => (
+              <option key={p.policy_number} value={p.policy_number}>
+                {p.policy_number} — {p.policy_type?.toUpperCase()} (Limit: ${Number(p.coverage_amount || 0).toLocaleString()})
+              </option>
+            ))}
+          </select>
+        </div>
+        {ticketId && (
+          <div className="snow-caption" style={{ color: '#6B7280' }}>
+            Claim Ticket: <strong style={{ color: '#111827' }}>#{ticketId}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* 2-Column Responsive Layout: Chat + Live Claim Dossier */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1.2fr)',
+          gap: 16,
+          height: 'calc(100vh - 220px)',
           minHeight: 520,
         }}
       >
-
-        {/* Messages Scroll Area */}
+        {/* Left Column: Chat Messages & Input */}
         <div
-          className="snow-card"
           style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: 24,
             display: 'flex',
             flexDirection: 'column',
-            gap: 16,
-            marginBottom: 14,
-            borderRadius: 16,
+            height: '100%',
+            minWidth: 0,
           }}
         >
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={
-                m.speaker === 'user' ? 'snow-chat-bubble-user' : 'snow-chat-bubble-assistant'
-              }
-              style={{ position: 'relative' }}
-            >
-              <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{m.text}</div>
+          {/* Messages Scroll Area */}
+          <div
+            className="snow-card"
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: 24,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+              marginBottom: 14,
+              borderRadius: 16,
+            }}
+          >
+            {messages.map((m) => (
               <div
-                className="snow-flex snow-justify-between snow-items-center"
-                style={{
-                  marginTop: 6,
-                  opacity: 0.75,
-                  fontSize: 11,
-                }}
+                key={m.id}
+                className={
+                  m.speaker === 'user' ? 'snow-chat-bubble-user' : 'snow-chat-bubble-assistant'
+                }
+                style={{ position: 'relative' }}
               >
-                <span className="snow-micro">{m.time}</span>
-                {m.speaker === 'assistant' && (
-                  <button
-                    type="button"
-                    onClick={() => speakText(m.text)}
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{m.text}</div>
+                {/* Safe Citation Rendering (handling strings & object citations) */}
+                {m.speaker === 'assistant' && m.citations && m.citations.length > 0 && (
+                  <div
                     style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: '#71717A',
-                      padding: '2px 4px',
+                      marginTop: 8,
+                      paddingTop: 6,
+                      borderTop: '1px solid rgba(0,0,0,0.06)',
                       display: 'flex',
-                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 6,
                     }}
-                    title="Speak message aloud"
                   >
-                    <Volume2 size={13} />
-                  </button>
+                    {m.citations.map((cite: any, idx: number) => {
+                      const label =
+                        typeof cite === 'string'
+                          ? cite
+                          : (cite.citation_label || cite.source_name || cite.claim || cite.source_id || JSON.stringify(cite));
+                      return (
+                        <span
+                          key={idx}
+                          style={{
+                            fontSize: 11,
+                            backgroundColor: '#EFF6FF',
+                            color: '#1D4ED8',
+                            border: '1px solid #DBEAFE',
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            fontWeight: 500,
+                          }}
+                        >
+                          📖 {label}
+                        </span>
+                      );
+                    })}
+                  </div>
                 )}
-                {/* Note: Delete message buttons removed per FIX 3 */}
+                <div
+                  className="snow-flex snow-justify-between snow-items-center"
+                  style={{
+                    marginTop: 6,
+                    opacity: 0.75,
+                    fontSize: 11,
+                  }}
+                >
+                  <span className="snow-micro">{m.time}</span>
+                  {m.speaker === 'assistant' && (
+                    <button
+                      type="button"
+                      onClick={() => speakText(m.text)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: '#71717A',
+                        padding: '2px 4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                      title="Speak message aloud"
+                    >
+                      <Volume2 size={13} />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
 
           {/* Real-Time Live Transcribing Speech Bubble (on user's right side) */}
           {isVoiceActive && (
@@ -796,6 +848,103 @@ function FileClaimContent() {
           )}
         </div>
       </div>
+
+      {/* Right Column: Live Claim Dossier Panel */}
+      <div
+        className="snow-card"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          padding: 18,
+          borderRadius: 16,
+          overflowY: 'auto',
+          backgroundColor: '#FFFFFF',
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #F3F4F6', paddingBottom: 10 }}>
+          <div className="snow-body" style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>
+            Live Claim Dossier
+          </div>
+          {claimData?.status && (
+            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, backgroundColor: '#E0F2FE', color: '#0369A1' }}>
+              {claimData.status.toUpperCase()}
+            </span>
+          )}
+        </div>
+
+        {/* Canonical Summary */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Policy</span>
+            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+              {claimData?.policy_number || claimData?.extracted_data?.policy_id || selectedPolicyNumber || 'Pending'}
+            </div>
+          </div>
+          <div>
+            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Coverage Type</span>
+            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+              {claimData?.insurance_type || claimData?.extracted_data?.insurance_type || 'Resolving...'}
+            </div>
+          </div>
+          <div>
+            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Incident Date</span>
+            <div className="snow-body" style={{ fontSize: 12 }}>
+              {claimData?.event_date || claimData?.extracted_data?.event_date || 'Awaiting'}
+            </div>
+          </div>
+          <div>
+            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Est. Amount</span>
+            <div className="snow-body" style={{ fontSize: 12, fontWeight: 600 }}>
+              {claimData?.estimated_claim_amount ? `$${Number(claimData.estimated_claim_amount).toLocaleString()}` : (claimData?.extracted_data?.estimated_claim_amount ? `$${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString()}` : '—')}
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic RAG Requirements & Questionnaire Fields */}
+        <div style={{ marginTop: 6 }}>
+          <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+            Loss Specifics & Verification Answers
+          </span>
+          {(() => {
+            const ext = claimData?.extracted_data || {};
+            const entries = Object.entries(ext).filter(([k]) => !['policy_id', 'insurance_type', 'event_date', 'event_location', 'event_description', 'estimated_claim_amount'].includes(k));
+            if (entries.length === 0) {
+              return (
+                <div style={{ padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8, color: '#6B7280', fontSize: 12, textAlign: 'center' }}>
+                  Answer the AI assistant's questions to populate loss specifics.
+                </div>
+              );
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {entries.map(([k, v]) => (
+                  <div key={k} style={{ padding: '6px 10px', backgroundColor: '#F9FAFB', borderRadius: 6, border: '1px solid #F3F4F6' }}>
+                    <span className="snow-micro" style={{ color: '#6B7280', textTransform: 'capitalize' }}>
+                      {k.replace(/_/g, ' ')}
+                    </span>
+                    <div className="snow-caption" style={{ fontWeight: 600, color: '#1F2937' }}>
+                      {typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Policy Details */}
+        {(claimData?.coverage_amount || claimData?.deductible) && (
+          <div style={{ padding: 10, backgroundColor: '#F0FDF4', borderRadius: 8, border: '1px solid #DCFCE7' }}>
+            <div className="snow-micro" style={{ color: '#166534', fontWeight: 600 }}>Underwriting Bounds</div>
+            <div className="snow-caption" style={{ color: '#15803D', marginTop: 2 }}>
+              Limit: ${Number(claimData.coverage_amount || 0).toLocaleString()} • Deductible: ${Number(claimData.deductible || 0).toLocaleString()}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
 
       {/* Evidence Upload Modal */}
       <Modal

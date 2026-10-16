@@ -145,6 +145,11 @@ def _single_intake_follow_up(state: ClaimState) -> str:
         if hint:
             return str(hint).strip()
         return f"Please upload {str(evidence[0].get('label') or 'the required supporting document').lower()} when ready."
+    missing = list(state.get("missing_fields") or [])
+    if missing:
+        f = missing[0]
+        label = "policy number" if f in ("policy_id", "policy_number") else f.replace("_", " ")
+        return f"Could you provide your {label}?"
     return ""
 
 
@@ -166,6 +171,16 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
     state["rag_answer_status"] = None
 
     if state.get("_skip_all") or not _looks_like_question(state):
+        return state
+
+    prior_rag = state.get("rag_reply")
+    if isinstance(prior_rag, dict) and prior_rag.get("answer"):
+        state["rag_answer"] = str(prior_rag.get("answer") or "").strip()
+        state["rag_answer_sources"] = list(prior_rag.get("sources") or [])
+        state["rag_answer_grounded"] = bool(prior_rag.get("grounded", True))
+        state["rag_answer_query"] = str(prior_rag.get("query") or state.get("last_user_utterance") or "").strip()
+        state["rag_answer_status"] = prior_rag.get("status") or "OK"
+        state["_rag_question_only"] = not _claim_intake_context_requested(state)
         return state
 
     from datetime import date
@@ -292,11 +307,6 @@ def _dynamic_fallback(state: ClaimState) -> str:
     return _natural_fallback(list(state.get("missing_fields", [])), data)
 
 
-def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
-    if state.get("_skip_all") or state.get("_rag_question_only"):
-        return state
-
-    # Requirement planning is available as soon as an insurance type is known.
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
     if state.get("_skip_all") or state.get("_rag_question_only"):
         return state

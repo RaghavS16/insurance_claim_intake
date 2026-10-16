@@ -48,9 +48,9 @@ function ResetPasswordContent() {
 
     try {
       await api.post('/api/v1/auth/reset-password', {
-        email,
-        token,
+        reset_token: token,
         new_password: password,
+        confirm_password: repeatPassword,
       });
       showToast('Password updated! You can now sign in.', 'success');
       router.push('/signin');

@@ -16,9 +16,10 @@ from src.database.models import Claim, User, VoiceSession
 from src.database.session import SessionLocal, get_db
 from src.utils.production_security import authenticate_token
 from src.utils.authorization import enforce_claim_ownership
-from src.utils.logger import app_logger
 from src.voice.pipecat import SmallWebRTCConnection
 from src.voice.session_manager import voice_session_manager
+from src.utils.upload_limits import read_limited
+from src.utils.logger import app_logger
 
 router = APIRouter(prefix="/api/v1/voice", tags=["Voice"])
 logger = app_logger
@@ -222,7 +223,12 @@ async def voice_process_turn(
         "voice",
         turn_count,
     )
-    agent_reply = result.get("agent_reply") or "I have processed your claim details."
+    agent_reply = (
+        result.get("next_question")
+        or result.get("message")
+        or result.get("agent_reply")
+        or "I have processed your claim details."
+    )
 
     await voice_session_manager.events.publish(
         ticket_id,
@@ -270,16 +276,19 @@ async def transcribe_audio_file(
     import os
 
     suffix = os.path.splitext(file.filename or "")[1] or ".webm"
+    content = await read_limited(file, settings.MAX_UPLOAD_SIZE_BYTES)
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp_path = tmp.name
-        content = await file.read()
         tmp.write(content)
 
-    try:
+    def _run_transcribe(path: str):
         engine = _get_whisper_engine()
-        segments, info = engine.transcribe(tmp_path, beam_size=1, language="en")
+        segments, info = engine.transcribe(path, beam_size=1, language="en")
         text = " ".join([seg.text.strip() for seg in segments]).strip()
         return {"text": text, "language": getattr(info, "language", "en")}
+
+    try:
+        return await asyncio.to_thread(_run_transcribe, tmp_path)
     except Exception as exc:
         logger.exception("Voice audio transcription error")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(exc)}")

@@ -11,6 +11,7 @@ def build_readiness(
     evidence_rows: Iterable[Any] = (),
     exceptions: Iterable[Any] = (),
     claimant_confirmation: bool | None = None,
+    rag_status: str | None = None,
 ) -> dict[str, Any]:
     return calculate_readiness(
         requirements=requirements,
@@ -18,4 +19,5 @@ def build_readiness(
         evidence_rows=evidence_rows,
         exceptions=exceptions,
         claimant_confirmation=claimant_confirmation,
+        rag_status=rag_status,
     ).as_dict()

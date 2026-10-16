@@ -21,18 +21,42 @@ class Requirement(BaseModel):
     source_chunk_ids: list[str] = Field(default_factory=list)
     source_excerpt: str | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)
+    canonical_role: str | None = None
+    citation_label: str | None = None
 
 class RequirementPlan(BaseModel):
     requirements: list[Requirement] = Field(default_factory=list)
     rationale: str = ""
 
 
+def tag_canonical_role(item: dict[str, Any]) -> str | None:
+    role = item.get("canonical_role")
+    if role:
+        return role
+    key = str(item.get("key") or "").lower()
+    label = str(item.get("label") or "").lower()
+    if any(k in key or k in label for k in ("policy_id", "policy_number", "policy_no", "certificate_number")):
+        return "policy_id"
+    if any(k in key or k in label for k in ("insurance_type", "coverage_type", "claim_type", "policy_type")):
+        return "insurance_type"
+    if any(k in key or k in label for k in ("admission_date", "date_of_accident", "date_of_loss", "event_date", "incident_date", "loss_date")):
+        return "event_date"
+    if any(k in key or k in label for k in ("event_location", "accident_location", "place_of_incident", "loss_location", "hospital_location", "location")):
+        return "event_location"
+    if any(k in key or k in label for k in ("event_description", "incident_description", "loss_description", "description_of_accident", "nature_of_illness")):
+        return "event_description"
+    if any(k in key or k in label for k in ("estimated_claim_amount", "claimed_amount", "estimate_amount", "loss_amount", "repair_estimate", "claimed_hospital_bill", "hospital_bill")):
+        return "estimated_claim_amount"
+    return None
+
+
 def get_requirements_from_context(
-    llm,
+    llm=None,
     *,
-    insurance_type: str,
-    policy_context: list[dict],
-    regulatory_context: list[dict],
+    insurance_type: str = "general",
+    policy_context: list[dict] | None = None,
+    regulatory_context: list[dict] | None = None,
+    chunks: list[dict] | None = None,
     incident_description: str = "",
     intake_channel: str = "insurer_web_portal",
     intake_started_at: str | None = None,
@@ -42,8 +66,14 @@ def get_requirements_from_context(
     **kwargs: Any,
 ) -> list[dict]:
     """Dynamically determine follow-up information and evidence requirements from RAG documents."""
+    if policy_context is None and chunks is not None:
+        policy_context = chunks
+    if regulatory_context is None:
+        regulatory_context = []
     if not policy_context and not regulatory_context:
         return []
+    if llm is None:
+        llm = get_configured_llm()
 
     def _prompt_context(rows: list[dict]) -> list[dict]:
         # Policy manifests are compiled document-wide. For the fallback semantic

@@ -48,15 +48,20 @@ export default function SignUpPage() {
     setLoading(true);
 
     try {
-      await api.post('/api/v1/auth/signup', {
+      const res = await api.post<any>('/api/v1/auth/signup', {
         full_name: fullName,
         email,
         phone,
         password,
         confirm_password: repeatPassword,
       });
-      showToast('Account created! Please verify your email.', 'success');
-      router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+      if (res?.email_verification_required === true) {
+        showToast('Account created! Please verify your email.', 'success');
+        router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+      } else {
+        showToast('Account created! You can now sign in.', 'success');
+        router.push('/signin');
+      }
     } catch (err: any) {
       const msg = err.message || 'Registration failed. Please check your information.';
       setError(msg);
@@ -145,9 +150,10 @@ export default function SignUpPage() {
 
             <Input
               type="tel"
-              placeholder="Phone (optional)"
+              placeholder="Phone Number"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              required
             />
 
             <Input

@@ -72,7 +72,7 @@ def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     msg["To"] = to_email
 
     is_mailpit = getattr(settings, "EMAIL_BACKEND", "mailpit").lower() == "mailpit"
-    host = "127.0.0.1" if is_mailpit else (settings.SMTP_HOST or "127.0.0.1")
+    host = settings.SMTP_HOST or "127.0.0.1"
     port = 1025 if is_mailpit else (settings.SMTP_PORT or 587)
     use_tls = False if is_mailpit else bool(settings.SMTP_USE_TLS)
     smtp_username = (settings.SMTP_USERNAME or "").strip() if not is_mailpit else ""

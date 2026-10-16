@@ -9,6 +9,7 @@ from collections import defaultdict
 from fastapi import HTTPException
 
 from src.config import settings
+from src.services.observability import record_ai_rejection
 
 _local_windows: dict[str, list[float]] = defaultdict(list)
 _local_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -148,15 +149,14 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
             raise
         yield
     finally:
-        if not acquired:
-            return
-        if acquired_locally:
-            async with _local_locks[lock_key]:
-                _local_concurrency[lock_key] = max(0, _local_concurrency[lock_key] - 1)
-        elif settings.REDIS_URL:
-            client = await _redis_client()
-            if client is not None:
-                try:
-                    await client.decr(lock_key)
-                finally:
-                    await client.close()
+        if acquired:
+            if acquired_locally:
+                async with _local_locks[lock_key]:
+                    _local_concurrency[lock_key] = max(0, _local_concurrency[lock_key] - 1)
+            elif settings.REDIS_URL:
+                client = await _redis_client()
+                if client is not None:
+                    try:
+                        await client.decr(lock_key)
+                    finally:
+                        await client.close()

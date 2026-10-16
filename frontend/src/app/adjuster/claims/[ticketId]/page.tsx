@@ -60,6 +60,8 @@ export default function AdjusterClaimWorkspacePage({
   const [copilotInput, setCopilotInput] = useState('');
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotChats, setCopilotChats] = useState<CopilotChat[]>([]);
+  const [copilotSynopsis, setCopilotSynopsis] = useState<any>(null);
+  const [fetchingCopilot, setFetchingCopilot] = useState(false);
 
   // Decision Modal
   const [decisionModalOpen, setDecisionModalOpen] = useState(false);
@@ -124,9 +126,22 @@ export default function AdjusterClaimWorkspacePage({
     }
   };
 
+  const fetchCopilotSynopsis = async () => {
+    setFetchingCopilot(true);
+    try {
+      const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/copilot`);
+      setCopilotSynopsis(res?.copilot || res);
+    } catch (err: any) {
+      console.debug('Copilot synopsis fetch non-fatal:', err);
+    } finally {
+      setFetchingCopilot(false);
+    }
+  };
+
   useEffect(() => {
     loadClaim();
     loadAuditEvents();
+    fetchCopilotSynopsis();
   }, [ticketId]);
 
   const handleCopilotSend = async (suggested?: string) => {
@@ -147,7 +162,7 @@ export default function AdjusterClaimWorkspacePage({
       const reply: CopilotChat = {
         id: `c-${Date.now()}`,
         sender: 'copilot',
-        text: res.reply || res.text || 'Copilot completed analysis for this claim.',
+        text: res.answer || res.reply || res.text || 'Copilot completed analysis for this claim.',
         citations: res.citations || [],
       };
       setCopilotChats((prev) => [...prev, reply]);
@@ -347,6 +362,101 @@ export default function AdjusterClaimWorkspacePage({
             {/* Loss Package Tab */}
             {activeTab === 'facts' && (
               <div className="snow-flex-col snow-gap-4">
+                {/* AI Copilot Claims Synopsis Card */}
+                <Card
+                  title="AI Copilot Claims Synopsis & Adjudication Recommendation"
+                  action={
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={fetchCopilotSynopsis}
+                      disabled={fetchingCopilot}
+                      icon={<Sparkles size={14} color="#7C3AED" />}
+                    >
+                      {fetchingCopilot ? 'Analyzing...' : 'Refresh AI Analysis'}
+                    </Button>
+                  }
+                >
+                  {copilotSynopsis ? (
+                    <div className="snow-flex-col snow-gap-3">
+                      <div style={{ padding: '12px 14px', backgroundColor: '#F5F3FF', borderRadius: 10, border: '1px solid #DDD6FE' }}>
+                        <div className="snow-caption" style={{ fontWeight: 700, color: '#6D28D9', textTransform: 'uppercase', marginBottom: 4 }}>
+                          Executive Summary
+                        </div>
+                        <div className="snow-body" style={{ color: '#4C1D95', lineHeight: 1.5 }}>
+                          {copilotSynopsis.executive_summary || copilotSynopsis.summary || 'Summary generated from claim facts and policy coverage.'}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                        <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
+                          <span className="snow-caption" style={{ color: '#6B7280' }}>Recommendation</span>
+                          <div className="snow-body" style={{ fontWeight: 700, textTransform: 'uppercase', color: (copilotSynopsis.decision_recommendation || copilotSynopsis.recommendation) === 'approve' ? '#059669' : '#D97706' }}>
+                            {copilotSynopsis.decision_recommendation || copilotSynopsis.recommendation || 'Under Review'}
+                          </div>
+                        </div>
+                        <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
+                          <span className="snow-caption" style={{ color: '#6B7280' }}>Recommended Payout</span>
+                          <div className="snow-body" style={{ fontWeight: 700, color: '#111827' }}>
+                            {copilotSynopsis.recommended_payout_amount != null ? `$${Number(copilotSynopsis.recommended_payout_amount).toLocaleString()}` : '—'}
+                          </div>
+                        </div>
+                        <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
+                          <span className="snow-caption" style={{ color: '#6B7280' }}>Confidence Score</span>
+                          <div className="snow-body" style={{ fontWeight: 700, color: '#2563EB' }}>
+                            {copilotSynopsis.confidence_score != null ? `${Math.round(Number(copilotSynopsis.confidence_score) * 100)}%` : '—'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {Array.isArray(copilotSynopsis.risk_flags) && copilotSynopsis.risk_flags.length > 0 && (
+                        <div style={{ padding: '10px 12px', backgroundColor: '#FEF2F2', borderRadius: 8, border: '1px solid #FECACA' }}>
+                          <span className="snow-micro" style={{ fontWeight: 700, color: '#B91C1C' }}>RISK & FRAUD FLAGS:</span>
+                          <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                            {copilotSynopsis.risk_flags.map((flag: any, idx: number) => (
+                              <li key={idx} className="snow-caption" style={{ color: '#991B1B' }}>
+                                {typeof flag === 'string' ? flag : JSON.stringify(flag)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {Array.isArray(copilotSynopsis.coverage_observations) && copilotSynopsis.coverage_observations.length > 0 && (
+                        <div>
+                          <span className="snow-micro" style={{ fontWeight: 700, color: '#4B5563' }}>COVERAGE OBSERVATIONS:</span>
+                          <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                            {copilotSynopsis.coverage_observations.map((obs: any, idx: number) => (
+                              <li key={idx} className="snow-caption" style={{ color: '#374151' }}>
+                                {typeof obs === 'string' ? obs : JSON.stringify(obs)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {Array.isArray(copilotSynopsis.actionable_suggestions) && copilotSynopsis.actionable_suggestions.length > 0 && (
+                        <div>
+                          <span className="snow-micro" style={{ fontWeight: 700, color: '#4B5563' }}>ACTIONABLE SUGGESTIONS:</span>
+                          <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                            {copilotSynopsis.actionable_suggestions.map((sug: any, idx: number) => (
+                              <li key={idx} className="snow-caption" style={{ color: '#374151' }}>
+                                {typeof sug === 'string' ? sug : JSON.stringify(sug)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ padding: 16, textAlign: 'center', color: '#6B7280' }}>
+                      <Button size="sm" variant="secondary" onClick={fetchCopilotSynopsis} disabled={fetchingCopilot}>
+                        {fetchingCopilot ? 'Generating Copilot Analysis...' : 'Generate AI Copilot Analysis'}
+                      </Button>
+                    </div>
+                  )}
+                </Card>
+
                 <Card title="Incident Details & Loss Assessment">
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                     <div>
@@ -454,75 +564,149 @@ export default function AdjusterClaimWorkspacePage({
                     </div>
                   )}
                 </Card>
-
-                {/* Blocking Exceptions Alert */}
-                <Card title="Adjudication Exceptions">
-                  {openExceptions.length === 0 ? (
-                    <div className="snow-caption" style={{ color: '#71717A', padding: 8 }}>
-                      No open blocking exceptions on this claim.
-                    </div>
-                  ) : (
-                    openExceptions.map((exc: any) => (
-                      <div
-                        key={exc.id}
-                        className="snow-flex snow-justify-between snow-items-center"
-                        style={{
-                          padding: 14,
-                          backgroundColor: exc.status === 'resolved' ? '#F4F5F7' : '#FFF4E5',
-                          border: `1px solid ${exc.status === 'resolved' ? '#EBECEF' : '#FFE4BF'}`,
-                          borderRadius: 12,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <div>
-                          <div className="snow-body" style={{ fontWeight: 600, color: exc.status === 'resolved' ? '#71717A' : '#D97706' }}>
-                            {exc.event_type || 'Policy Exception'}
-                          </div>
-                          <div className="snow-caption" style={{ color: '#52525B' }}>{exc.reason}</div>
-                        </div>
-                        {exc.status === 'resolved' ? (
-                          <BadgePill variant="mint">Resolved</BadgePill>
-                        ) : (
-                          <Button size="sm" variant="secondary" onClick={() => handleResolveException(exc.id)}>
-                            Resolve Exception
-                          </Button>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </Card>
               </div>
             )}
 
             {/* Evidence Tab */}
             {activeTab === 'evidence' && (
-              <Card title="Submitted Claim Evidence & Artifacts">
-                <div className="snow-flex-col snow-gap-3">
-                  {evidenceList.length === 0 ? (
-                    <div className="snow-caption" style={{ color: '#71717A', padding: 8 }}>
-                      No evidence files uploaded yet.
-                    </div>
-                  ) : (
-                    evidenceList.map((ev: any, idx: number) => (
-                      <div key={idx} className="snow-flex snow-items-center snow-justify-between" style={{ padding: 14, backgroundColor: '#FAFAFB', borderRadius: 12 }}>
-                        <div className="snow-flex snow-items-center snow-gap-3">
-                          <FileText size={20} color="#007AFF" />
-                          <div>
-                            <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-                              {ev.original_filename || ev.name || ev.filename || `Evidence Document #${idx + 1}`}
+              <div className="snow-flex-col snow-gap-4">
+                <Card title="Submitted Claim Evidence & Artifacts">
+                  <div className="snow-flex-col snow-gap-3">
+                    {evidenceList.length === 0 ? (
+                      <div className="snow-caption" style={{ color: '#71717A', padding: 8 }}>
+                        No evidence files uploaded yet.
+                      </div>
+                    ) : (
+                      evidenceList.map((ev: any, idx: number) => (
+                        <div key={idx} style={{ padding: 14, backgroundColor: '#FAFAFB', borderRadius: 12, border: '1px solid #EBECEF' }}>
+                          <div className="snow-flex snow-items-center snow-justify-between">
+                            <div className="snow-flex snow-items-center snow-gap-3">
+                              <FileText size={20} color="#007AFF" />
+                              <div>
+                                <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
+                                  {ev.original_filename || ev.name || ev.filename || `Evidence Document #${idx + 1}`}
+                                </div>
+                                <div className="snow-micro" style={{ color: '#71717A' }}>
+                                  Detected Type: <strong>{ev.detected_document_type || 'General Evidence'}</strong> • OCR Confidence: <strong>{ev.verification_confidence != null ? `${Math.round(Number(ev.verification_confidence) * 100)}%` : 'N/A'}</strong>
+                                </div>
+                              </div>
                             </div>
-                            <div className="snow-micro">
-                              {ev.status || ev.verification_status || 'Verified'} • Uploaded by Claimant
+                            <div className="snow-flex snow-items-center snow-gap-2">
+                              <BadgePill variant={ev.verification_status === 'verified' ? 'mint' : 'neutral'}>
+                                {ev.verification_status || ev.status || 'Submitted'}
+                              </BadgePill>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={async () => {
+                                  try {
+                                    const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/evidence/${ev.id}/url`);
+                                    if (res?.url) window.open(res.url, '_blank');
+                                  } catch (err: any) {
+                                    showToast(err.message || 'Failed to get document download URL', 'error');
+                                  }
+                                }}
+                              >
+                                View / Download
+                              </Button>
                             </div>
                           </div>
+                          {ev.verification_reason && (
+                            <div className="snow-micro" style={{ color: '#4B5563', marginTop: 8, padding: '4px 8px', backgroundColor: '#F3F4F6', borderRadius: 6 }}>
+                              Verification: {ev.verification_reason}
+                            </div>
+                          )}
+                          {ev.extracted_fields && Object.keys(ev.extracted_fields).length > 0 && (
+                            <div style={{ marginTop: 8 }}>
+                              <span className="snow-micro" style={{ fontWeight: 600, color: '#6B7280' }}>OCR EXTRACTED FIELDS:</span>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 6, marginTop: 4 }}>
+                                {Object.entries(ev.extracted_fields).map(([k, v]) => (
+                                  <div key={k} className="snow-micro" style={{ padding: '2px 6px', backgroundColor: '#FFFFFF', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                    <strong>{k}:</strong> {String(v)}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <BadgePill variant={ev.verification_status === 'verified' ? 'mint' : 'neutral'}>
-                          {ev.verification_status || 'Submitted'}
-                        </BadgePill>
-                      </div>
-                    ))
+                      ))
+                    )}
+                  </div>
+                </Card>
+
+                {/* Adjuster Evidence Requests Section */}
+                <Card title="Adjuster Evidence Inquiries & Claimant Responses">
+                  {(!claimData?.evidence_requests || claimData.evidence_requests.length === 0) ? (
+                    <div className="snow-caption" style={{ color: '#71717A', padding: 8 }}>
+                      No evidence requests issued to claimant yet.
+                    </div>
+                  ) : (
+                    <div className="snow-flex-col snow-gap-3">
+                      {claimData.evidence_requests.map((req: any, idx: number) => (
+                        <div key={req.id || idx} style={{ padding: 12, backgroundColor: req.status === 'open' ? '#FFFBEB' : '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 10 }}>
+                          <div className="snow-flex snow-justify-between snow-items-center">
+                            <span className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
+                              Request #{idx + 1}: {req.request_text || req.notes}
+                            </span>
+                            <BadgePill variant={req.status === 'open' ? 'amber' : 'mint'}>
+                              {req.status === 'open' ? 'Awaiting Claimant' : 'Responded'}
+                            </BadgePill>
+                          </div>
+                          {req.response_note && (
+                            <div style={{ marginTop: 6, padding: '6px 8px', backgroundColor: '#FFFFFF', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                              <span className="snow-micro" style={{ fontWeight: 600, color: '#374151' }}>Claimant Response:</span>
+                              <div className="snow-caption" style={{ color: '#1F2937' }}>{req.response_note}</div>
+                              {req.evidence_name && (
+                                <div className="snow-micro" style={{ color: '#2563EB', marginTop: 2 }}>
+                                  📎 Attached Evidence: {req.evidence_name}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
-                </div>
+                </Card>
+              </div>
+            )}
+
+            {/* Exceptions Tab */}
+            {activeTab === 'exceptions' && (
+              <Card title="Adjudication Exceptions">
+                {openExceptions.length === 0 ? (
+                  <div className="snow-caption" style={{ color: '#71717A', padding: 8 }}>
+                    No open blocking exceptions on this claim.
+                  </div>
+                ) : (
+                  openExceptions.map((exc: any) => (
+                    <div
+                      key={exc.id}
+                      className="snow-flex snow-justify-between snow-items-center"
+                      style={{
+                        padding: 14,
+                        backgroundColor: exc.status === 'resolved' ? '#F4F5F7' : '#FFF4E5',
+                        border: `1px solid ${exc.status === 'resolved' ? '#EBECEF' : '#FFE4BF'}`,
+                        borderRadius: 12,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <div>
+                        <div className="snow-body" style={{ fontWeight: 600, color: exc.status === 'resolved' ? '#71717A' : '#D97706' }}>
+                          {exc.event_type || 'Policy Exception'}
+                        </div>
+                        <div className="snow-caption" style={{ color: '#52525B' }}>{exc.reason}</div>
+                      </div>
+                      {exc.status === 'resolved' ? (
+                        <BadgePill variant="mint">Resolved</BadgePill>
+                      ) : (
+                        <Button size="sm" variant="secondary" onClick={() => handleResolveException(exc.id)}>
+                          Resolve Exception
+                        </Button>
+                      )}
+                    </div>
+                  ))
+                )}
               </Card>
             )}
 
@@ -654,11 +838,14 @@ export default function AdjusterClaimWorkspacePage({
                             <div className="snow-micro" style={{ fontWeight: 600, color: '#71717A', marginBottom: 2 }}>
                               POLICY CITATIONS:
                             </div>
-                            {c.citations.map((cite, idx) => (
-                              <div key={idx} className="snow-micro" style={{ color: '#007AFF' }}>
-                                • {cite}
-                              </div>
-                            ))}
+                            {c.citations.map((cite, idx) => {
+                              const label = typeof cite === 'string' ? cite : ((cite as any)?.citation_label || (cite as any)?.source_name || (cite as any)?.claim || (cite as any)?.source_id || JSON.stringify(cite));
+                              return (
+                                <div key={idx} className="snow-micro" style={{ color: '#007AFF' }}>
+                                  • {label}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>

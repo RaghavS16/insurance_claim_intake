@@ -30,6 +30,27 @@ router = APIRouter(prefix="/api/v1/adjuster", tags=["Adjuster"])
 # Shared dependency for endpoints using Depends(); also used by _resolve_adjuster below.
 _guard = require_role(["ADJUSTER", "ADMIN"])
 
+def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
+    evidence = (
+        db.query(ClaimEvidence)
+        .filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id)
+        .order_by(ClaimEvidence.created_at.desc())
+        .first()
+    )
+    return {
+        "id": row.id,
+        "claim_id": row.claim_id,
+        "adjuster_id": row.adjuster_id,
+        "request_text": row.request_text,
+        "notes": row.request_text,
+        "status": row.status,
+        "response_note": row.response_note,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
+        "evidence_id": str(evidence.id) if evidence else None,
+        "evidence_name": evidence.original_filename if evidence else None,
+    }
+
 def _auto_assign_pending(claims:list[Claim], db:Session):
     changed=False
     for c in claims:
@@ -378,6 +399,63 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
             "is_active": bool(policy.is_active),
             "policyholder_name": policy.policyholder_name,
         }
+
+    # Query notes for claim
+    note_rows = (
+        db.query(ClaimNote)
+        .filter(ClaimNote.claim_id == c.id, ClaimNote.tenant_id == c.tenant_id)
+        .order_by(ClaimNote.created_at.desc())
+        .all()
+    )
+    notes_payload = [
+        {
+            "id": str(n.id),
+            "author": n.author_role or "Adjuster",
+            "note": n.note,
+            "visibility": n.visibility,
+            "created_at": n.created_at.isoformat() if n.created_at else None,
+        }
+        for n in note_rows
+    ]
+
+    # Query evidence requests
+    req_rows = (
+        db.query(ClaimEvidenceRequest)
+        .filter(ClaimEvidenceRequest.claim_id == c.id, ClaimEvidenceRequest.tenant_id == c.tenant_id)
+        .order_by(ClaimEvidenceRequest.requested_at.desc())
+        .all()
+    )
+    evidence_requests_payload = [_request_payload(r, db) for r in req_rows]
+
+    # Merge DB ClaimEvidence rows missing from pipeline_state["evidence"]
+    evidence_list = list(state.get("evidence") or [])
+    existing_keys = {e.get("s3_key") or str(e.get("id")) for e in evidence_list}
+    db_evidences = (
+        db.query(ClaimEvidence)
+        .filter(ClaimEvidence.claim_id == c.id, ClaimEvidence.tenant_id == c.tenant_id)
+        .all()
+    )
+    for dbev in db_evidences:
+        if dbev.s3_key not in existing_keys and str(dbev.id) not in existing_keys:
+            evidence_list.append({
+                "id": str(dbev.id),
+                "name": dbev.original_filename,
+                "s3_uri": dbev.s3_uri,
+                "s3_key": dbev.s3_key,
+                "content_type": dbev.content_type,
+                "size": dbev.file_size_bytes,
+                "status": dbev.status,
+                "verification_status": dbev.verification_status,
+                "verification_confidence": dbev.verification_confidence,
+                "detected_document_type": dbev.detected_document_type,
+                "extracted_fields": dbev.extracted_fields or {},
+                "verification_reason": dbev.verification_reason,
+                "request_id": str(dbev.request_id) if dbev.request_id else None,
+                "created_at": dbev.created_at.isoformat() if dbev.created_at else None,
+            })
+            existing_keys.add(dbev.s3_key)
+            existing_keys.add(str(dbev.id))
+
     return {
         "claim": _item(c, db=db),
         "extracted_data": extracted,
@@ -387,7 +465,9 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "requirements": state.get("dynamic_requirements", []),
         "missing_requirements": state.get("dynamic_missing", []),
         "missing_evidence": state.get("missing_evidence", []),
-        "evidence": state.get("evidence", []),
+        "evidence": evidence_list,
+        "notes": notes_payload,
+        "evidence_requests": evidence_requests_payload,
         "policy_verification": state.get("policy_verification", {}),
         "knowledge_sources": state.get("knowledge_sources", []),
         "copilot": state.get("copilot", {}),
@@ -415,6 +495,59 @@ def resolve_exception(ticket_id: str, exception_id: str, request: Request, user:
                            new_value_json={"exception_id": row.id}, reason="Adjuster resolved blocking exception"))
     db.commit()
     return {"success": True, "exception_id": row.id, "status": row.status}
+
+@router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
+def get_evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    c = get_claim_or_404(db, ticket_id)
+    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="Forbidden")
+    state = dict(c.pipeline_state or {})
+    evidence_list = state.get("evidence", [])
+    ev = next((e for e in evidence_list if str(e.get("id")) == str(evidence_id)), None)
+    if not ev:
+        row = db.query(ClaimEvidence).filter(ClaimEvidence.id == evidence_id, ClaimEvidence.claim_id == c.id).first()
+        if row:
+            key = row.s3_key or row.s3_uri
+        else:
+            raise HTTPException(status_code=404, detail="Evidence item not found")
+    else:
+        key = ev.get("s3_key") or ev.get("s3_uri") or ev.get("name")
+    
+    if not settings.S3_BUCKET:
+        url = f"/api/v1/adjuster/claims/{ticket_id}/evidence/{evidence_id}/download"
+    else:
+        from src.storage.s3 import presigned_get
+        url = presigned_get(key)
+    return {"url": url}
+
+@router.get("/claims/{ticket_id}/evidence/{evidence_id}/download")
+def download_claim_evidence_file(ticket_id: str, evidence_id: str, request: Request, db: Session = Depends(get_db)):
+    user = _resolve_adjuster(request, db)
+    c = get_claim_or_404(db, ticket_id)
+    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="Forbidden")
+    state = dict(c.pipeline_state or {})
+    evidence_list = state.get("evidence", [])
+    ev = next((e for e in evidence_list if str(e.get("id")) == str(evidence_id)), None)
+    content_type = "application/octet-stream"
+    filename = "evidence"
+    if not ev:
+        row = db.query(ClaimEvidence).filter(ClaimEvidence.id == evidence_id, ClaimEvidence.claim_id == c.id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Evidence item not found")
+        key = row.s3_key or row.s3_uri
+        content_type = row.content_type or content_type
+        filename = row.filename or filename
+    else:
+        key = ev.get("s3_key") or ev.get("s3_uri") or ev.get("name")
+        content_type = ev.get("content_type") or content_type
+        filename = ev.get("name") or filename
+
+    from src.storage.s3 import get_bytes
+    from fastapi.responses import Response
+    try:
+        data = get_bytes(key)
+        return Response(content=data, media_type=content_type, headers={"Content-Disposition": f'inline; filename="{filename}"'})
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"File not found: {exc}")
 
 @router.get("/claims/{ticket_id}/package")
 def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
@@ -472,12 +605,50 @@ def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Dep
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
 def evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     claim = get_claim_or_404(db, ticket_id)
-    if not _can_access_claim(claim,user,db): raise HTTPException(status_code=403,detail="This claim is not assigned to you.")
-    state=dict(claim.pipeline_state or {})
-    item=next((e for e in state.get("evidence",[]) if str(e.get("id"))==evidence_id),None)
-    if not item or not item.get("s3_key"): raise HTTPException(status_code=404,detail="Evidence object not found.")
+    if not _can_access_claim(claim, user, db):
+        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+    state = dict(claim.pipeline_state or {})
+    item = next((e for e in state.get("evidence", []) if str(e.get("id")) == evidence_id), None)
+    if not item:
+        db_ev = db.query(ClaimEvidence).filter(ClaimEvidence.id == evidence_id, ClaimEvidence.claim_id == claim.id).first()
+        if db_ev:
+            item = {"s3_key": db_ev.s3_key}
+    if not item or not item.get("s3_key"):
+        raise HTTPException(status_code=404, detail="Evidence object not found.")
+
+    if not settings.S3_BUCKET:
+        return {"url": f"/api/v1/adjuster/claims/{ticket_id}/evidence/{evidence_id}/download", "expires_in": 900}
+
     from src.storage.s3 import presigned_get
-    return {"url":presigned_get(item["s3_key"]),"expires_in":900}
+    return {"url": presigned_get(item["s3_key"]), "expires_in": 900}
+
+
+@router.get("/claims/{ticket_id}/evidence/{evidence_id}/download")
+def download_evidence(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+    claim = get_claim_or_404(db, ticket_id)
+    if not _can_access_claim(claim, user, db):
+        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+    state = dict(claim.pipeline_state or {})
+    item = next((e for e in state.get("evidence", []) if str(e.get("id")) == evidence_id), None)
+    s3_key = item.get("s3_key") if item else None
+    if not s3_key:
+        db_ev = db.query(ClaimEvidence).filter(ClaimEvidence.id == evidence_id, ClaimEvidence.claim_id == claim.id).first()
+        if db_ev:
+            s3_key = db_ev.s3_key
+    if not s3_key:
+        raise HTTPException(status_code=404, detail="Evidence object not found.")
+
+    from pathlib import Path
+    from fastapi.responses import FileResponse, Response
+    p = Path(s3_key)
+    if p.exists() and p.is_file():
+        return FileResponse(path=str(p), filename=p.name)
+    from src.storage.s3 import get_bytes
+    try:
+        content = get_bytes(s3_key)
+        return Response(content=content, media_type="application/octet-stream")
+    except Exception:
+        raise HTTPException(status_code=404, detail="File could not be found.")
 
 @router.get("/claims/{ticket_id}/copilot")
 async def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
@@ -784,7 +955,7 @@ Instructions:
             if label and label not in labels:
                 labels.append(label)
         if labels and not any(label.lower() in answer.lower() for label in labels):
-            answer = f"{answer.rstrip()}\\n\\nSources: " + "; ".join(labels)
+            answer = f"{answer.rstrip()}\n\nSources: " + "; ".join(labels)
     bot_msg = {
         "id": str(uuid.uuid4()),
         "speaker": "copilot",

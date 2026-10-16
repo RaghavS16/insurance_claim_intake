@@ -139,25 +139,28 @@ async def process_claimant_turn(
                     type(exc).__name__,
                 )
 
+        if rag_reply:
+            graph_input["rag_reply"] = rag_reply
+
         try:
             result = await asyncio.to_thread(build_conversation_graph().invoke, graph_input)
         except Exception as exc:
-            logger.warning("Conversation graph execution failed, engaging reliable fallback: %s", exc)
+            logger.warning("Conversation graph execution failed: %s", exc)
             extracted = dict(prior_state.get("extracted_data") or {})
             if user_text:
                 import re
-                pm = re.search(r'POL-[A-Za-z0-9-]+', user_text)
+                pm = re.search(r'POL-[A-Za-z0-9-]+', user_text, re.IGNORECASE)
                 if pm:
                     extracted["policy_id"] = pm.group(0).upper()
-                if not extracted.get("event_description"):
-                    extracted["event_description"] = user_text
-            extracted["insurance_type"] = extracted.get("insurance_type") or "motor"
             result = {
                 **graph_input,
                 "extracted_data": extracted,
-                "conversation_phase": "collecting",
-                "next_question": "I have recorded your claim details and damage report. Could you also confirm the incident date and location?",
-                "message": "I have recorded your claim details and damage report. Could you also confirm the incident date and location?",
+                "rag_status": "UNAVAILABLE",
+                "conversation_status": "unresolved_requirements",
+                "conversation_phase": "unresolved_requirements",
+                "review_required": True,
+                "next_question": "I am currently unable to resolve the intake requirements from indexed policy documents. Your claim session has been flagged for adjuster review.",
+                "message": "I am currently unable to resolve the intake requirements from indexed policy documents. Your claim session has been flagged for adjuster review.",
             }
 
     result["ai_governance"] = {
@@ -190,7 +193,10 @@ async def process_claimant_turn(
         (f.get("value") for f in (result.get("extracted_fields") or []) if f.get("field_key") in ("policy_id", "policy_number")),
         None,
     )
-    if policy_id_val and not (result.get("policy_verification") or {}).get("valid"):
+    current_ver = result.get("policy_verification") or {}
+    has_event_date = bool(extracted.get("event_date") or any("date" in str(f.get("field_key", "")).lower() for f in (result.get("extracted_fields") or [])))
+    needs_date_reverify = bool(current_ver.get("valid") and not current_ver.get("date_verified") and has_event_date)
+    if policy_id_val and (not current_ver.get("valid") or needs_date_reverify):
         try:
             claim.pipeline_state = dict(result)
             flag_modified(claim, "pipeline_state")
@@ -224,10 +230,13 @@ async def process_claimant_turn(
                 result["conversation_status"] = "verification_failed"
                 reason_msg = {
                     "policy_not_found": f"I couldn't find an active policy with number '{policy_id_val}'. Please verify and provide a valid policy number.",
+                    "policy_not_linked": f"Policy '{policy_id_val}' is not linked to your account. Please link your policy in My Policies before continuing.",
                     "ownership_mismatch": f"Policy '{policy_id_val}' is not registered under your account. Please provide the policy number belonging to your account.",
                     "policy_inactive": f"Policy '{policy_id_val}' is inactive or lapsed. We cannot process claims for inactive policies.",
-                    "policy_expired": f"Policy '{policy_id_val}' was expired on the incident date.",
+                    "policy_expired": f"Policy '{policy_id_val}' has expired. We cannot process claims for expired policies.",
+                    "policy_not_active_on_event_date": f"Policy '{policy_id_val}' was not active on the incident date.",
                     "policy_not_yet_effective": f"Policy '{policy_id_val}' was not yet effective on the incident date.",
+                    "invalid_event_date": "The incident date provided is invalid. Please check the date format.",
                     "insurance_type_mismatch": f"Policy '{policy_id_val}' does not match this claim type.",
                 }.get(verification.get("reason"), f"Policy verification failed: {verification.get('reason')}. Please provide a valid policy.")
                 result["next_question"] = reason_msg
@@ -240,6 +249,23 @@ async def process_claimant_turn(
                 "error_type": type(exc).__name__,
             }
             result["policy_valid"] = False
+
+    # Sync canonical role fields directly to Claim SQL columns
+    if extracted.get("policy_id"):
+        claim.policy_id = str(extracted["policy_id"])
+    if extracted.get("insurance_type"):
+        claim.insurance_type = str(extracted["insurance_type"])
+    if extracted.get("event_date"):
+        claim.event_date = str(extracted["event_date"])
+    if extracted.get("event_description"):
+        claim.event_description = str(extracted["event_description"])
+    if extracted.get("event_location"):
+        claim.event_location = str(extracted["event_location"])
+    if extracted.get("estimated_claim_amount") is not None:
+        try:
+            claim.estimated_claim_amount = float(extracted["estimated_claim_amount"])
+        except (ValueError, TypeError):
+            pass
 
     # Persist dynamic facts independently of the conversational JSON cache.
     dynamic_facts = dict(extracted)
@@ -393,7 +419,9 @@ async def process_claimant_turn(
     # Continuous gap/consistency analysis. The phase field below is a legacy UI projection, not workflow authority.
     try:
         from src.agents.gap_analysis import analyze_claim_gaps
-        result["gap_analysis"] = analyze_claim_gaps(result)
+        dynamic_rem = result.get("dynamic_missing") or []
+        missing_ev = result.get("missing_evidence") or []
+        pending_review = result.get("pending_evidence_review") or []
         if claim.status in {"submitted", "assigned", "under_review", "closed"} or result.get("conversation_status") == "submitted":
             result["conversation_phase"] = "completed"
         elif result.get("conversation_status") == "verification_failed" or (result.get("policy_verification") and not result.get("policy_verification", {}).get("valid")):

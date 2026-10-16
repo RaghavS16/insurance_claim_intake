@@ -170,33 +170,30 @@ def synthesize_claims_package(
         risk_flags.append("Temporal consistency: verified against applicable reporting rule.")
 
 
-    # 6. Recommended Next Steps for Adjuster
+    # 6. Recommended Next Steps for Adjuster dynamically derived from policy requirements and exceptions
     next_steps: List[str] = []
-    if insurance_type == "motor":
-        next_steps.extend([
-            f"Review damage report at {event_location} and schedule on-site or cashless garage surveyor.",
-            "Verify vehicle registration and driver's license documentation against regional transport authority.",
-            "If third-party damage is involved, request copy of police GD entry / FIR from claimant.",
-            f"Review estimated repair estimate of {est_amount:,.2f} against standard parts catalog.",
-        ])
-    elif insurance_type in {"property", "home"}:
-        next_steps.extend([
-            f"Dispatch loss assessor to inspect damage at {event_location}.",
-            "Verify mitigation steps taken to prevent further structural or water damage.",
-            "Review itemized inventory and purchase receipts for affected assets.",
-        ])
-    elif insurance_type in {"health", "senior_health"}:
-        next_steps.extend([
-            "Contact hospital billing desk to confirm inpatient admission and discharge summary.",
-            "Review diagnosis codes against pre-existing condition waiting period guidelines.",
-            "Compute cashless vs reimbursement deductions based on policy copay schedule.",
-        ])
-    elif insurance_type == "travel":
-        next_steps.extend([
-            "Verify flight / baggage carrier irregularity report (PIR).",
-            "Validate overseas medical bills or trip disruption invoices with local provider.",
-        ])
-    else:
+    if policy_id:
+        amt_str = f" for estimated amount of {est_amount:,.2f}" if est_amount > 0 else ""
+        next_steps.append(f"Review primary policy schedule ({policy_id}){amt_str} against reported facts.")
+
+    for exc in state.get("claim_exceptions") or []:
+        if isinstance(exc, dict) and exc.get("reason"):
+            next_steps.append(f"Resolve flagged exception: {exc.get('reason')}")
+
+    ev_items = state.get("evidence") or []
+    if ev_items:
+        next_steps.append(f"Inspect {len(ev_items)} uploaded evidence document(s) and verify against OCR confidence scores.")
+
+    missing_ev = state.get("missing_evidence") or []
+    for mev in missing_ev[:3]:
+        label = mev.get("label") or mev.get("key")
+        next_steps.append(f"Request supporting document from claimant: {label}")
+
+    retrieval = state.get("chat_retrieval") or {}
+    if retrieval.get("regulations"):
+        next_steps.append("Audit claim processing timeline against applicable regulatory guidelines.")
+
+    if not next_steps:
         next_steps.extend([
             "Review verified claim facts and assigned evidence.",
             "Determine coverage authorization based on primary policy terms.",

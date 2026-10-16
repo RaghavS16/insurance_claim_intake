@@ -63,24 +63,10 @@ def verify_policy_for_claim(
             result["reason"] = "ownership_mismatch"
             return result
     else:
-        user = None
-        if claimant_user_id:
-            try:
-                user = db.query(User).filter(User.id == claimant_user_id).first()
-            except Exception:
-                user = None
-        if user and (
-            (policy.policyholder_email and (user.email or "").lower() == (policy.policyholder_email or "").lower())
-            or (policy.policyholder_phone and user.phone == policy.policyholder_phone)
-        ):
-            policy.customer_id = claimant_user_id
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-        else:
-            result["reason"] = "policy_not_linked"
-            return result
+        result["valid"] = False
+        result["reason"] = "policy_not_linked"
+        result["identity_verified"] = False
+        return result
 
     result["identity_verified"] = True
 
@@ -88,16 +74,18 @@ def verify_policy_for_claim(
         result["reason"] = "insurance_type_mismatch"
         return result
 
-    if not policy.is_active:
+    if not policy.is_active or getattr(policy, "status", "active") in ("cancelled", "lapsed", "expired"):
         result["reason"] = "policy_inactive"
         return result
 
+    date_verified = False
     if event_date_str:
         try:
             event_date = datetime.strptime(event_date_str, "%Y-%m-%d").date()
             if not (policy.effective_date <= event_date <= policy.expiry_date):
                 result["reason"] = "policy_not_active_on_event_date"
                 return result
+            date_verified = True
         except ValueError:
             result["reason"] = "invalid_event_date"
             return result
@@ -110,6 +98,7 @@ def verify_policy_for_claim(
     result.update({
         "valid": True,
         "identity_verified": True,
+        "date_verified": date_verified,
         "policy_number": policy.policy_number,
         "policy_type": policy.policy_type,
         "effective_date": policy.effective_date.isoformat(),
@@ -118,7 +107,7 @@ def verify_policy_for_claim(
         "verification_steps": [
             {"step": "Policyholder Identity Verification", "passed": True},
             {"step": "Policy In-Force Status", "passed": True},
-            {"step": "Incident Date Coverage Validity", "passed": True if event_date_str else True},
+            {"step": "Incident Date Coverage Validity", "passed": date_verified},
             {"step": "Claim Eligibility & Schedule", "passed": True},
         ],
     })

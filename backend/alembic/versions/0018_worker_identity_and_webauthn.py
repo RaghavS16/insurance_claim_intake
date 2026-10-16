@@ -48,11 +48,12 @@ def upgrade() -> None:
     if inspector.has_table("webauthn_credentials"):
         return
 
+    user_id_type = postgresql.UUID(as_uuid=True) if bind.dialect.name == "postgresql" else sa.String(36)
     op.create_table(
         "webauthn_credentials",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("tenant_id", sa.String(36), nullable=False),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("user_id", user_id_type, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("credential_id", sa.String(512), nullable=False, unique=True),
         sa.Column("public_key", sa.Text(), nullable=False),
         sa.Column("sign_count", sa.Integer(), nullable=False, server_default="0"),
@@ -68,7 +69,7 @@ def upgrade() -> None:
         "webauthn_challenges",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("tenant_id", sa.String(36), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("user_id", user_id_type, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("purpose", sa.String(30), nullable=False),
         sa.Column("challenge", sa.String(512), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),

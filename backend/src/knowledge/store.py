@@ -308,7 +308,15 @@ def ingest_document(
     finally:
         db.close()
 
-    chunk_rows = _structure_aware_chunks(text)
+    if filename.lower().endswith(".pdf"):
+        try:
+            pages = _extract_pdf_pages(content, filename)
+            chunk_rows = _structure_aware_pages(pages) if pages else _structure_aware_chunks(text)
+        except Exception:
+            chunk_rows = _structure_aware_chunks(text)
+    else:
+        chunk_rows = _structure_aware_chunks(text)
+
     chunks = [row["text"] for row in chunk_rows]
     logger.info("[Knowledge] Document partitioned into %d structure-aware chunks. Generating embeddings...", len(chunks))
     
@@ -362,6 +370,10 @@ def ingest_document(
         db.flush()
         
         for idx, (chunk, vector, provenance) in enumerate(zip(chunks, vectors, chunk_rows)):
+            page_num = provenance.get("page_number")
+            citation_label = provenance.get("citation_label")
+            if not citation_label:
+                citation_label = f"{filename}, p.{page_num}" if page_num else f"{filename}, chunk {idx + 1}"
             db.add(
                 KnowledgeChunk(
                     id=str(uuid.uuid4()),
@@ -370,11 +382,11 @@ def ingest_document(
                     text=chunk,
                     embedding=vector,
                     tenant_id=tenant_id,
-                    page_number=provenance.get("page_number"),
+                    page_number=page_num,
                     section_number=provenance.get("section_number"),
                     clause_number=provenance.get("clause_number"),
-                    citation_label=provenance.get("citation_label"),
-                    metadata_json={"source_name": filename, **provenance},
+                    citation_label=citation_label,
+                    metadata_json={"source_name": filename, **provenance, "citation_label": citation_label},
                 )
             )
         db.commit()
@@ -402,6 +414,8 @@ def list_policy_documents(
     jurisdiction: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return candidate policy-wording documents for document-level compilation."""
+    if not policy_number and not insurance_type:
+        return []
     tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:

@@ -21,6 +21,7 @@ export default function ClaimantPoliciesPage() {
   // Link Modal
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [policyNumber, setPolicyNumber] = useState('');
+  const [policyholderName, setPolicyholderName] = useState('');
   const [dob, setDob] = useState('');
   const [phoneLast4, setPhoneLast4] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -52,13 +53,15 @@ export default function ClaimantPoliciesPage() {
     try {
       const newPolicy = await api.post<Policy>('/api/v1/policies/link', {
         policy_number: policyNumber.trim(),
-        policyholder_dob: dob || undefined,
-        policyholder_phone_last4: phoneLast4.trim(),
+        policyholder_name: policyholderName.trim() || undefined,
+        date_of_birth: dob,
+        phone_last4: phoneLast4.trim(),
       });
 
       showToast('Policy successfully linked to your account!', 'success');
       setLinkModalOpen(false);
       setPolicyNumber('');
+      setPolicyholderName('');
       setDob('');
       setPhoneLast4('');
       fetchPolicies();
@@ -139,6 +142,13 @@ export default function ClaimantPoliciesPage() {
             value={policyNumber}
             onChange={(e) => setPolicyNumber(e.target.value)}
             required
+          />
+
+          <Input
+            label="Policyholder Full Name"
+            placeholder="e.g. Jane Doe"
+            value={policyholderName}
+            onChange={(e) => setPolicyholderName(e.target.value)}
           />
 
           <DatePicker

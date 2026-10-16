@@ -667,7 +667,8 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
     # The claimant may build the incident story over several turns. Re-synthesize the
     # canonical narrative after any incident-bearing utterance so the collected
     # description is grammatical and complete rather than a raw ASR fragment.
-    if _INCIDENT_TERMS.search(raw):
+    has_llm_clean_description = any(c.field == "event_description" and len(str(c.value or "").strip()) >= 30 for c in model_changes)
+    if _INCIDENT_TERMS.search(raw) and not has_llm_clean_description:
         _synthesize_event_description(state)
 
     # Reconcile location once more after all model/deterministic changes. If an

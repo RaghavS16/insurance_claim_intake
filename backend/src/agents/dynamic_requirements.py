@@ -146,10 +146,27 @@ def missing_evidence(state: ClaimState | dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
-def clean_extracted_value(key: str, val: Any) -> Any:
+def clean_extracted_value(key: str, val: Any, raw_utterance: str | None = None) -> Any:
     if val is None or isinstance(val, (int, float, bool)):
         return val
     text = str(val).strip()
+
+    is_narrative = any(n in key.lower() for n in ("description", "narrative", "details", "circumstances", "summary", "notes"))
+    if not is_narrative:
+        if raw_utterance and text.lower() == raw_utterance.strip().lower() and len(text) > 40:
+            return None
+        if len(text) > 80:
+            return None
+
+    # Amount / Currency extraction: "around 45,000 rupees as per garage" -> 45000.0
+    if any(p in key.lower() for p in ("amount", "cost", "bill", "estimate", "expense", "fee", "price", "payout", "charge")):
+        amt_match = re.search(r"(?:rs\.?|inr|\$|rupees)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)\s*(?:rs\.?|inr|rupees)?", text, re.I)
+        if amt_match:
+            try:
+                raw_num = amt_match.group(1).replace(",", "")
+                return float(raw_num)
+            except ValueError:
+                pass
 
     if any(p in key.lower() for p in ("policy", "policy_id", "policy_number", "policy_no")):
         match = re.search(r"\b([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)\b", text)
@@ -167,7 +184,27 @@ def clean_extracted_value(key: str, val: Any) -> Any:
     if any(p in key.lower() for p in ("vehicle", "bike", "car", "registration", "plate")):
         match_veh = re.search(r"\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b", text, re.I)
         if match_veh:
-            return match_veh.group(1).upper().strip()
+            return match_veh.group(1).upper().replace(" ", "").replace("-", "")
+
+    if any(p in key.lower() for p in ("date", "time")) and not is_narrative:
+        d_match = re.search(r"\b(\d{4}-\d{1,2}-\d{1,2})\b", text)
+        if d_match:
+            return d_match.group(1)
+        month_match = re.search(r"\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{4})\b", text, re.I)
+        if month_match:
+            try:
+                from datetime import datetime
+                d_str = f"{month_match.group(1)} {month_match.group(2)[:3]} {month_match.group(3)}"
+                dt = datetime.strptime(d_str, "%d %b %Y")
+                return dt.date().isoformat()
+            except Exception:
+                pass
+
+    if any(p in key.lower() for p in ("location", "place", "city", "address")) and not is_narrative:
+        loc_clean = re.sub(r"^(?:it\s+(?:happened|occurred)\s+(?:at|near|in)\s+|at\s+|near\s+|in\s+)", "", text, flags=re.I)
+        loc_clean = re.sub(r"\s+(?:on|at|around)\s+\d{1,2}.*$", "", loc_clean, flags=re.I).strip(" .,;:")
+        if loc_clean and len(loc_clean) <= 60:
+            return loc_clean
 
     # Strip common conversational noise: "my policy number is ...", "it is ...", "i am ..."
     text = re.sub(
@@ -201,13 +238,8 @@ def sync_extracted_fields(state: ClaimState | dict[str, Any]) -> None:
     state["extracted_fields"] = fields
 
 
-def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Extract high-confidence domain values and map them only to matching dynamic requirements.
-
-    This is a semantic safety net for common structured facts. It does not create a
-    fixed question catalogue; the active RAG requirement still decides which values
-    matter for this claim.
-    """
+def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]] | None = None, last_asked_field: str | None = None) -> dict[str, Any]:
+    """Extract high-confidence domain values and map them only to matching dynamic requirements."""
     extracted: dict[str, Any] = {}
     match_veh = re.search(r"\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b", text, re.I)
     vehicle_reg = match_veh.group(1).upper().strip() if match_veh else None
@@ -249,7 +281,6 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
         raw_phone = re.sub(r"[ -]", "", phone_match.group(0))
         phone = raw_phone
 
-    # Explicit driver-name constructions avoid swallowing the surrounding sentence.
     driver_name = None
     name_match = re.search(
         r"(?:driver(?:'s|’s)?\s+(?:name\s+)?(?:was|is|:)|driven\s+by)\s*"
@@ -260,7 +291,6 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
     if name_match:
         driver_name = name_match.group(1).strip()
 
-    # Capture a third-party make/model from phrases such as "it was a silver Hyundai i20".
     vehicle_make_model = None
     make_model = re.search(
         r"(?:it\s+was\s+(?:a|an)\s+|(?:other|oncoming)\s+(?:vehicle|car)\s+(?:was|is)\s+(?:a|an)\s+)"
@@ -271,22 +301,15 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
     if make_model:
         vehicle_make_model = make_model.group(1).strip()
 
-    police_negative = bool(re.search(r"\b(?:no|didn['’]?t\s+file|wasn['’]?t\s+filed)\b.{0,30}\b(?:police\s+report|fir)\b", text, re.I))
-    police_positive = bool(re.search(r"\b(?:yes|filed|have|has)\b.{0,35}\b(?:police\s+report|fir)\b", text, re.I))
     normalized_answer = text.strip().lower().strip(" .!?")
     short_yes = normalized_answer in {"yes", "yeah", "yep", "correct", "right", "i do", "i have"}
     short_no = normalized_answer in {"no", "nope", "i don't", "i do not", "not filed"}
-    negative_answer = bool(re.search(
-        r"\b(?:no|nope|not|never|didn['’]?t|wasn['’]?t|weren['’]?t|haven['’]?t|don['’]?t|doesn['’]?t|without)\b",
-        text, re.I,
-    ))
-    positive_answer = bool(re.search(
-        r"\b(?:yes|yeah|yep|correct|right|i do|i have|filed|have)\b",
-        text, re.I,
-    ))
+
+    target_key = (last_asked_field or (requirements[0].get("key") if requirements and len(requirements) == 1 else "") or "").lower()
 
     for req in requirements or []:
-        key = str(req.get("key") or "").lower()
+        key = str(req.get("key") or "")
+        key_low = key.lower()
         semantic = " ".join(str(req.get(k) or "") for k in ("key", "label", "question_hint")).lower()
         if policy_code and any(term in semantic for term in ("policy", "policy number", "policy id", "policy_number", "policy_id")):
             extracted[key] = policy_code
@@ -302,26 +325,27 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
             extracted[key] = driver_name
         if vehicle_make_model and any(term in semantic for term in ("make and model", "make/model", "vehicle make", "car make", "vehicle model")):
             extracted[key] = vehicle_make_model
-        # Generic boolean reconciliation for active yes/no requirements.
-        yes_no_hint = bool(re.search(
-            r"^(?:do|does|did|is|are|was|were|have|has|can|could|will|would)\b",
-            str(req.get("question_hint") or "").strip().lower(),
-        ))
-        if yes_no_hint:
-            if "under the influence" in semantic or "intoxicat" in semantic or "alcohol" in semantic or "drug" in semantic:
-                if negative_answer or short_no or re.search(r"\b(?:sober|not under the influence)\b", text, re.I):
-                    extracted[key] = False
-                elif positive_answer or short_yes:
-                    extracted[key] = True
-            elif "police" in semantic or "fir" in semantic:
-                if police_negative or short_no:
-                    extracted[key] = False
-                elif police_positive or short_yes:
-                    extracted[key] = True
-            elif negative_answer:
+
+        # Semantic alcohol / sober requirement extraction
+        if any(term in semantic for term in ("alcohol", "influence", "drug", "intoxicat")):
+            if re.search(r"\b(?:sober|not\s+under\s+the\s+influence|no\b.*?\b(?:alcohol|drug|substance|intoxicat))\b", text, re.I):
                 extracted[key] = False
-            elif positive_answer:
+            elif re.search(r"\b(?:under\s+the\s+influence|consumed\s+alcohol|intoxicated|was\s+drunk)\b", text, re.I):
                 extracted[key] = True
+
+        # Semantic police report extraction
+        if any(term in semantic for term in ("police", "fir", "report_or_fir")):
+            if re.search(r"\b(?:no\s+police\s+report|not\s+filed|no\s+fir|settled\s+at\s+the\s+scene)\b", text, re.I):
+                extracted[key] = False
+            elif re.search(r"\b(?:filed\s+(?:a\s+)?(?:police|fir)|police\s+report\s+was\s+filed|yes\s+i\s+have\s+(?:a\s+)?(?:police|fir))\b", text, re.I):
+                extracted[key] = True
+
+    # Rule 5: Only allow direct yes/no token to satisfy the single requirement that was just asked (or single active requirement)
+    if target_key and (short_yes or short_no):
+        for req in requirements or []:
+            key = str(req.get("key") or "")
+            if key.lower() == target_key or key.lower() in target_key or target_key in key.lower():
+                extracted[key] = True if short_yes else False
 
     # Preserve canonical keys
     if policy_code:
@@ -335,19 +359,36 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
     return extracted
 
 
+def _mirror_canonical_roles(state: ClaimState | dict[str, Any]) -> None:
+    req_map = {str(r.get("key")): r for r in (state.get("dynamic_requirements") or []) if r.get("key")}
+    extracted = state.setdefault("extracted_data", {})
+    for k, v in list(extracted.items()):
+        req = req_map.get(k)
+        if req and req.get("canonical_role"):
+            crole = req.get("canonical_role")
+            if crole in ("policy_id", "insurance_type", "event_date", "event_location", "event_description", "estimated_claim_amount"):
+                extracted.setdefault(crole, v)
+                if not extracted.get(crole):
+                    extracted[crole] = v
+
+
 def extract_answers(state: ClaimState | dict[str, Any]) -> None:
     utterance = str(state.get("last_user_utterance") or "").strip()
+    last_asked = str(state.get("last_asked_field") or state.get("next_question_field") or "")
     if utterance:
         # 1. Always run deterministic pattern extraction into extracted_data
-        quick_vals = _deterministic_dynamic_extract(utterance, state.get("dynamic_requirements") or [])
+        quick_vals = _deterministic_dynamic_extract(utterance, state.get("dynamic_requirements") or [], last_asked_field=last_asked)
         for k, v in quick_vals.items():
-            state.setdefault("extracted_data", {})[k] = clean_extracted_value(k, v)
+            clean_v = clean_extracted_value(k, v, raw_utterance=utterance)
+            if clean_v is not None:
+                state.setdefault("extracted_data", {})[k] = clean_v
 
     remaining = unresolved(state)
     if not remaining or not utterance:
         state["dynamic_missing"] = remaining
         state["missing_evidence"] = missing_evidence(state)
         sync_extracted_fields(state)
+        _mirror_canonical_roles(state)
         return
 
     allowed = {str(r.get("key")) for r in remaining if r.get("key")}
@@ -356,7 +397,10 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
     prompt = (
         "Extract only clean, exact claim-specific values that are explicitly present in the latest claimant utterance. "
         "Return ONLY the concise entity value (e.g., if user says 'my policy is POL-123', return 'POL-123'; "
-        "if user says 'my bike number is TN31A4567', return 'TN31A4567'). Never return the user's conversational sentence. "
+        "if user says 'my bike number is TN31A4567', return 'TN31A4567'; "
+        "if user says 'around 45,000 rupees as per garage', return 45000.0; "
+        "if user says 'it happened near Anna Nagar Arch on 12 Oct 2026', return location: 'Anna Nagar Arch', date: '2026-10-12'). "
+        "Never return the user's conversational sentence or full sentence when an entity or short identifier is expected. "
         "Use only the supplied requirement keys. Do not infer, invent or copy values from prior turns. "
         f"Requirements: {remaining}\nCurrent claim facts: {state.get('extracted_data', {})}\n"
         f"Latest claimant utterance: {utterance}"
@@ -380,8 +424,9 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
                 key = str(item.get("key") or "")
                 value = item.get("value")
                 if key in allowed and value not in (None, "", "UNKNOWN"):
-                    clean_val = clean_extracted_value(key, value)
-                    state.setdefault("extracted_data", {})[key] = clean_val
+                    clean_val = clean_extracted_value(key, value, raw_utterance=utterance)
+                    if clean_val is not None:
+                        state.setdefault("extracted_data", {})[key] = clean_val
     except Exception as exc:
         state["dynamic_extraction_error"] = type(exc).__name__
         state["dynamic_extraction_error_message"] = str(exc)[:500]
@@ -389,4 +434,5 @@ def extract_answers(state: ClaimState | dict[str, Any]) -> None:
     state["dynamic_missing"] = unresolved(state)
     state["missing_evidence"] = missing_evidence(state)
     sync_extracted_fields(state)
+    _mirror_canonical_roles(state)
 

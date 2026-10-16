@@ -88,12 +88,18 @@ def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Sessio
         raise HTTPException(status_code=400, detail=f"Specialization must be one of: {sorted(CANONICAL_POLICY_TYPES)}")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=409, detail="A user with this email already exists.")
-    active_invite = db.query(AdjusterInvitation).filter(
+    active_invites = db.query(AdjusterInvitation).filter(
         AdjusterInvitation.email == email,
         AdjusterInvitation.tenant_id == admin.tenant_id,
         AdjusterInvitation.accepted_at.is_(None),
-        AdjusterInvitation.expires_at > datetime.now(timezone.utc),
-    ).first()
+    ).all()
+    active_invite = next(
+        (
+            inv for inv in active_invites
+            if (inv.expires_at.replace(tzinfo=timezone.utc) if inv.expires_at.tzinfo is None else inv.expires_at) > datetime.now(timezone.utc)
+        ),
+        None,
+    )
     if active_invite:
         raise HTTPException(status_code=409, detail="An active invitation already exists for this email.")
     user_id = str(__import__("uuid").uuid4())
@@ -195,12 +201,13 @@ def list_invitations(request: Request, db: Session = Depends(get_db)):
                 OutboxEvent.id == r.email_event_id,
                 OutboxEvent.tenant_id == admin.tenant_id,
             ).first()
-        items.append({
-            "id": r.id,
-            "email": r.email,
-            "name": r.name,
-            "specialization": r.specialization,
-            "status": "accepted" if r.accepted_at else ("expired" if r.expires_at <= now else "invited"),
+            exp = r.expires_at.replace(tzinfo=timezone.utc) if r.expires_at.tzinfo is None else r.expires_at
+            items.append({
+                "id": r.id,
+                "email": r.email,
+                "name": r.name,
+                "specialization": r.specialization,
+                "status": "accepted" if r.accepted_at else ("expired" if exp <= now else "invited"),
             "email_delivery_status": event.status if event else "not_queued",
             "email_delivery_attempts": int(event.attempts or 0) if event else 0,
             "expires_at": r.expires_at.isoformat(),

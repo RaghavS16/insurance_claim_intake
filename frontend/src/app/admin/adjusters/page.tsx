@@ -84,8 +84,8 @@ export default function AdminAdjustersPage() {
     if (!editingAdjuster) return;
     setSavingEdit(true);
     try {
-      await api.patch(`/api/v1/admin/adjusters/${editingAdjuster.id}`, {
-        full_name: editName.trim(),
+      await api.put(`/api/v1/admin/adjusters/${editingAdjuster.id}`, {
+        name: editName.trim(),
         email: editEmail.trim(),
         phone: editPhone.trim(),
         specialization: editSpec,
@@ -168,10 +168,13 @@ export default function AdminAdjustersPage() {
     }
   };
 
-  const handleExportCSV = () => {
-    const token = localStorage.getItem('token') || '';
-    window.open(`/api/v1/admin/adjusters/export?format=csv&token=${encodeURIComponent(token)}`, '_blank');
-    showToast('Adjusters roster export initiated', 'info');
+  const handleExportCSV = async () => {
+    try {
+      await api.downloadFile('/api/v1/admin/adjusters/export?format=csv', 'adjusters_roster.csv');
+      showToast('Adjusters roster export completed', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to export adjusters roster.', 'error');
+    }
   };
 
   const columns: Column<Adjuster>[] = [
@@ -530,9 +533,9 @@ export default function AdminAdjustersPage() {
               { value: 'motor', label: 'Motor & Collision Auto' },
               { value: 'home', label: 'Property & Casualty (Home)' },
               { value: 'health', label: 'Health & Medical Benefits' },
+              { value: 'senior_health', label: 'Senior Health & Comprehensive Care' },
               { value: 'travel', label: 'Travel & Trip Delay' },
               { value: 'cyber', label: 'Cyber Risk & Data Breach' },
-              { value: 'life', label: 'Life & Accidental Death' },
             ]}
           />
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox } from 'lucide-react';
+import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox, ShieldCheck, CheckCircle2, TrendingUp, DollarSign, Layers } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
@@ -10,6 +10,8 @@ import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { Card } from '@/components/ui/Card';
 import { BadgeDot } from '@/components/ui/Badge';
+import { MetricCard } from '@/components/ui/MetricCard';
+import { DonutChart, BarChart } from '@/components/ui/Charts';
 import { useToast } from '@/components/ui/Toast';
 import { Claim, Adjuster } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -20,6 +22,7 @@ export default function AdminClaimsOversightPage() {
 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [adjusters, setAdjusters] = useState<Adjuster[]>([]);
+  const [dashboardMetrics, setDashboardMetrics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,9 +36,10 @@ export default function AdminClaimsOversightPage() {
     setLoading(true);
     setError(null);
     try {
-      const [claimsRes, adjustersRes] = await Promise.all([
+      const [claimsRes, adjustersRes, dashRes] = await Promise.all([
         api.get<any>('/api/v1/admin/claims'),
         api.get<any>('/api/v1/admin/adjusters').catch(() => []),
+        api.get<any>('/api/v1/admin/dashboard').catch(() => null),
       ]);
       const rawList: Claim[] = Array.isArray(claimsRes) ? claimsRes : claimsRes?.items || [];
       // Only filed/submitted claims appear in Enterprise Claims Oversight
@@ -45,6 +49,7 @@ export default function AdminClaimsOversightPage() {
       const adjList: Adjuster[] = Array.isArray(adjustersRes) ? adjustersRes : adjustersRes?.items || [];
       setClaims(claimsList);
       setAdjusters(adjList);
+      setDashboardMetrics(dashRes);
       if (adjList.length > 0 && !targetAdjusterId) {
         setTargetAdjusterId(adjList[0].id);
       }
@@ -167,6 +172,89 @@ export default function AdminClaimsOversightPage() {
           <Button size="sm" variant="secondary" onClick={fetchData} style={{ marginLeft: 'auto' }}>
             Retry
           </Button>
+        </div>
+      )}
+
+      {dashboardMetrics && (
+        <div style={{ marginBottom: 24 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 16,
+              marginBottom: 16,
+            }}
+          >
+            <MetricCard
+              title="Active Policies"
+              value={dashboardMetrics.policies.active}
+              trend={`${dashboardMetrics.policies.linked} linked of ${dashboardMetrics.policies.total}`}
+              trendDirection="up"
+              tint="sky"
+              icon={<ShieldCheck size={20} />}
+            />
+            <MetricCard
+              title="Submitted Claims"
+              value={dashboardMetrics.claims.total}
+              trend={`${dashboardMetrics.claims.stages?.under_review || 0} in active review`}
+              trendDirection="up"
+              tint="indigo"
+              icon={<Layers size={20} />}
+            />
+            <MetricCard
+              title="Approved Settlement"
+              value={`$${Number(dashboardMetrics.settlement.approved_volume || 0).toLocaleString()}`}
+              trend={`${dashboardMetrics.settlement.approved_count || 0} claims settled`}
+              trendDirection="up"
+              tint="mint"
+              icon={<DollarSign size={20} />}
+            />
+            <MetricCard
+              title="Adjuster Workload"
+              value={`${dashboardMetrics.workload.active_adjusters} Active`}
+              trend={`${dashboardMetrics.workload.utilization_pct}% capacity (${dashboardMetrics.workload.assigned_claims}/${dashboardMetrics.workload.capacity})`}
+              trendDirection={dashboardMetrics.workload.utilization_pct > 85 ? 'down' : 'up'}
+              tint="amber"
+              icon={<Users size={20} />}
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <Card style={{ padding: 20 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 16, color: '#18181B' }}>
+                Claims by Workflow Stage
+              </div>
+              <DonutChart
+                segments={[
+                  { label: 'Submitted', value: dashboardMetrics.claims.stages?.submitted || 0, color: '#0EA5E9' },
+                  { label: 'Under Review', value: dashboardMetrics.claims.stages?.under_review || 0, color: '#6366F1' },
+                  { label: 'Approved', value: dashboardMetrics.claims.stages?.approved || 0, color: '#10B981' },
+                  { label: 'Settled', value: dashboardMetrics.claims.stages?.settled || 0, color: '#059669' },
+                  { label: 'Rejected', value: dashboardMetrics.claims.stages?.rejected || 0, color: '#EF4444' },
+                ].filter((s) => s.value > 0)}
+              />
+            </Card>
+
+            <Card style={{ padding: 20 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 16, color: '#18181B' }}>
+                Claims Stage Volume
+              </div>
+              <BarChart
+                data={[
+                  { label: 'Subm.', value: dashboardMetrics.claims.stages?.submitted || 0, color: '#0EA5E9' },
+                  { label: 'Review', value: dashboardMetrics.claims.stages?.under_review || 0, color: '#6366F1' },
+                  { label: 'Appr.', value: dashboardMetrics.claims.stages?.approved || 0, color: '#10B981' },
+                  { label: 'Rej.', value: dashboardMetrics.claims.stages?.rejected || 0, color: '#EF4444' },
+                ]}
+              />
+            </Card>
+          </div>
         </div>
       )}
 

@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.config import settings
 from src.agents.llm_factory import get_configured_llm
 from src.knowledge.store import _extract_text
 from src.utils.document_safety import enforce_document_limits, enforce_extracted_text_limit

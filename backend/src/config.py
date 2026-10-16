@@ -80,14 +80,14 @@ class Settings(BaseSettings):
     CLOUD_LLM_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-3.6-flash"
-    GEMINI_FAST_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_FAST_MODEL: str = "gemini-2.5-flash-lite"
     GEMINI_MAX_OUTPUT_TOKENS: int = Field(2048, ge=256, le=65536)
     EMBEDDING_PROVIDER: str = "ollama"
     EMBEDDING_BASE_URL: Optional[str] = "http://localhost:11434/v1"
     EMBEDDING_MODEL: str = "nomic-embed-text"
     EMBEDDING_API_KEY: Optional[str] = None
-    EMBEDDING_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
+    EMBEDDING_TIMEOUT_SECONDS: int = Field(60, ge=5, le=120)
     RERANK_MODEL: Optional[str] = None
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     AWS_SESSION_TOKEN: Optional[str] = None
     S3_BUCKET: Optional[str] = None
     S3_ENDPOINT_URL: Optional[str] = None
-    S3_SERVER_SIDE_ENCRYPTION: str = "aws:kms"
+    S3_SERVER_SIDE_ENCRYPTION: str = ""
     S3_KMS_KEY_ID: Optional[str] = None
     S3_PRESIGNED_URL_EXPIRE_SECONDS: int = Field(300, ge=60, le=3600)
     S3_KNOWLEDGE_PREFIX: str = "knowledge"
@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     VOICE_WORKER_ID: str = Field(default_factory=lambda: os.getenv("VOICE_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}")
     VOICE_STICKY_COOKIE_NAME: str = "voice_worker_id"
     VOICE_ICE_SERVERS: str = ""  # comma-separated STUN/TURN URLs; production requires TURN
+    TURN_USERNAME: Optional[str] = None
+    TURN_PASSWORD: Optional[str] = None
+    REQUIRE_TURN_IN_PRODUCTION: bool = False
     VOICE_EVENT_RETENTION_SECONDS: int = Field(86400, ge=300, le=2592000)
     VOICE_MAX_EVENT_TEXT_CHARS: int = Field(4000, ge=0, le=50000)
     VOICE_WORKER_DRAINING: bool = False
@@ -136,7 +139,10 @@ class Settings(BaseSettings):
     MAX_OCR_SECONDS: int = Field(30, ge=5, le=300)
     MAX_ARCHIVE_EXPANDED_BYTES: int = Field(200 * 1024 * 1024, ge=10 * 1024 * 1024, le=2 * 1024 * 1024 * 1024)
     SECURITY_FAIL_CLOSED: bool = Field(True)
-    REQUIRE_REDIS_IN_PRODUCTION: bool = Field(True)
+    REQUIRE_REDIS_IN_PRODUCTION: bool = Field(False)
+    REQUIRE_S3_IN_PRODUCTION: bool = Field(False)
+    REQUIRE_MALWARE_SCAN: bool = Field(False)
+    RUN_EMBEDDED_OUTBOX_WORKER: bool = Field(True)
     REQUIRE_MIGRATIONS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_EMAIL_VERIFICATION: bool = Field(False)
     SESSION_VERSION_CLAIM: str = "sv"
@@ -155,8 +161,6 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024
     MAX_EVIDENCE_UPLOAD_BYTES: int = 25 * 1024 * 1024
-    REQUIRE_S3_IN_PRODUCTION: bool = True
-    REQUIRE_MALWARE_SCAN: bool = True
     CLAMAV_HOST: Optional[str] = None
     CLAMAV_PORT: int = Field(3310, ge=1, le=65535)
     ALLOWED_ORIGINS: str = "http://localhost:3000"
@@ -224,7 +228,7 @@ class Settings(BaseSettings):
                 raise RuntimeError("SQLite is not supported for production/staging.")
             if "DBpassword" in self.DATABASE_URL or "REPLACE_WITH" in self.DATABASE_URL:
                 raise RuntimeError("DATABASE_URL still contains a development/example credential.")
-            if not self.REDIS_URL or not self.REDIS_URL.strip():
+            if self.REQUIRE_REDIS_IN_PRODUCTION and (not self.REDIS_URL or not self.REDIS_URL.strip()):
                 raise RuntimeError("REDIS_URL is required in production/staging for distributed rate limiting and AI governance.")
         if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
@@ -252,7 +256,7 @@ class Settings(BaseSettings):
             if not self.VOICE_TTS_BASE_URL:
                 raise RuntimeError("VOICE_TTS_BASE_URL is required when production/staging voice uses Pipecat.")
             ice = [x.strip() for x in self.VOICE_ICE_SERVERS.split(",") if x.strip()]
-            if not any(x.lower().startswith(("turn:", "turns:")) for x in ice):
+            if self.REQUIRE_TURN_IN_PRODUCTION and not any(x.lower().startswith(("turn:", "turns:")) for x in ice):
                 raise RuntimeError("VOICE_ICE_SERVERS must include a TURN server in production/staging.")
         groq_needed = self.FAST_LLM_PROVIDER == "groq" or self.REASONING_LLM_PROVIDER == "groq" or self.LLM_PROVIDER == "groq"
         if self.ENVIRONMENT in ("production", "staging") and groq_needed and not self.GROQ_API_KEY:

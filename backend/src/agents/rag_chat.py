@@ -226,7 +226,7 @@ def answer_claimant_question(
                 if label and label not in labels:
                     labels.append(label)
             if labels and not any(label.lower() in answer.lower() for label in labels):
-                answer = f"{answer.rstrip()}\\n\\nSources: " + "; ".join(labels)
+                answer = f"{answer.rstrip()}\n\nSources: " + "; ".join(labels)
             return answer
     except Exception:
         pass

@@ -1,8 +1,10 @@
 """Policy/regulatory knowledge ingestion and semantic retrieval endpoints."""
 import asyncio
+from datetime import datetime, timezone
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
+from sqlalchemy.orm.attributes import flag_modified
 from src.api.deps import require_role
 from src.database.models import User, KnowledgeDocument
 from src.database.session import SessionLocal
@@ -21,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
+def _normalize_doc_type(doc_type: str | None) -> str:
+    dt = (doc_type or "policy_wording").strip().lower()
+    if dt == "statutory":
+        return "regulation"
+    return dt
+
 class IngestRequest(BaseModel):
     source_name: str = Field(..., min_length=1, max_length=255)
     document_type: str | None = "policy_wording"
@@ -33,12 +41,13 @@ class IngestRequest(BaseModel):
     jurisdiction: str | None = Field(None, max_length=120)
 
 @router.post("/documents")
-async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER"]))):
+async def add_document(payload: IngestRequest, user: User = Depends(require_role(["ADJUSTER", "ADMIN"]))):
     raw_text = payload.text
+    norm_doc_type = _normalize_doc_type(payload.document_type)
     if not raw_text or len(raw_text.strip()) < 20:
         raw_text = (
             f"Policy wording clause source for {payload.source_name}. "
-            f"Type: {payload.document_type or 'General'}. "
+            f"Type: {norm_doc_type}. "
             f"Line of business: {payload.insurance_type or 'All'}. "
             "Governs terms of coverage, claim procedures, loss adjudication guidelines, exclusions, and statutory compliance."
         )
@@ -47,7 +56,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             ingest_document,
             content=raw_text.encode("utf-8"),
             filename=payload.source_name,
-            document_type=payload.document_type or "policy_wording",
+            document_type=norm_doc_type,
             insurance_type=payload.insurance_type or "motor",
             policy_number=payload.policy_number,
             effective_from=payload.effective_from,
@@ -73,7 +82,7 @@ async def upload_document(
     effective_to: str | None = Form(None),
     policy_version: str | None = Form("1.0"),
     jurisdiction: str | None = Form(None),
-    user: User = Depends(require_role(["ADJUSTER"])),
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="A document file is required.")
@@ -85,6 +94,7 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=413, detail="Knowledge document is too large.") from exc
     try:
+        norm_doc_type = _normalize_doc_type(document_type)
         staged = await asyncio.to_thread(
             put_bytes,
             raw,
@@ -97,7 +107,7 @@ async def upload_document(
             ingest_document,
             content=raw,
             filename=file.filename,
-            document_type=document_type or "policy_wording",
+            document_type=norm_doc_type,
             insurance_type=insurance_type or "motor",
             policy_number=policy_number,
             effective_from=effective_from,
@@ -118,7 +128,7 @@ async def upload_document(
                     "key": staged["key"],
                     "filename": file.filename,
                     "document_id": ingest_res.get("document_id"),
-                    "document_type": document_type,
+                    "document_type": norm_doc_type,
                     "insurance_type": insurance_type,
                     "uploaded_by": str(user.id),
                     "tenant_id": str(user.tenant_id or ""),
@@ -126,7 +136,34 @@ async def upload_document(
                 tenant_id=str(user.tenant_id or ""),
                 idempotency_key=f"knowledge-ingest:{staged['key']}",
             )
+            event.status = "processed"
+            event.processed_at = datetime.now(timezone.utc)
             db.commit()
+
+            # Pre-compile manifest on upload if policy wording
+            doc_id = ingest_res.get("document_id")
+            if norm_doc_type in {"policy_wording", "endorsement"} and doc_id:
+                try:
+                    from src.knowledge.policy_compiler import compile_policy_requirements
+                    from src.knowledge.store import save_requirement_manifest
+                    manifest = compile_policy_requirements(
+                        policy_chunks=ingest_res.get("chunks") or [],
+                        insurance_type=insurance_type or "motor",
+                        policy_number=policy_number,
+                        policy_version=policy_version or "1.0",
+                        tenant_id=str(user.tenant_id or ""),
+                    )
+                    if manifest:
+                        save_requirement_manifest(
+                            document_id=doc_id,
+                            manifest=manifest,
+                            policy_number=policy_number,
+                            insurance_type=insurance_type,
+                            tenant_id=str(user.tenant_id or ""),
+                        )
+                except Exception:
+                    logger.warning("Manifest pre-compilation on upload non-fatal warning")
+
             return {
                 "status": "Indexed",
                 "document_id": ingest_res.get("document_id"),
@@ -153,7 +190,7 @@ def ingestion_status(job_id: str, user: User = Depends(require_role(["ADJUSTER",
 @router.get("/search")
 async def retrieve(
     q: str,
-    user: User = Depends(require_role(["ADJUSTER"])),
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     insurance_type: str | None = None,
     document_type: str | None = None,
     policy_number: str | None = None,
@@ -166,7 +203,7 @@ async def retrieve(
                 search,
                 query=q,
                 insurance_type=insurance_type,
-                document_types=[document_type] if document_type else None,
+                document_types=[_normalize_doc_type(document_type)] if document_type else None,
                 policy_number=policy_number,
                 incident_date=__import__("datetime").date.fromisoformat(incident_date) if incident_date else None,
                 tenant_id=str(user.tenant_id or ""),
@@ -228,12 +265,14 @@ class UpdateDocumentRequest(BaseModel):
 def update_document(
     document_id: str,
     payload: UpdateDocumentRequest,
-    user: User = Depends(require_role(["ADJUSTER"])),
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+        (KnowledgeDocument.tenant_id == str(user.tenant_id))
+        | (KnowledgeDocument.tenant_id.is_(None))
+        | (KnowledgeDocument.tenant_id == ""),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -257,6 +296,7 @@ def update_document(
         meta["publication_status"] = payload.publication_status
     meta["updated_by"] = str(user.id)
     doc.metadata_json = meta
+    flag_modified(doc, "metadata_json")
     db.commit()
     return {"document_id": str(doc.id), "updated": True, "publication_status": meta.get("publication_status")}
 
@@ -272,12 +312,14 @@ async def replace_document_content(
     jurisdiction: str | None = Form(None),
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
-    user: User = Depends(require_role(["ADJUSTER"])),
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     old = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+        (KnowledgeDocument.tenant_id == str(user.tenant_id))
+        | (KnowledgeDocument.tenant_id.is_(None))
+        | (KnowledgeDocument.tenant_id == ""),
     ).first()
     if not old:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -288,11 +330,12 @@ async def replace_document_content(
         clean, _scan_reason = await asyncio.to_thread(scan_bytes, raw)
         if not clean:
             raise HTTPException(status_code=422, detail="The document failed security scanning.")
+        norm_doc_type = _normalize_doc_type(document_type or old.document_type)
         result = await asyncio.to_thread(
             ingest_document,
             content=raw,
             filename=file.filename,
-            document_type=document_type or old.document_type,
+            document_type=norm_doc_type,
             insurance_type=insurance_type or old.insurance_type,
             policy_number=policy_number or (old.metadata_json or {}).get("policy_number"),
             effective_from=effective_from or (old.metadata_json or {}).get("effective_from"),
@@ -314,6 +357,7 @@ async def replace_document_content(
     meta["superseded_by"] = new_id
     meta["updated_by"] = str(user.id)
     old.metadata_json = meta
+    flag_modified(old, "metadata_json")
     db.commit()
     return {
         "document_id": str(old.id),
@@ -325,12 +369,14 @@ async def replace_document_content(
 @router.post("/documents/{document_id}/reindex")
 async def reindex_document(
     document_id: str,
-    user: User = Depends(require_role(["ADJUSTER"])),
+    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        KnowledgeDocument.tenant_id == str(user.tenant_id or ""),
+        (KnowledgeDocument.tenant_id == str(user.tenant_id))
+        | (KnowledgeDocument.tenant_id.is_(None))
+        | (KnowledgeDocument.tenant_id == ""),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -378,6 +424,7 @@ async def reindex_document(
         meta["publication_status"] = "superseded"
         meta["superseded_by"] = str(result.get("document_id"))
         doc.metadata_json = meta
+        flag_modified(doc, "metadata_json")
         db.commit()
 
     return {"document_id": str(doc.id), "reindexed_document_id": str(result.get("document_id")), "status": "completed", "chunks": result.get("chunks", 0)}
@@ -388,15 +435,45 @@ def publish_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, KnowledgeDocument.tenant_id == user.tenant_id).first()
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == document_id,
+        (KnowledgeDocument.tenant_id == str(user.tenant_id))
+        | (KnowledgeDocument.tenant_id.is_(None))
+        | (KnowledgeDocument.tenant_id == ""),
+    ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
     meta = dict(doc.metadata_json or {})
     meta["publication_status"] = "published"
     meta["published_by"] = str(user.id)
-    from datetime import datetime, timezone
     meta["published_at"] = datetime.now(timezone.utc).isoformat()
     doc.metadata_json = meta
+    flag_modified(doc, "metadata_json")
+
+    # Pre-compile manifest on publish if policy wording
+    if doc.document_type in {"policy_wording", "endorsement"}:
+        try:
+            from src.knowledge.policy_compiler import compile_policy_requirements
+            from src.knowledge.store import save_requirement_manifest
+            chunks = [{"text": c.chunk_text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
+            manifest = compile_policy_requirements(
+                policy_chunks=chunks,
+                insurance_type=doc.insurance_type or "motor",
+                policy_number=meta.get("policy_number"),
+                policy_version=meta.get("policy_version") or doc.document_version or "1.0",
+                tenant_id=str(user.tenant_id or ""),
+            )
+            if manifest:
+                save_requirement_manifest(
+                    document_id=doc.id,
+                    manifest=manifest,
+                    policy_number=meta.get("policy_number"),
+                    insurance_type=doc.insurance_type,
+                    tenant_id=str(user.tenant_id or ""),
+                )
+        except Exception:
+            logger.warning("Manifest pre-compilation on publish non-fatal warning")
+
     db.commit()
     return {"document_id": str(doc.id), "publication_status": "published"}
 
@@ -410,7 +487,9 @@ def delete_document(
     """Delete a knowledge document and cascade delete its chunks."""
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        KnowledgeDocument.tenant_id == user.tenant_id,
+        (KnowledgeDocument.tenant_id == str(user.tenant_id))
+        | (KnowledgeDocument.tenant_id.is_(None))
+        | (KnowledgeDocument.tenant_id == ""),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")

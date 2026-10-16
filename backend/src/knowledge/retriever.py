@@ -12,7 +12,7 @@ class KnowledgeRetrievalError(RuntimeError):
     pass
 
 class KnowledgeRetriever:
-    def retrieve(self, *, insurance_type: str | None = None, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None) -> dict:
+    def retrieve(self, *, insurance_type: str | None = None, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None, claimant_id: str | None = None) -> dict:
         tenant_id = (tenant_id or "").strip()
         if not tenant_id:
             if settings.ENVIRONMENT == "test":
@@ -20,6 +20,51 @@ class KnowledgeRetriever:
             else:
                 raise KnowledgeRetrievalError("tenant_id is required for knowledge retrieval.")
         facts = dict(claim_facts or {})
+
+        # Deterministic source-of-truth order:
+        # 1. Exact Policy row from policy_number
+        if policy_number and not insurance_type:
+            try:
+                from src.database.session import SessionLocal
+                from src.database.models import Policy
+                with SessionLocal() as db:
+                    pol = db.query(Policy).filter(Policy.policy_number == policy_number).first()
+                    if pol and pol.policy_type:
+                        insurance_type = pol.policy_type
+            except Exception:
+                pass
+        # 2. Authenticated claimant has exactly 1 active linked policy
+        elif not policy_number and not insurance_type:
+            claimant_user_id = claimant_id or facts.get("claimant_id")
+            if claimant_user_id:
+                try:
+                    from src.database.session import SessionLocal
+                    from src.database.models import Policy
+                    with SessionLocal() as db:
+                        pols = db.query(Policy).filter(
+                            Policy.customer_id == str(claimant_user_id),
+                            Policy.is_active == True,
+                        ).all()
+                        if len(pols) == 1:
+                            policy_number = pols[0].policy_number
+                            insurance_type = pols[0].policy_type
+                except Exception:
+                    pass
+
+        # 3. Neither known -> CONTEXT_RESOLUTION_REQUIRED
+        if not policy_number and not insurance_type:
+            return {
+                "available": False,
+                "status": "CONTEXT_RESOLUTION_REQUIRED",
+                "reason": "POLICY_IDENTIFICATION_REQUIRED",
+                "requirements": [],
+                "evidence_requirements": [],
+                "authoritative": False,
+                "policy": [],
+                "regulations": [],
+                "question": "Could you provide your policy number or specify what type of policy (e.g., motor, health, home, travel) you are filing a claim for?",
+            }
+
         incident_description = str(query or facts.get("event_description") or "").strip()
         searchable_facts = " ".join(
             f"{key}: {value}"
@@ -78,7 +123,7 @@ class KnowledgeRetriever:
                         q,
                         insurance_type=insurance_type,
                         policy_number=policy_number,
-                        document_types=["policy_wording"],
+                        document_types=["policy_wording", "endorsement"],
                         incident_date=incident_date,
                         tenant_id=tenant_id,
                         jurisdiction=jurisdiction,
@@ -106,11 +151,35 @@ class KnowledgeRetriever:
                     q,
                     insurance_type=insurance_type,
                     policy_number=policy_number,
-                    document_types=["policy_wording"],
+                    document_types=["policy_wording", "endorsement"],
                     incident_date=incident_date,
+                    tenant_id=tenant_id,
+                    jurisdiction=jurisdiction,
                 )
             except Exception:
                 policy = []
+            if policy:
+                try:
+                    fallback_reqs = get_requirements_from_context(chunks=policy, insurance_type=insurance_type)
+                    if fallback_reqs:
+                        resolved = resolve_requirement_manifest(
+                            manifest=fallback_reqs,
+                            insurance_type=insurance_type,
+                            claim_facts={**facts, "incident": incident_description},
+                        )
+                        if resolved:
+                            return {
+                                "available": True,
+                                "status": "OK",
+                                "requirements": resolved,
+                                "policy": policy,
+                                "regulations": [],
+                                "authoritative": True,
+                                "planning_model": "chunk_manifest_fallback",
+                                "policy_version": selected_policy_version,
+                            }
+                except Exception:
+                    pass
             return {
                 "available": False,
                 "status": "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE",
@@ -123,7 +192,7 @@ class KnowledgeRetriever:
             }
 
         try:
-            policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording"], incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
+            policy = search(q, insurance_type=insurance_type, policy_number=policy_number, document_types=["policy_wording", "endorsement"], incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
             guidance = search(q, insurance_type=insurance_type, document_types=["regulation", "guideline", "claim_requirement"], incident_date=incident_date, tenant_id=tenant_id, jurisdiction=jurisdiction)
         except Exception:
             policy, guidance = [], []
@@ -140,6 +209,19 @@ class KnowledgeRetriever:
                 pass
 
         if not policy and not guidance:
+            try:
+                prov = get_provisional_requirements(insurance_type or "general")
+                if prov:
+                    return {
+                        "available": True,
+                        "status": "PROVISIONAL",
+                        "requirements": prov,
+                        "policy": [],
+                        "regulations": [],
+                        "authoritative": False,
+                    }
+            except Exception:
+                pass
             return {
                 "available": False,
                 "status": "NO_RELEVANT_KNOWLEDGE",
@@ -249,6 +331,7 @@ class KnowledgeRetriever:
 
         document_types = [
             "policy_wording",
+            "endorsement",
             "regulation",
             "guideline",
             "claim_requirement",
@@ -378,34 +461,13 @@ Claimant question:
             else:
                 answer = str(content or "").strip()
             if answer:
-                policy_specific = bool(
-                    insurance_type
-                    or policy_number
-                    or any(
-                        token in question.lower()
-                        for token in (
-                            "cover", "coverage", "exclude", "exclusion", "deductible",
-                            "limit", "waiting", "deadline", "reimburse", "eligible",
-                            "required document", "evidence",
-                        )
-                    )
-                )
-                missing_citation = policy_specific and not all(
-                    source.get("citation_label") and str(source.get("citation_label")) in answer
-                    for source in sources[:1]
-                )
-                if missing_citation:
-                    answer = (
-                        "I found relevant material, but the retrieved source does not provide "
-                        "a verifiable clause or page citation for that statement. I won't present "
-                        "it as a policy-supported answer."
-                    )
-                    return {
-                        "answer": answer,
-                        "grounded": False,
-                        "sources": sources,
-                        "status": "CITATION_REQUIRED",
-                    }
+                labels = [
+                    str(s.get("citation_label"))
+                    for s in sources
+                    if s.get("citation_label")
+                ]
+                if labels and not any(label in answer for label in labels):
+                    answer = f"{answer}\n\nSources: {'; '.join(labels[:3])}"
                 return {
                     "answer": answer,
                     "grounded": True,

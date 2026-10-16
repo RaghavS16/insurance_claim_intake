@@ -89,7 +89,7 @@ export default function ClaimDetailsPage({
   const handleExportDossier = async () => {
     try {
       const res = await api.get<any>(`/api/v1/claims/${ticketId}/export`);
-      setDossierText(typeof res === 'string' ? res : JSON.stringify(res, null, 2));
+      setDossierText(res?.formatted_text || (typeof res === 'string' ? res : JSON.stringify(res, null, 2)));
       setExportModalOpen(true);
     } catch (err: any) {
       showToast(err.message || 'Failed to export dossier.', 'error');
@@ -107,22 +107,11 @@ export default function ClaimDetailsPage({
     setSubmittingResponse(true);
 
     try {
-      const docName = respondFile?.name || 'evidence_response.pdf';
-      if (respondFile) {
-        const formData = new FormData();
-        formData.append('file', respondFile);
-        formData.append('document_type', 'claimant_response');
-        try {
-          await api.post(`/api/v1/claims/${ticketId}/evidence`, formData);
-        } catch {
-          // Evidence upload optional / non-fatal
-        }
-      }
+      const formData = new FormData();
+      if (respondNote.trim()) formData.append('response_note', respondNote.trim());
+      if (respondFile) formData.append('file', respondFile);
 
-      await api.post(`/api/v1/claims/${ticketId}/requests/${claim.pending_request.id}/respond`, {
-        notes: respondNote,
-        document_name: docName,
-      });
+      await api.post(`/api/v1/claims/${ticketId}/requests/${claim.pending_request.id}/respond`, formData);
 
       showToast('Response and document submitted to adjuster!', 'success');
       setRespondModalOpen(false);
@@ -253,7 +242,7 @@ export default function ClaimDetailsPage({
               Action Required: Adjuster Evidence Inquiry
             </div>
             <div className="snow-caption" style={{ color: '#52525B', marginTop: 2 }}>
-              {claim.pending_request.notes || 'Please upload the requested document to proceed.'}
+              {claim.pending_request.request_text || claim.pending_request.notes || 'Please upload the requested document to proceed.'}
             </div>
           </div>
           <Button size="sm" variant="primary" onClick={() => setRespondModalOpen(true)}>
@@ -296,6 +285,75 @@ export default function ClaimDetailsPage({
               </div>
             </div>
           </Card>
+
+          {/* Dynamic Claim Details (RAG Intake Spec) */}
+          {(() => {
+            const ext = claim.extracted_data || claim.pipeline_state?.extracted_data || {};
+            const keys = Object.keys(ext).filter(
+              (k) => !['policy_id', 'insurance_type', 'event_date', 'event_location', 'event_description', 'estimated_claim_amount'].includes(k)
+            );
+            if (keys.length === 0) return null;
+            return (
+              <Card title="Policy Loss Specifics & Questionnaire Answers">
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  {keys.map((k) => (
+                    <div key={k} style={{ padding: '8px 12px', backgroundColor: '#FAFAFB', borderRadius: 8 }}>
+                      <span className="snow-caption" style={{ color: '#71717A', textTransform: 'capitalize' }}>
+                        {k.replace(/_/g, ' ')}
+                      </span>
+                      <div className="snow-body" style={{ fontWeight: 500, marginTop: 2 }}>
+                        {typeof ext[k] === 'boolean' ? (ext[k] ? 'Yes' : 'No') : String(ext[k] ?? '—')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            );
+          })()}
+
+          {/* Adjuster Evidence Requests History */}
+          {(claim.evidence_requests && claim.evidence_requests.length > 0) && (
+            <Card title="Adjuster Inquiries & Document Requests">
+              <div className="snow-flex-col snow-gap-3">
+                {claim.evidence_requests.map((req: any, idx: number) => (
+                  <div
+                    key={req.id || idx}
+                    style={{
+                      padding: '12px 14px',
+                      backgroundColor: req.status === 'open' ? '#FFFBEB' : '#F9FAFB',
+                      border: req.status === 'open' ? '1px solid #FDE68A' : '1px solid #E5E7EB',
+                      borderRadius: 10,
+                    }}
+                  >
+                    <div className="snow-flex snow-justify-between snow-items-center">
+                      <div className="snow-body" style={{ fontWeight: 600, fontSize: 13, color: '#111827' }}>
+                        Inquiry #{idx + 1}: {req.request_text || req.notes || 'Evidence required'}
+                      </div>
+                      <BadgePill variant={req.status === 'open' ? 'amber' : 'mint'}>
+                        {req.status === 'open' ? 'Awaiting Response' : 'Responded'}
+                      </BadgePill>
+                    </div>
+                    {req.requested_at && (
+                      <div className="snow-micro" style={{ color: '#6B7280', marginTop: 4 }}>
+                        Requested: {new Date(req.requested_at).toLocaleString()}
+                      </div>
+                    )}
+                    {req.response_note && (
+                      <div style={{ marginTop: 8, padding: '6px 10px', backgroundColor: '#FFFFFF', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                        <span className="snow-micro" style={{ color: '#4B5563', fontWeight: 600 }}>Your Response:</span>
+                        <div className="snow-caption" style={{ color: '#1F2937' }}>{req.response_note}</div>
+                        {req.evidence_name && (
+                          <div className="snow-micro" style={{ color: '#2563EB', marginTop: 2 }}>
+                            📎 Attached: {req.evidence_name}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
           <Card title="Uploaded Evidence Documents">
             {evidenceList.length === 0 ? (
@@ -399,7 +457,7 @@ export default function ClaimDetailsPage({
       >
         <form onSubmit={handleRespondRequest}>
           <p className="snow-caption" style={{ color: '#71717A', marginBottom: 16 }}>
-            {claim.pending_request?.notes || 'Please upload the requested document for the adjuster.'}
+            {claim.pending_request?.request_text || claim.pending_request?.notes || 'Please upload the requested document for the adjuster.'}
           </p>
 
           <Input

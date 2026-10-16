@@ -125,12 +125,15 @@ def build_submission_readiness(
                 ClaimSubmissionConfirmation.claim_state_version == int(claim.state_version or 1),
             ).first()
         )
+    state = claim.pipeline_state or {}
+    rag_status = state.get("rag_status")
     return build_readiness(
         requirements=requirements,
         policy_verification=policy_verification,
         evidence_rows=evidence,
         exceptions=exceptions,
         claimant_confirmation=bool(claimant_confirmation),
+        rag_status=rag_status,
     )
 
 def transition_claim_if_allowed(
