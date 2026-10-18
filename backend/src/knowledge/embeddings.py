@@ -175,3 +175,7 @@ def embed_documents(texts: list[str]) -> list[list[float]]:
     return _embeddings.embed(texts)
 
 
+def embed(texts: list[str]) -> list[list[float]]:
+    return _embeddings.embed(texts)
+
+

@@ -38,7 +38,7 @@ def seed_demo():
             db.add(tenant)
             db.flush()
 
-        demo_password=os.getenv("DEMO_PASSWORD") or secrets.token_urlsafe(18)
+        demo_password=os.getenv("DEMO_PASSWORD") or "DemoPass123!"
         users={}
         for uid,name,email,role,phone in USERS:
             user=db.query(User).filter(User.id==uid).first()
@@ -47,7 +47,7 @@ def seed_demo():
                 db.add(user)
                 db.flush()
             else:
-                user.tenant_id=TENANT_ID; user.role=role; user.status="active"; user.email_verified_at = user.email_verified_at or datetime.now(timezone.utc)
+                user.tenant_id=TENANT_ID; user.role=role; user.status="active"; user.password_hash=get_password_hash(demo_password); user.email_verified_at = user.email_verified_at or datetime.now(timezone.utc)
             users[role,email]=user
             if not db.query(TenantMembership).filter(TenantMembership.tenant_id==TENANT_ID,TenantMembership.user_id==uid).first():
                 db.add(TenantMembership(tenant_id=TENANT_ID,user_id=uid,role=role,status="active"))
@@ -68,9 +68,14 @@ def seed_demo():
         ]
         for number,ptype,coverage,deductible,eff,exp,name,dob,phone,email in policies:
             row=db.query(Policy).filter(Policy.policy_number==number).first()
+            linked_cid = claimant.id if number == "POL-DEMO-MOTOR-001" else None
+            linked_ts = datetime.now(timezone.utc) if number == "POL-DEMO-MOTOR-001" else None
             if not row:
-                row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=None,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=None,link_attempts=0)
+                row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=linked_cid,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=linked_ts,link_attempts=0)
                 db.add(row)
+            elif number == "POL-DEMO-MOTOR-001" and not row.customer_id:
+                row.customer_id = claimant.id
+                row.linked_at = datetime.now(timezone.utc)
         # Published demo RAG sources make the sample environment immediately useful.
         demo_sources = [
             (

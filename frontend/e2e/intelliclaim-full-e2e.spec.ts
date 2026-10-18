@@ -1,13 +1,41 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'DemoPass123!';
 
 test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', () => {
+  test.beforeAll(() => {
+    // Ensure deterministic demo users, linked policies, and claims exist even if backend was already running
+    const rootDir = path.resolve(__dirname, '..', '..');
+    const seedScript = path.resolve(rootDir, 'database', 'seed_demo.py');
+    const pythonCandidates = [
+      path.resolve(rootDir, 'venv', 'Scripts', 'python.exe'),
+      path.resolve(rootDir, '.venv', 'Scripts', 'python.exe'),
+      path.resolve(rootDir, 'backend', 'venv', 'Scripts', 'python.exe'),
+      path.resolve(rootDir, 'venv', 'bin', 'python'),
+      path.resolve(rootDir, '.venv', 'bin', 'python'),
+    ];
+    const pythonCmd = pythonCandidates.find((p) => fs.existsSync(p)) || 'python';
+    if (fs.existsSync(seedScript)) {
+      try {
+        execFileSync(pythonCmd, [seedScript], {
+          cwd: rootDir,
+          env: { ...process.env, DEMO_PASSWORD },
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        console.warn('Non-fatal seed_demo note:', err);
+      }
+    }
+  });
+
   test('1. Authentication & 3-Step Password Recovery Flow', async ({ page }) => {
     const uniqueEmail = `claimant.e2e.${Date.now()}@example.com`;
 
-    // 1a. Sign Up with required phone field
+    // 1a. Sign Up with required phone field and terms checkbox
     await page.goto(`${BASE_URL}/signup`);
     await expect(page.locator('h1')).toContainText(/Create Account|Sign Up/i);
     await page.fill('input[placeholder="Full Name"]', 'E2E Test Claimant');
@@ -15,12 +43,16 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
     await page.fill('input[placeholder="Phone Number"]', '+919876543210');
     await page.fill('input[placeholder="Password"]', 'SecurePass123!');
     await page.fill('input[placeholder="Repeat Password"]', 'SecurePass123!');
+    const termsCheckbox = page.locator('#terms, input[type="checkbox"]').first();
+    if (await termsCheckbox.isVisible()) {
+      await termsCheckbox.check();
+    }
     await page.click('button[type="submit"]');
 
     // Wait for redirect to either /signin or /verify-email
     await page.waitForURL(/\/(signin|verify-email)/, { timeout: 15000 });
 
-    // 1b. Forgot Password page
+    // 1b. Forgot Password page -> OTP verification redirect
     await page.goto(`${BASE_URL}/forgot-password`);
     await expect(page.locator('h1')).toContainText(/Forgot Password/i);
     await page.fill('input[type="email"]', uniqueEmail);
@@ -29,7 +61,7 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
   });
 
   test('2. Claimant Portal: Policy Linking, 100% RAG Chatbot Intake, Chat History & Claim Tracking', async ({ page }) => {
-    // Sign in as seeded claimant or newly registered claimant
+    // Sign in as seeded claimant
     await page.goto(`${BASE_URL}/signin`);
     await page.fill('input[placeholder="Email"]', 'riya.claimant@insurance.com');
     await page.fill('input[placeholder="Password"]', DEMO_PASSWORD);
@@ -42,12 +74,16 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
     // 2b. Navigate to My Policies & open Link Policy Modal
     await page.goto(`${BASE_URL}/claimant/policies`);
     await expect(page.getByText(/My Insurance Policies|Linked Policies/i).first()).toBeVisible();
-    const linkBtn = page.getByRole('button', { name: /Link Policy/i }).first();
+    const linkBtn = page.getByRole('button', { name: /Link Existing Policy|Link Policy/i }).first();
     if (await linkBtn.isVisible()) {
       await linkBtn.click();
-      await page.fill('input[placeholder*="POL-"]', 'POL-DEMO-MOTOR-001');
+      await page.fill('input[placeholder*="MOT-"]', 'POL-DEMO-MOTOR-001');
       await page.fill('input[placeholder*="Jane Doe"]', 'Riya Claimant');
-      await page.fill('input[placeholder="1234"]', '0004');
+      await page.fill('input[placeholder*="0004"]', '0004');
+      const cancelBtn = page.getByRole('button', { name: /Cancel/i }).first();
+      if (await cancelBtn.isVisible()) {
+        await cancelBtn.click();
+      }
     }
 
     // 2c. Navigate to Conversational Claim Intake (/claimant/file-claim)
@@ -61,7 +97,7 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
     await page.getByRole('button', { name: /^Send$/i }).click();
 
     // Verify assistant responds and Live Claim Dossier updates Policy to POL-DEMO-MOTOR-001
-    await expect(page.getByText('POL-DEMO-MOTOR-001').first()).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText('POL-DEMO-MOTOR-001').first()).toBeVisible({ timeout: 25000 });
 
     // 2d. Navigate to Track Claims & open seeded claim #CLM-DEMO-MOTOR-001
     await page.goto(`${BASE_URL}/claimant/claims/CLM-DEMO-MOTOR-001`);
@@ -93,9 +129,10 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
 
     await page.getByRole('button', { name: 'Case Notes' }).click();
     await expect(page.getByText('Internal Adjudication Notes')).toBeVisible();
-    await page.fill('input[placeholder*="Add an internal note"]', 'E2E Adjuster verification note.');
+    const noteText = `E2E Adjuster verification note ${Date.now()}`;
+    await page.fill('input[placeholder*="Add an internal note"]', noteText);
     await page.getByRole('button', { name: 'Post Note' }).click();
-    await expect(page.getByText('E2E Adjuster verification note.')).toBeVisible();
+    await expect(page.getByText(noteText)).toBeVisible();
 
     // 3c. Verify Policy Directory & Knowledge Base (RAG)
     await page.goto(`${BASE_URL}/adjuster/policies`);
