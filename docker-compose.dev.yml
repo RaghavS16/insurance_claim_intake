@@ -1,7 +1,10 @@
 # =============================================================================
 # Local Development Override for Docker Compose
-# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Usage: docker compose -f docker-compose.dev.yml up
 # =============================================================================
+
+include:
+  - docker-compose.yml
 
 services:
   mailpit:
