@@ -1,0 +1,41 @@
+# =============================================================================
+# Local Development Override for Docker Compose
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+
+services:
+  mailpit:
+    profiles: [] # Active by default in dev
+
+  backend:
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      REQUIRE_REDIS_IN_PRODUCTION: "false"
+      REQUIRE_S3_IN_PRODUCTION: "false"
+      REQUIRE_MALWARE_SCAN: "false"
+      REQUIRE_EMAIL_VERIFICATION: "false"
+      REQUIRE_MIGRATIONS_IN_PRODUCTION: "false"
+      EMAIL_BACKEND: mailpit
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USERNAME: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM_EMAIL: dev@insurance-claims.local
+      SMTP_USE_TLS: "false"
+      SMTP_USE_SSL: "false"
+      PUBLIC_APP_URL: http://localhost:3000
+
+  outbox-worker:
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      REQUIRE_S3_IN_PRODUCTION: "false"
+      EMAIL_BACKEND: mailpit
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USERNAME: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM_EMAIL: dev@insurance-claims.local
+      SMTP_USE_TLS: "false"
+      SMTP_USE_SSL: "false"
