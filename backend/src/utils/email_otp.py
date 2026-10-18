@@ -72,21 +72,37 @@ def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     msg["To"] = to_email
 
     is_mailpit = getattr(settings, "EMAIL_BACKEND", "mailpit").lower() == "mailpit"
-    host = settings.SMTP_HOST or "127.0.0.1"
+    if is_mailpit and settings.ENVIRONMENT in ("production", "staging"):
+        logger.error("Mailpit is strictly forbidden in production or staging environments.")
+        return False
+
+    if not settings.SMTP_HOST:
+        logger.warning("SMTP_HOST is not configured; cannot deliver email.")
+        return False
+
+    host = settings.SMTP_HOST
     port = 1025 if is_mailpit else (settings.SMTP_PORT or 587)
     use_tls = False if is_mailpit else bool(settings.SMTP_USE_TLS)
+    use_ssl = False if is_mailpit else bool(settings.SMTP_USE_SSL)
+    timeout = getattr(settings, "SMTP_TIMEOUT_SECONDS", 15) or 15
     smtp_username = (settings.SMTP_USERNAME or "").strip() if not is_mailpit else ""
-    smtp_password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip() if not is_mailpit else ""
+    smtp_password = (settings.SMTP_PASSWORD or "") if not is_mailpit else ""  # Never strip internal spaces
 
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            with smtplib.SMTP(host, port, timeout=10) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_username and smtp_password:
-                    server.login(smtp_username, smtp_password)
-                server.sendmail(from_email, [to_email], msg.as_string())
+            if use_ssl:
+                with smtplib.SMTP_SSL(host, port, timeout=timeout) as server:
+                    if smtp_username and smtp_password:
+                        server.login(smtp_username, smtp_password)
+                    server.sendmail(from_email, [to_email], msg.as_string())
+            else:
+                with smtplib.SMTP(host, port, timeout=timeout) as server:
+                    if use_tls:
+                        server.starttls()
+                    if smtp_username and smtp_password:
+                        server.login(smtp_username, smtp_password)
+                    server.sendmail(from_email, [to_email], msg.as_string())
             logger.info("Successfully sent email to %s via %s (%s:%s)", to_email, "Mailpit" if is_mailpit else "SMTP", host, port)
             return True
         except Exception as exc:

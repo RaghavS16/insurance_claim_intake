@@ -39,8 +39,7 @@ def _send_transactional_email(event: OutboxEvent) -> None:
     msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
-    msg["X-IntelliClaim-Event-ID"] = str(event.id)
-    password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
+    password = settings.SMTP_PASSWORD or ""
 
     if settings.SMTP_USE_SSL:
         with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:

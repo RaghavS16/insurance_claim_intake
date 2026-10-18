@@ -237,8 +237,19 @@ class Settings(BaseSettings):
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_MALWARE_SCAN and not self.CLAMAV_HOST:
             raise RuntimeError("CLAMAV_HOST is required when malware scanning is enabled.")
-        if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_EMAIL_VERIFICATION and not self.SMTP_HOST:
-            raise RuntimeError("SMTP_HOST is required when email verification is enabled.")
+        if self.ENVIRONMENT in ("production", "staging"):
+            if self.EMAIL_BACKEND.lower() != "smtp":
+                raise RuntimeError("EMAIL_BACKEND must be 'smtp' in production/staging.")
+            if not self.SMTP_HOST or not self.SMTP_HOST.strip():
+                raise RuntimeError("SMTP_HOST is required in production/staging.")
+            if not self.SMTP_USERNAME or not self.SMTP_USERNAME.strip():
+                raise RuntimeError("SMTP_USERNAME is required in production/staging.")
+            if not self.SMTP_PASSWORD:
+                raise RuntimeError("SMTP_PASSWORD is required in production/staging.")
+            if not self.SMTP_FROM_EMAIL or not self.SMTP_FROM_EMAIL.strip():
+                raise RuntimeError("SMTP_FROM_EMAIL is required in production/staging.")
+            if not (self.SMTP_USE_TLS or self.SMTP_USE_SSL):
+                raise RuntimeError("One of SMTP_USE_TLS or SMTP_USE_SSL must be true in production/staging.")
         if self.ENVIRONMENT in ("production", "staging"):
             if not self.PUBLIC_APP_URL.startswith("https://"):
                 raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
