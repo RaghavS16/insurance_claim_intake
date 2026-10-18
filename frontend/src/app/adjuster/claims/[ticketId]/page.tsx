@@ -115,6 +115,9 @@ export default function AdjusterClaimWorkspacePage({
       if (data?.claim?.estimated_claim_amount) {
         setPayoutAmount(String(data.claim.estimated_claim_amount));
       }
+      if (data?.copilot && Object.keys(data.copilot).length > 0) {
+        setCopilotSynopsis((prev: any) => prev || data.copilot);
+      }
 
       if (data?.copilot && Object.keys(data.copilot).length > 0) {
         setCopilotSynopsis((prev: any) => prev || data.copilot);

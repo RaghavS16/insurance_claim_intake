@@ -438,6 +438,19 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["message"] = msg
         return state
 
+    # 2b. Context resolution required when neither policy_number nor insurance_type is known yet
+    if not requirements and rag_status == "CONTEXT_RESOLUTION_REQUIRED":
+        state["conversation_phase"] = "source_of_truth_intake"
+        state["conversation_status"] = "collecting"
+        ctx_q = (state.get("knowledge_context") or {}).get("question") or (
+            "Could you provide your policy number or specify what type of policy "
+            "(e.g., motor, health, home, travel) you are filing a claim for?"
+        )
+        state["next_question_field"] = "policy_id"
+        state["next_question"] = ctx_q
+        state["message"] = ctx_q
+        return state
+
     # 3. Honest fallback if the knowledge base has no requirements
     if not requirements and rag_status in {"NO_RELEVANT_KNOWLEDGE", "REQUIREMENT_PLAN_UNAVAILABLE", "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE", "NO_POLICY_WORDING"}:
         state["conversation_phase"] = "source_of_truth_intake"

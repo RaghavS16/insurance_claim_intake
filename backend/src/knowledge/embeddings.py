@@ -74,7 +74,10 @@ class EmbeddingService:
         except ImportError:
             raise RuntimeError("fastembed package is required for in-memory embedded model. Run: pip install fastembed")
         
-        target_model = model_name or "BAAI/bge-base-en-v1.5"
+        if not model_name or model_name in ("nomic-embed-text", "text-embedding-004", "gemini-embedding-001"):
+            target_model = "BAAI/bge-base-en-v1.5"
+        else:
+            target_model = model_name
         cache_dir = os.environ.get("FASTEMBED_CACHE_DIR") or os.path.join(tempfile.gettempdir(), "fastembed_cache")
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -159,8 +162,13 @@ class EmbeddingService:
         try:
             return self._embed_openai_compatible(texts, base_url, model, api_key)
         except requests.exceptions.RequestException as exc:
-            logger.error("Embedding request failed: %s", exc)
-            raise RuntimeError(f"Embedding service failed: {exc}") from exc
+            logger.warning("Primary embedding endpoint (%s) unreachable (%s); attempting Gemini/FastEmbed fallback.", provider, exc)
+            if gemini_key:
+                try:
+                    return self._embed_gemini(texts, gemini_key, "text-embedding-004")
+                except Exception:
+                    pass
+            return self._embed_fastembed(texts, None)
 
 _embeddings = EmbeddingService()
 

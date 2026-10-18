@@ -62,15 +62,7 @@ class TextTurnRequest(BaseModel):
 def _is_post_submission_status(status: str | None) -> bool:
     return str(status or "") in {"submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"}
 
-def _request_payload(row: ClaimEvidenceRequest, db: Session) -> Dict[str, Any]:
-    evidence = db.query(ClaimEvidence).filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id).order_by(ClaimEvidence.created_at.desc()).first()
-    return {
-        "id": str(row.id), "claim_id": str(row.claim_id), "adjuster_id": str(row.adjuster_id),
-        "request_text": row.request_text, "status": row.status, "response_note": row.response_note,
-        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
-        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
-        "response_evidence": {"id": str(evidence.id), "name": evidence.original_filename, "verification_status": evidence.verification_status} if evidence else None,
-    }
+# Consolidated _request_payload is defined below
 
 
 class UpdateClaimRequest(BaseModel):
@@ -98,9 +90,9 @@ def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
         .first()
     )
     return {
-        "id": row.id,
-        "claim_id": row.claim_id,
-        "adjuster_id": row.adjuster_id,
+        "id": str(row.id),
+        "claim_id": str(row.claim_id),
+        "adjuster_id": str(row.adjuster_id),
         "request_text": row.request_text,
         "notes": row.request_text,
         "status": row.status,
@@ -109,6 +101,11 @@ def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
         "responded_at": row.responded_at.isoformat() if row.responded_at else None,
         "evidence_id": str(evidence.id) if evidence else None,
         "evidence_name": evidence.original_filename if evidence else None,
+        "response_evidence": {
+            "id": str(evidence.id),
+            "name": evidence.original_filename,
+            "verification_status": evidence.verification_status,
+        } if evidence else None,
     }
 
 
@@ -156,6 +153,11 @@ def _claim_payload(claim: Claim, db: Optional[Session] = None) -> Dict[str, Any]
                 )
                 .first()
             )
+            if not policy_row and claim.policy_id:
+                try:
+                    policy_row = db.query(Policy).filter(Policy.id == claim.policy_id).first()
+                except Exception:
+                    policy_row = None
 
     policy_number = (
         (policy_row.policy_number if policy_row else None)

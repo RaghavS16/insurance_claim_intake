@@ -910,16 +910,27 @@ function FileClaimContent() {
               Send
             </Button>
 
-            {/* Submit Claim Button */}
+            {/* Submit Claim / Track Submitted Claim Button */}
             {ticketId && (
-              <Button
-                size="sm"
-                variant="secondary"
-                pill
-                onClick={() => setConfirmModalOpen(true)}
-              >
-                Submit Claim
-              </Button>
+              claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  pill
+                  onClick={() => router.push(`/claimant/claims/${ticketId}`)}
+                >
+                  Track Claim & Requests
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  pill
+                  onClick={() => setConfirmModalOpen(true)}
+                >
+                  Submit Claim
+                </Button>
+              )
             )}
           </div>
         )}
