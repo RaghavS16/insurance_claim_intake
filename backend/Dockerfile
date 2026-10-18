@@ -12,16 +12,16 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY requirements.txt .
+COPY requirements.lock requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements.lock \
     && python -m nltk.downloader -d /usr/local/share/nltk_data punkt_tab \
     && apt-get purge -y --auto-remove gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the application
 COPY . .
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NLTK_DATA=/usr/local/share/nltk_data
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NLTK_DATA=/usr/local/share/nltk_data ENVIRONMENT=production DEBUG=false
 
 # Create a non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser

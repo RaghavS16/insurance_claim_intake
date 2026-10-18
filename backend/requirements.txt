@@ -1,5 +1,9 @@
 # ==============================================================================
 # Production Insurance Claim Intake Dependencies
+# To regenerate requirements.lock:
+#   py -3.11 -m venv .venv-lock
+#   .venv-lock\Scripts\pip install -r backend/requirements.txt
+#   .venv-lock\Scripts\pip freeze > backend/requirements.lock
 # ==============================================================================
 
 # Web Framework & Serialization
@@ -61,6 +65,5 @@ opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1.0.0
 opentelemetry-instrumentation-redis>=0.48b0,<1.0.0
 opentelemetry-exporter-otlp-proto-http>=1.27.0,<2.0.0
 
-pyotp>=2.9.0,<3.0.0
-cryptography>=43.0.0,<45.0.0
-webauthn>=3.0.1,<4.0.0
+# Cryptography
+cryptography>=50.0.0,<52.0.0
