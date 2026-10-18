@@ -18,7 +18,6 @@ export default function KnowledgeBasePage() {
   const { showToast } = useToast();
 
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
-  const [escalations, setEscalations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,26 +39,15 @@ export default function KnowledgeBasePage() {
     setLoading(true);
     setError(null);
     try {
-      const [data, escRes] = await Promise.all([
-        api.get<any>('/api/v1/knowledge/documents'),
-        api.get<any>('/api/v1/knowledge/escalations').catch(() => ({ items: [] })),
-      ]);
+      const data = await api.get<any>('/api/v1/knowledge/documents');
       const list: KnowledgeDocument[] = Array.isArray(data) ? data : data?.items || [];
       setDocuments(list);
-      setEscalations(Array.isArray(escRes?.items) ? escRes.items : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load knowledge documents.');
       setDocuments([]);
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleOpenEscalationUpload = (esc: any) => {
-    if (esc.insurance_type) setInsType(esc.insurance_type);
-    setDocType('policy_wording');
-    setUploadModalOpen(true);
-    showToast(`Pre-filled upload for ${esc.insurance_type || 'policy'} wording (${esc.policy_number || esc.ticket_id})`, 'info');
   };
 
   useEffect(() => {
@@ -274,67 +262,6 @@ export default function KnowledgeBasePage() {
           Ingest Knowledge Document
         </Button>
       </div>
-
-      {/* Missing Policy Knowledge Escalations (Rule 6 Loop) */}
-      {escalations.length > 0 && (
-        <div
-          className="snow-card"
-          style={{
-            marginBottom: 24,
-            padding: 16,
-            backgroundColor: '#FFFBEB',
-            border: '1px solid #FDE68A',
-            borderRadius: 14,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AlertTriangle size={18} color="#D97706" />
-              <div style={{ fontWeight: 600, fontSize: 14, color: '#92400E' }}>
-                Missing Policy Knowledge Escalations ({escalations.length} claims waiting for indexed wording)
-              </div>
-            </div>
-            <span style={{ fontSize: 12, color: '#B45309' }}>
-              Action required to resume automated claimant intake
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {escalations.map((esc) => (
-              <div
-                key={esc.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: 10,
-                  border: '1px solid #FEF3C7',
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#111827' }}>
-                    Claim #{esc.ticket_id} • Policy: {esc.policy_number || 'Unlinked'} ({esc.insurance_type?.toUpperCase()})
-                  </div>
-                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                    {esc.reason}
-                  </div>
-                </div>
-
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => handleOpenEscalationUpload(esc)}
-                  icon={<Upload size={13} />}
-                >
-                  Upload & Index Missing Wording
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {error && (
         <div

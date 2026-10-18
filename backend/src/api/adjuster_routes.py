@@ -37,11 +37,10 @@ def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
         .order_by(ClaimEvidence.created_at.desc())
         .first()
     )
-    ev_name = (getattr(evidence, "original_filename", None) or getattr(evidence, "filename", None)) if evidence else None
     return {
-        "id": str(row.id),
-        "claim_id": str(row.claim_id),
-        "adjuster_id": str(row.adjuster_id),
+        "id": row.id,
+        "claim_id": row.claim_id,
+        "adjuster_id": row.adjuster_id,
         "request_text": row.request_text,
         "notes": row.request_text,
         "status": row.status,
@@ -49,10 +48,10 @@ def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
         "requested_at": row.requested_at.isoformat() if row.requested_at else None,
         "responded_at": row.responded_at.isoformat() if row.responded_at else None,
         "evidence_id": str(evidence.id) if evidence else None,
-        "evidence_name": ev_name,
+        "evidence_name": evidence.original_filename if evidence else None,
         "response_evidence": {
             "id": str(evidence.id),
-            "name": ev_name,
+            "name": evidence.original_filename,
             "verification_status": evidence.verification_status,
         } if evidence else None,
     }
@@ -413,21 +412,23 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         .order_by(ClaimNote.created_at.desc())
         .all()
     )
-    author_ids = {n.author_user_id for n in note_rows if n.author_user_id}
-    author_map: dict[str, str] = {}
-    if author_ids:
-        for u in db.query(User).filter(User.id.in_(author_ids)).all():
-            author_map[str(u.id)] = u.full_name or u.email
-    notes_payload = [
-        {
+    notes_payload = []
+    for n in note_rows:
+        author_name = getattr(n, "author_role", None)
+        if not author_name and getattr(n, "author_user_id", None):
+            try:
+                au = db.query(User).filter(User.id == n.author_user_id).first()
+                if au:
+                    author_name = au.full_name or au.email
+            except Exception:
+                author_name = None
+        notes_payload.append({
             "id": str(n.id),
-            "author": author_map.get(str(n.author_user_id)) or getattr(n, "author_role", None) or "Adjuster",
+            "author": author_name or "Adjuster",
             "note": n.note,
             "visibility": n.visibility,
             "created_at": n.created_at.isoformat() if n.created_at else None,
-        }
-        for n in note_rows
-    ]
+        })
 
     # Query evidence requests
     req_rows = (
@@ -440,34 +441,35 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
 
     # Merge DB ClaimEvidence rows missing from pipeline_state["evidence"]
     evidence_list = list(state.get("evidence") or [])
-    existing_keys = {e.get("object_key") or e.get("s3_key") or str(e.get("id")) for e in evidence_list}
+    existing_keys = {e.get("s3_key") or e.get("object_key") or str(e.get("id")) for e in evidence_list}
     db_evidences = (
         db.query(ClaimEvidence)
         .filter(ClaimEvidence.claim_id == c.id, ClaimEvidence.tenant_id == c.tenant_id)
         .all()
     )
     for dbev in db_evidences:
-        key = getattr(dbev, "object_key", None) or getattr(dbev, "s3_key", None) or getattr(dbev, "s3_uri", None)
-        if key not in existing_keys and str(dbev.id) not in existing_keys:
+        obj_key = getattr(dbev, "object_key", None) or getattr(dbev, "s3_key", None)
+        if obj_key not in existing_keys and str(dbev.id) not in existing_keys:
             analysis = getattr(dbev, "analysis_json", None) or {}
+            ver_block = analysis.get("verification") if isinstance(analysis.get("verification"), dict) else analysis
             evidence_list.append({
                 "id": str(dbev.id),
                 "name": getattr(dbev, "original_filename", None) or getattr(dbev, "filename", "evidence"),
-                "s3_uri": getattr(dbev, "s3_uri", key),
-                "s3_key": key,
-                "content_type": getattr(dbev, "content_type", "application/octet-stream"),
-                "size": getattr(dbev, "size_bytes", None) or getattr(dbev, "file_size_bytes", 0),
+                "s3_uri": getattr(dbev, "s3_uri", None) or obj_key,
+                "s3_key": obj_key,
+                "content_type": dbev.content_type,
+                "size": getattr(dbev, "size_bytes", None) or getattr(dbev, "file_size_bytes", None),
                 "status": dbev.status,
                 "verification_status": dbev.verification_status,
                 "verification_confidence": dbev.verification_confidence,
                 "detected_document_type": dbev.detected_document_type,
-                "extracted_fields": analysis.get("extracted_fields") or getattr(dbev, "extracted_fields", {}) or {},
-                "verification_reason": analysis.get("reason") or analysis.get("verification_reason") or getattr(dbev, "verification_reason", None),
-                "request_id": str(dbev.request_id) if dbev.request_id else None,
-                "created_at": dbev.created_at.isoformat() if dbev.created_at else None,
+                "extracted_fields": getattr(dbev, "extracted_fields", None) or (ver_block.get("extracted_fields") if isinstance(ver_block, dict) else {}) or {},
+                "verification_reason": getattr(dbev, "verification_reason", None) or (ver_block.get("reason") if isinstance(ver_block, dict) else None),
+                "request_id": str(dbev.request_id) if getattr(dbev, "request_id", None) else None,
+                "created_at": dbev.created_at.isoformat() if getattr(dbev, "created_at", None) else None,
             })
-            if key:
-                existing_keys.add(key)
+            if obj_key:
+                existing_keys.add(obj_key)
             existing_keys.add(str(dbev.id))
 
     return {
@@ -513,7 +515,8 @@ def resolve_exception(ticket_id: str, exception_id: str, request: Request, user:
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/url")
 def get_evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
-    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="Forbidden")
+    if not _can_access_claim(c, user, db):
+        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
     evidence_list = state.get("evidence", [])
     ev = next((e for e in evidence_list if str(e.get("id")) == str(evidence_id)), None)
@@ -524,23 +527,23 @@ def get_evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_gua
         else:
             raise HTTPException(status_code=404, detail="Evidence item not found")
     else:
-        key = ev.get("object_key") or ev.get("s3_key") or ev.get("s3_uri") or ev.get("name")
-    
+        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri") or ev.get("name")
     if not key:
         raise HTTPException(status_code=404, detail="Evidence object key not found.")
 
     if not settings.S3_BUCKET:
-        url = f"/api/v1/adjuster/claims/{ticket_id}/evidence/{evidence_id}/download"
-    else:
-        from src.storage.s3 import presigned_get
-        url = presigned_get(key)
-    return {"url": url, "expires_in": 900}
+        return {"url": f"/api/v1/adjuster/claims/{ticket_id}/evidence/{evidence_id}/download", "expires_in": 900}
+    from src.storage.s3 import presigned_get
+    return {"url": presigned_get(key), "expires_in": 900}
+
+evidence_url = get_evidence_url
 
 @router.get("/claims/{ticket_id}/evidence/{evidence_id}/download")
 def download_claim_evidence_file(ticket_id: str, evidence_id: str, request: Request, db: Session = Depends(get_db)):
     user = _resolve_adjuster(request, db)
     c = get_claim_or_404(db, ticket_id)
-    if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="Forbidden")
+    if not _can_access_claim(c, user, db):
+        raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
     evidence_list = state.get("evidence", [])
     ev = next((e for e in evidence_list if str(e.get("id")) == str(evidence_id)), None)
@@ -552,27 +555,21 @@ def download_claim_evidence_file(ticket_id: str, evidence_id: str, request: Requ
             raise HTTPException(status_code=404, detail="Evidence item not found")
         key = getattr(row, "object_key", None) or getattr(row, "s3_key", None) or getattr(row, "s3_uri", None)
         content_type = getattr(row, "content_type", None) or content_type
-        filename = getattr(row, "original_filename", None) or getattr(row, "filename", filename)
+        filename = getattr(row, "original_filename", None) or getattr(row, "filename", None) or filename
     else:
-        key = ev.get("object_key") or ev.get("s3_key") or ev.get("s3_uri") or ev.get("name")
+        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri") or ev.get("name")
         content_type = ev.get("content_type") or content_type
         filename = ev.get("original_filename") or ev.get("name") or filename
 
-    if not key:
-        raise HTTPException(status_code=404, detail="Evidence object key not found.")
-
-    from pathlib import Path
-    from fastapi.responses import FileResponse, Response
-    p = Path(key)
-    if p.exists() and p.is_file():
-        return FileResponse(path=str(p), filename=filename, media_type=content_type)
-
     from src.storage.s3 import get_bytes
+    from fastapi.responses import Response
     try:
         data = get_bytes(key)
         return Response(content=data, media_type=content_type, headers={"Content-Disposition": f'inline; filename="{filename}"'})
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"File not found: {exc}")
+
+download_evidence = download_claim_evidence_file
 
 @router.get("/claims/{ticket_id}/package")
 def get_claim_package(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
@@ -626,6 +623,8 @@ def assign_claim(ticket_id: str, user: User = Depends(_guard), db: Session = Dep
     except ValueError as exc:
         db.rollback(); raise HTTPException(status_code=409,detail=str(exc))
     return {"success":True,"already_assigned":False,"claim":_item(c,aa)}
+
+# Consolidated evidence URL & download endpoints defined above
 
 @router.get("/claims/{ticket_id}/copilot")
 async def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
@@ -951,6 +950,8 @@ Instructions:
 class EvidenceRequestCreate(BaseModel):
     request_text: str = Field(..., min_length=5, max_length=4000)
 
+# Consolidated _request_payload defined at top of module
+
 @router.post("/claims/{ticket_id}/evidence-requests")
 def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
@@ -1081,10 +1082,3 @@ def get_claim_audit(ticket_id: str, request: Request, db: Session = Depends(get_
     _ensure_assigned_adjuster(claim, current_user, db)
     rows = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id, ClaimAuditEvent.tenant_id == claim.tenant_id).order_by(ClaimAuditEvent.created_at.asc()).all()
     return [_format_audit_row(r) for r in rows]
-
-
-@router.get("/claims/{ticket_id}/export")
-def export_claim_dossier_adjuster(ticket_id: str, request: Request, db: Session = Depends(get_db)):
-    """Export claim dossier and certificate data for adjuster workspace."""
-    from src.api.claim_routes import export_claim_dossier
-    return export_claim_dossier(ticket_id, request, db)

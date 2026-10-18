@@ -26,17 +26,7 @@ from src.utils.upload_limits import read_limited
 from src.utils.clamav import scan_bytes
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
-from src.database.hardening_models import (
-    ClaimEvidence,
-    ClaimRequirement,
-    ClaimEvidenceRequest,
-    ClaimAuditEvent,
-    ClaimSubmission,
-    ClaimException,
-    ClaimFact,
-    ClaimSubmissionConfirmation,
-    ClaimDecision,
-)
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact, ClaimSubmissionConfirmation
 from src.evidence.verifier import verify_evidence, validate_evidence_file
 from src.storage.s3 import put_bytes, quarantine_bytes, promote_quarantined
 from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness, record_exception
@@ -405,6 +395,41 @@ def get_conversation_history(ticket_id: str, request: Request, db: Session = Dep
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
     return _conversation_payload(db, claim)
+
+
+@router.get("/{ticket_id}/export")
+def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    """Export formatted conversation transcript and extracted claim dossier."""
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    turns = _conversation_payload(db, claim)
+    payload = _claim_payload(claim)
+    
+    formatted_lines = [
+        f"=== INSURANCE CLAIM INTAKE DOSSIER ===",
+        f"Ticket ID: #{claim.ticket_id}",
+        f"Status: {claim.status.upper()}",
+        f"Insurance Type: {claim.insurance_type or 'Unspecified'}",
+        f"Incident Date: {claim.event_date or 'Unspecified'}",
+        f"Incident Location: {claim.event_location or 'Unspecified'}",
+        f"Estimated Amount: ₹{claim.estimated_claim_amount:,.2f}" if claim.estimated_claim_amount is not None else "Estimated Amount: Unspecified",
+        f"Description: {claim.event_description or 'Unspecified'}",
+        f"Created At: {claim.created_at}",
+        f"\n=== CONVERSATION TRANSCRIPT ({len(turns)} messages) ===",
+    ]
+    for t in turns:
+        speaker_tag = "CLAIMANT" if t["speaker"] == "user" else "ASSISTANT"
+        ts = f" [{t['created_at']}]" if t.get("created_at") else ""
+        formatted_lines.append(f"Turn {t['turn']} | {speaker_tag}{ts}:\n{t['text']}\n")
+        
+    return {
+        "claim": payload,
+        "turns": turns,
+        "formatted_text": "\n".join(formatted_lines),
+    }
 
 
 @router.delete("/{ticket_id}")
@@ -876,16 +901,20 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
     evidence = list(state.get("evidence") or [])
     outstanding = missing_evidence(state)
     if not outstanding:
-        candidates = [{"key": evidence_key or "supporting_evidence", "label": "Supporting Claim Evidence", "evidence_type": "supporting_document"}]
+        candidates = [{
+            "key": str(evidence_key or "supporting_evidence"),
+            "label": "Supporting Claim Evidence",
+            "evidence_type": "supporting_document",
+        }]
     elif evidence_key:
         candidates = [r for r in outstanding if str(r.get("key")) == str(evidence_key)]
         if not candidates:
-            candidates = [{"key": evidence_key, "label": "Supporting Claim Evidence", "evidence_type": "supporting_document"}]
+            candidates = [{
+                "key": str(evidence_key),
+                "label": str(evidence_key).replace("_", " ").title(),
+                "evidence_type": str(evidence_key),
+            }]
     else:
-        # When the claimant uploads without selecting a requirement, compare the
-        # document against every outstanding evidence requirement. This prevents a
-        # valid travel bill from being incorrectly tested only against an unrelated
-        # hospital-bill requirement.
         candidates = outstanding
 
     claim_context = {
@@ -1172,20 +1201,16 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
     if claim.status == "verified":
         claim.status = "draft"
     if extracted.get("policy_id"):
-        from src.database.models import Policy
-        raw_pol = str(extracted["policy_id"]).strip()
-        pol_row = (
-            db.query(Policy)
-            .filter(
-                (Policy.policy_number == raw_pol.upper()) | (Policy.id == raw_pol),
+        pol_str = str(extracted["policy_id"]).strip().upper()
+        try:
+            pol_row = db.query(Policy).filter(
+                Policy.policy_number == pol_str,
                 Policy.tenant_id == claim.tenant_id,
-            )
-            .first()
-        )
-        if not pol_row:
-            pol_row = db.query(Policy).filter((Policy.policy_number == raw_pol.upper()) | (Policy.id == raw_pol)).first()
-        if pol_row:
-            claim.policy_id = pol_row.id
+            ).first()
+            if pol_row and getattr(pol_row, "id", None):
+                claim.policy_id = str(pol_row.id)
+        except Exception:
+            pass
     if extracted.get("insurance_type"):
         claim.insurance_type = extracted.get("insurance_type")
     if extracted.get("event_description"):
@@ -1198,15 +1223,11 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
         except (ValueError, TypeError):
             pass
     if extracted.get("event_date"):
-        from datetime import datetime, date as py_date
-        val_date = extracted["event_date"]
-        if isinstance(val_date, py_date):
-            claim.event_date = val_date
-        else:
-            try:
-                claim.event_date = datetime.strptime(str(val_date)[:10], "%Y-%m-%d").date()
-            except ValueError:
-                raise HTTPException(status_code=400, detail="event_date must use YYYY-MM-DD format.")
+        from datetime import datetime
+        try:
+            claim.event_date = datetime.strptime(str(extracted["event_date"]), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="event_date must use YYYY-MM-DD format.")
     elif "event_date" in extracted and extracted["event_date"] is None:
         claim.event_date = None
 
@@ -1219,154 +1240,3 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
 async def send_claim_message(ticket_id: str, payload: Dict[str, Any], request: Request, db: Session = Depends(get_db)):
     text = payload.get("message") or payload.get("text") or ""
     return await claim_text_turn(ticket_id, TextTurnRequest(text=text), request, db)
-
-
-@router.get("/{ticket_id}/export")
-def export_claim_dossier(ticket_id: str, request: Request, db: Session = Depends(get_db)):
-    """Export claim dossier with full transcript, policy schedule, evidence checksums, and audit trail."""
-    user = _resolve_user(request, db)
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
-    enforce_claim_ownership(claim, user)
-
-    state = claim.pipeline_state or {}
-    extracted = state.get("extracted_data") or {}
-
-    policy = getattr(claim, "policy", None)
-    if not policy and claim.policy_id:
-        policy = db.query(Policy).filter(Policy.id == claim.policy_id).first()
-    if not policy:
-        pol_num = extracted.get("policy_id") or getattr(claim, "policy_number", None)
-        if pol_num:
-            policy = db.query(Policy).filter(Policy.policy_number == str(pol_num)).first()
-
-    evidences = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id == claim.id).all()
-    decision = db.query(ClaimDecision).filter(ClaimDecision.claim_id == claim.id).order_by(ClaimDecision.created_at.desc()).first()
-    audit_events = db.query(ClaimAuditEvent).filter(ClaimAuditEvent.claim_id == claim.id).order_by(ClaimAuditEvent.created_at.asc()).all()
-    facts = db.query(ClaimFact).filter(ClaimFact.claim_id == claim.id).all()
-
-    facts_dict = {f.field_key: f.field_value for f in facts}
-    for k, v in extracted.items():
-        if k not in facts_dict and v not in (None, "", "UNKNOWN"):
-            facts_dict[k] = v
-
-    # Build Markdown Dossier
-    lines = [
-        f"# INTELLICLAIM OFFICIAL CLAIM DOSSIER — #{claim.ticket_id}",
-        f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"Claim Status: {str(claim.status).upper()}",
-        "",
-        "## 1. Policy Schedule & Coverage",
-        f"- Policy Number: {policy.policy_number if policy else (getattr(claim, 'policy_number', None) or str(extracted.get('policy_id') or 'Unspecified'))}",
-        f"- Coverage Line: {claim.insurance_type or (policy.policy_type if policy else 'General')}",
-        f"- Policyholder: {policy.policyholder_name if policy else 'Registered Claimant'}",
-        f"- Coverage Limit: ${float(policy.coverage_amount or 0):,.2f}" if policy else "- Coverage Limit: Unspecified",
-        f"- Standard Deductible: ${float(policy.deductible or 0):,.2f}" if policy else "- Standard Deductible: Unspecified",
-        "",
-        "## 2. Incident Summary & Verified Facts",
-        f"- Incident Date: {claim.event_date or extracted.get('event_date') or 'Pending'}",
-        f"- Location: {claim.event_location or extracted.get('event_location') or 'Pending'}",
-        f"- Estimated Amount: ${float(claim.estimated_claim_amount or 0):,.2f}",
-        f"- Loss Narrative: {claim.event_description or extracted.get('event_description') or 'None provided.'}",
-        "",
-        "### Dynamic Facts (RAG Extracted):",
-    ]
-    for k, v in sorted(facts_dict.items()):
-        if k not in ("policy_id", "insurance_type", "event_date", "event_location", "event_description", "estimated_claim_amount"):
-            lines.append(f"- **{k.replace('_', ' ').capitalize()}**: {v}")
-
-    lines.extend([
-        "",
-        "## 3. Evidence Verification Checksums (SHA-256)",
-    ])
-    if not evidences:
-        lines.append("- No supporting evidence files attached.")
-    else:
-        for ev in evidences:
-            fn = ev.original_filename or "evidence"
-            sha = getattr(ev, "sha256", "Pending Checksum") or "N/A"
-            vstatus = ev.verification_status or "REVIEW_REQUIRED"
-            sz = ev.size_bytes or 0
-            lines.append(f"- `{fn}` ({sz} bytes) — Verification: **{vstatus}** | SHA-256: `{sha}`")
-
-    lines.extend([
-        "",
-        "## 4. Adjudication Decision",
-    ])
-    if decision:
-        lines.append(f"- Decision: **{decision.decision.upper()}**")
-        lines.append(f"- Decided At: {decision.created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if decision.created_at else 'N/A'}")
-        if decision.approved_amount:
-            lines.append(f"- Approved Settlement Amount: **${float(decision.approved_amount):,.2f}**")
-        lines.append(f"- Adjuster Rationale: {decision.rationale}")
-    else:
-        lines.append("- Claim is currently pending adjuster adjudication review.")
-
-    lines.extend([
-        "",
-        "## 5. Audit Trail & Chain of Custody",
-    ])
-    for ae in audit_events:
-        dt_str = ae.created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if ae.created_at else "N/A"
-        lines.append(f"- `[{dt_str}]` **{ae.event_type}**: {ae.reason or 'System record'}")
-
-    formatted_text = "\n".join(lines)
-
-    approved_amount = (
-        float(decision.approved_amount)
-        if (decision and decision.approved_amount)
-        else (
-            float(claim.pipeline_state.get("approved_payout_amount"))
-            if (claim.pipeline_state and isinstance(claim.pipeline_state, dict) and claim.pipeline_state.get("approved_payout_amount") is not None)
-            else None
-        )
-    )
-    evidence_items = [
-        {
-            "filename": ev.original_filename or "evidence",
-            "sha256": getattr(ev, "sha256", "N/A") or "N/A",
-            "status": ev.verification_status or "REVIEW_REQUIRED",
-            "size_bytes": ev.size_bytes or 0,
-        }
-        for ev in evidences
-    ]
-
-    certificate_data = {
-        "ticket_id": claim.ticket_id,
-        "status": claim.status,
-        "policy_number": policy.policy_number if policy else (getattr(claim, "policy_number", None) or str(extracted.get("policy_id") or "Unlinked")),
-        "insurance_type": claim.insurance_type or (policy.policy_type if policy else "General"),
-        "policyholder_name": policy.policyholder_name if policy else "Registered Claimant",
-        "coverage_amount": float(policy.coverage_amount) if policy and policy.coverage_amount else None,
-        "deductible": float(policy.deductible) if policy and policy.deductible else None,
-        "event_date": str(claim.event_date) if claim.event_date else str(extracted.get("event_date") or ""),
-        "event_location": claim.event_location or extracted.get("event_location") or "",
-        "event_description": claim.event_description or extracted.get("event_description") or "",
-        "estimated_claim_amount": float(claim.estimated_claim_amount) if claim.estimated_claim_amount else None,
-        "approved_payout_amount": approved_amount,
-        "verified_facts": facts_dict,
-        "evidence_manifest": evidence_items,
-        "evidence_checksums": evidence_items,
-        "decision": {
-            "status": decision.decision if decision else (claim.status or "submitted"),
-            "rationale": decision.rationale if decision else (claim.pipeline_state.get("adjudication_notes") if (claim.pipeline_state and isinstance(claim.pipeline_state, dict)) else None),
-            "approved_amount": approved_amount,
-            "decided_at": decision.created_at.isoformat() if (decision and decision.created_at) else None,
-        } if (decision or approved_amount is not None) else None,
-        "audit_trail": [
-            {
-                "event_type": ae.event_type,
-                "created_at": ae.created_at.isoformat() if ae.created_at else None,
-                "reason": ae.reason or "",
-            }
-            for ae in audit_events
-        ],
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    return {
-        "ticket_id": claim.ticket_id,
-        "formatted_text": formatted_text,
-        "certificate": certificate_data,
-    }

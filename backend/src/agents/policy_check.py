@@ -95,68 +95,6 @@ def verify_policy_for_claim(
             result["reason"] = "policy_expired"
             return result
 
-    fraud_flags: list[dict[str, Any]] = []
-    if date_verified and db is not None:
-        try:
-            from datetime import timedelta
-            from src.database.hardening_models import ClaimException
-            window_start = event_date - timedelta(days=7)
-            window_end = event_date + timedelta(days=7)
-
-            other_claims = (
-                db.query(Claim)
-                .filter(
-                    Claim.policy_id == policy.id,
-                    Claim.id != candidate.id,
-                    Claim.event_date.isnot(None),
-                    Claim.event_date >= window_start,
-                    Claim.event_date <= window_end,
-                    Claim.status.notin_(["discarded", "rejected"]),
-                )
-                .all()
-            )
-            for oc in other_claims:
-                fraud_flags.append({
-                    "flag": "duplicate_loss_window",
-                    "severity": "high",
-                    "reason": f"Potential duplicate claim detected: Claim #{oc.ticket_id} occurred on {oc.event_date} (within ±7 days of {event_date}).",
-                    "related_ticket_id": oc.ticket_id,
-                })
-
-            if policy.effective_date:
-                days_since_inception = (event_date - policy.effective_date).days
-                if 0 <= days_since_inception <= 7:
-                    fraud_flags.append({
-                        "flag": "early_loss_inception_proximity",
-                        "severity": "high",
-                        "reason": f"Early loss warning: Incident occurred {days_since_inception} day(s) after policy inception ({policy.effective_date}).",
-                    })
-
-            if fraud_flags and candidate.id:
-                for ff in fraud_flags:
-                    existing_exc = db.query(ClaimException).filter(
-                        ClaimException.claim_id == candidate.id,
-                        ClaimException.event_type == "duplicate_or_early_loss_warning",
-                        ClaimException.reason == ff["reason"],
-                        ClaimException.status == "open",
-                    ).first()
-                    if not existing_exc:
-                        db.add(ClaimException(
-                            tenant_id=str(candidate.tenant_id or ""),
-                            claim_id=candidate.id,
-                            event_type="duplicate_or_early_loss_warning",
-                            severity="high",
-                            reason=ff["reason"],
-                            source_type="FRAUD_DETECTION_ENGINE",
-                            source_id="velocity_rules",
-                            blocking=False,
-                            status="open",
-                            resolution_json=ff,
-                        ))
-                db.flush()
-        except Exception:
-            pass
-
     result.update({
         "valid": True,
         "identity_verified": True,
@@ -166,7 +104,6 @@ def verify_policy_for_claim(
         "effective_date": policy.effective_date.isoformat(),
         "expiry_date": policy.expiry_date.isoformat(),
         "coverage_amount": float(policy.coverage_amount) if policy.coverage_amount is not None else None,
-        "fraud_flags": fraud_flags,
         "verification_steps": [
             {"step": "Policyholder Identity Verification", "passed": True},
             {"step": "Policy In-Force Status", "passed": True},

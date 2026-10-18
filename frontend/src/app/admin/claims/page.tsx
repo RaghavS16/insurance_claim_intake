@@ -23,7 +23,6 @@ export default function AdminClaimsOversightPage() {
   const [claims, setClaims] = useState<Claim[]>([]);
   const [adjusters, setAdjusters] = useState<Adjuster[]>([]);
   const [dashboardMetrics, setDashboardMetrics] = useState<any>(null);
-  const [escalations, setEscalations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,11 +36,10 @@ export default function AdminClaimsOversightPage() {
     setLoading(true);
     setError(null);
     try {
-      const [claimsRes, adjustersRes, dashRes, escRes] = await Promise.all([
+      const [claimsRes, adjustersRes, dashRes] = await Promise.all([
         api.get<any>('/api/v1/admin/claims'),
         api.get<any>('/api/v1/admin/adjusters').catch(() => []),
         api.get<any>('/api/v1/admin/dashboard').catch(() => null),
-        api.get<any>('/api/v1/knowledge/escalations').catch(() => ({ items: [] })),
       ]);
       const rawList: Claim[] = Array.isArray(claimsRes) ? claimsRes : claimsRes?.items || [];
       // Only filed/submitted claims appear in Enterprise Claims Oversight
@@ -52,7 +50,6 @@ export default function AdminClaimsOversightPage() {
       setClaims(claimsList);
       setAdjusters(adjList);
       setDashboardMetrics(dashRes);
-      setEscalations(Array.isArray(escRes?.items) ? escRes.items : []);
       if (adjList.length > 0 && !targetAdjusterId) {
         setTargetAdjusterId(adjList[0].id);
       }
@@ -174,44 +171,6 @@ export default function AdminClaimsOversightPage() {
           <span>{error}</span>
           <Button size="sm" variant="secondary" onClick={fetchData} style={{ marginLeft: 'auto' }}>
             Retry
-          </Button>
-        </div>
-      )}
-
-      {/* Missing Policy Knowledge Escalations Banner */}
-      {escalations.length > 0 && (
-        <div
-          className="snow-card"
-          style={{
-            marginBottom: 20,
-            padding: 16,
-            backgroundColor: '#FFFBEB',
-            border: '1px solid #FDE68A',
-            borderRadius: 14,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <AlertTriangle size={20} color="#D97706" />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 14, color: '#92400E' }}>
-                {escalations.length} Claim Intake Session(s) Escalated for Missing Policy Wording
-              </div>
-              <div style={{ fontSize: 12, color: '#B45309', marginTop: 2 }}>
-                Claimants have requested filing under policies or lines of business with no indexed wording in the Copilot RAG pool.
-              </div>
-            </div>
-          </div>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => router.push('/adjuster/knowledge')}
-            icon={<ShieldAlert size={14} />}
-          >
-            Open Knowledge Base & Index Wording
           </Button>
         </div>
       )}

@@ -45,24 +45,18 @@ export default function SettingsPage() {
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
     try {
+      const fullName = `${firstName} ${lastName}`.trim();
       const updated = await api.patch<any>('/api/v1/auth/me', {
         full_name: fullName || undefined,
-        phone: contactPhone.trim() || undefined,
+        phone: contactPhone.trim(),
       });
       if (updated && typeof window !== 'undefined') {
-        const stored = localStorage.getItem('snow_user');
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            localStorage.setItem('snow_user', JSON.stringify({ ...parsed, ...updated }));
-          } catch {}
-        }
+        localStorage.setItem('snow_user', JSON.stringify(updated));
       }
       showToast('Profile updated successfully', 'success');
     } catch (err: any) {
-      showToast(err.message || 'Failed to update profile', 'error');
+      showToast(err.message || 'Failed to update profile.', 'error');
     }
   };
 

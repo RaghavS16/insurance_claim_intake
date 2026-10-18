@@ -124,12 +124,22 @@ def test_ordinal_claim_date_is_extracted_without_reasking():
 
 
 def test_provisional_planning_keeps_intake_moving_without_policy_documents():
-    """Verify that when no policy documents are indexed, retrieve honestly returns NO_RELEVANT_KNOWLEDGE without hardcoded fallbacks."""
     from src.knowledge.retriever import KnowledgeRetriever
+
+    provisional = [{
+        "key": "vehicle_damage",
+        "label": "Vehicle damage",
+        "question_hint": "Could you tell me which parts of the bike were damaged?",
+        "required": True,
+        "evidence_type": "photo",
+    }]
 
     with patch(
         "src.knowledge.retriever.search",
         side_effect=[[], []],
+    ), patch(
+        "src.knowledge.retriever.get_provisional_requirements",
+        return_value=provisional,
     ):
         result = KnowledgeRetriever().retrieve(
             insurance_type="motor",
@@ -137,7 +147,7 @@ def test_provisional_planning_keeps_intake_moving_without_policy_documents():
             query="motorcycle collided with a car and the bike fell over",
         )
 
-    assert result["available"] is False
-    assert result["status"] == "NO_RELEVANT_KNOWLEDGE"
+    assert result["available"] is True
+    assert result["status"] == "PROVISIONAL"
     assert result["authoritative"] is False
-    assert result["requirements"] == []
+    assert result["requirements"] == provisional

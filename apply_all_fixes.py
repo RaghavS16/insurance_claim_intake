@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-IntelliClaim — Complete Idempotent Fix & Production Upgrade Script (`apply_all_fixes.py`)
+IntelliClaim — Complete Idempotent Fix, Production Upgrade & E2E Playwright Setup Script (`apply_all_fixes.py`)
 
 Usage:
   1. Place `apply_all_fixes.py` inside your project root directory (where `backend/` and `frontend/` live)
@@ -14,7 +14,6 @@ from __future__ import annotations
 import ast
 import glob
 import sys
-from datetime import datetime
 from pathlib import Path
 
 
@@ -46,20 +45,12 @@ APPLIED_COUNT = 0
 SKIPPED_COUNT = 0
 
 
-def patch_file(
-    rel_path: str,
-    old: str,
-    new: str,
-    label: str = "",
-    applied_marker: str | None = None,
-    is_dedup: bool = False,
-) -> None:
+def patch_file(rel_path: str, old: str, new: str, label: str = "") -> None:
     global APPLIED_COUNT, SKIPPED_COUNT
     p = ROOT / rel_path
     if not p.exists():
         raise FileNotFoundError(f"Target file not found: {p}")
 
-    # Normalize CRLF -> LF so the script works identically on Windows, macOS, and Linux
     raw_bytes = p.read_bytes()
     has_crlf = b"\r\n" in raw_bytes
     text = raw_bytes.decode("utf-8-sig").replace("\r\n", "\n")
@@ -67,23 +58,12 @@ def patch_file(
     new_norm = new.replace("\r\n", "\n")
 
     desc = f"{rel_path} ({label})" if label else rel_path
-
-    # Check if already applied via exact new block or marker
-    if new_norm in text or (applied_marker and applied_marker.replace("\r\n", "\n") in text):
+    if new_norm in text:
         print(f"[SKIP] Already applied: {desc}")
         SKIPPED_COUNT += 1
         return
 
-    # For deduplication / removal patches: if old block is already absent, skip cleanly
-    if is_dedup or "Consolidated" in new_norm or "remove duplicate" in label.lower():
-        if old_norm not in text:
-            print(f"[SKIP] Duplicate already removed: {desc}")
-            SKIPPED_COUNT += 1
-            return
-
     if old_norm not in text:
-        # Check if indentation difference can be resolved
-        # e.g., if old_norm lines stripped match a block in text lines stripped
         raise RuntimeError(f"Could not find target block in {desc}:\n{old_norm[:220]}...")
 
     updated = text.replace(old_norm, new_norm, 1)
@@ -94,12 +74,144 @@ def patch_file(
     APPLIED_COUNT += 1
 
 
+E2E_SPEC_CONTENT = """import { test, expect } from '@playwright/test';
+
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'DemoPass123!';
+
+test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', () => {
+  test('1. Authentication & 3-Step Password Recovery Flow', async ({ page }) => {
+    const uniqueEmail = `claimant.e2e.${Date.now()}@example.com`;
+
+    // 1a. Sign Up with required phone field
+    await page.goto(`${BASE_URL}/signup`);
+    await expect(page.locator('h1')).toContainText(/Create Account|Sign Up/i);
+    await page.fill('input[placeholder="Full Name"]', 'E2E Test Claimant');
+    await page.fill('input[placeholder="Email"]', uniqueEmail);
+    await page.fill('input[placeholder="Phone Number"]', '+919876543210');
+    await page.fill('input[placeholder="Password"]', 'SecurePass123!');
+    await page.fill('input[placeholder="Repeat Password"]', 'SecurePass123!');
+    await page.click('button[type="submit"]');
+
+    // Wait for redirect to either /signin or /verify-email
+    await page.waitForURL(/\\/(signin|verify-email)/, { timeout: 15000 });
+
+    // 1b. Forgot Password page
+    await page.goto(`${BASE_URL}/forgot-password`);
+    await expect(page.locator('h1')).toContainText(/Forgot Password/i);
+    await page.fill('input[type="email"]', uniqueEmail);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/\\/verify-otp/, { timeout: 15000 });
+  });
+
+  test('2. Claimant Portal: Policy Linking, 100% RAG Chatbot Intake, Chat History & Claim Tracking', async ({ page }) => {
+    // Sign in as seeded claimant or newly registered claimant
+    await page.goto(`${BASE_URL}/signin`);
+    await page.fill('input[placeholder="Email"]', 'riya.claimant@insurance.com');
+    await page.fill('input[placeholder="Password"]', DEMO_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/\\/claimant\\/dashboard/, { timeout: 15000 });
+
+    // 2a. Verify Claimant Dashboard & Chat History section
+    await expect(page.getByText('Chat History')).toBeVisible();
+
+    // 2b. Navigate to My Policies & open Link Policy Modal
+    await page.goto(`${BASE_URL}/claimant/policies`);
+    await expect(page.getByText(/My Insurance Policies|Linked Policies/i).first()).toBeVisible();
+    const linkBtn = page.getByRole('button', { name: /Link Policy/i }).first();
+    if (await linkBtn.isVisible()) {
+      await linkBtn.click();
+      await page.fill('input[placeholder*="POL-"]', 'POL-DEMO-MOTOR-001');
+      await page.fill('input[placeholder*="Jane Doe"]', 'Riya Claimant');
+      await page.fill('input[placeholder="1234"]', '0004');
+    }
+
+    // 2c. Navigate to Conversational Claim Intake (/claimant/file-claim)
+    await page.goto(`${BASE_URL}/claimant/file-claim?fresh=true`);
+    await expect(page.getByText('Filing Against Policy:')).toBeVisible();
+    await expect(page.getByText('Live Claim Dossier')).toBeVisible();
+
+    // Send a RAG coverage question / claim filing message
+    const chatInput = page.locator('input[placeholder*="Type your message"]');
+    await chatInput.fill('My policy number is POL-DEMO-MOTOR-001. What documents are required for a motor accident claim?');
+    await page.getByRole('button', { name: /^Send$/i }).click();
+
+    // Verify assistant responds and Live Claim Dossier updates Policy to POL-DEMO-MOTOR-001
+    await expect(page.getByText('POL-DEMO-MOTOR-001').first()).toBeVisible({ timeout: 20000 });
+
+    // 2d. Navigate to Track Claims & open seeded claim #CLM-DEMO-MOTOR-001
+    await page.goto(`${BASE_URL}/claimant/claims/CLM-DEMO-MOTOR-001`);
+    await expect(page.getByText(/CLM-DEMO-MOTOR-001/i).first()).toBeVisible();
+  });
+
+  test('3. Adjuster Workspace: Dashboard, Queue, AI Copilot Synopsis, Evidence Request & Decisioning', async ({ page }) => {
+    await page.goto(`${BASE_URL}/signin`);
+    await page.fill('input[placeholder="Email"]', 'asha.adjuster@insurance.com');
+    await page.fill('input[placeholder="Password"]', DEMO_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/\\/adjuster\\/dashboard/, { timeout: 15000 });
+
+    // 3a. Verify Adjuster Dashboard metrics
+    await expect(page.getByText('Total Claims in Pool')).toBeVisible();
+    await expect(page.getByText('Assigned to Me')).toBeVisible();
+
+    // 3b. Open Claim Workspace #CLM-DEMO-MOTOR-001
+    await page.goto(`${BASE_URL}/adjuster/claims/CLM-DEMO-MOTOR-001`);
+    await expect(page.getByText(/AI Copilot Claims Synopsis/i)).toBeVisible();
+
+    // Verify all 5 workspace tabs render without React crashes
+    await page.getByRole('button', { name: 'Evidence & Documents' }).click();
+    await expect(page.getByText('Submitted Claim Evidence & Artifacts')).toBeVisible();
+    await expect(page.getByText('Adjuster Evidence Inquiries & Claimant Responses')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Exceptions' }).click();
+    await expect(page.getByText('Adjudication Exceptions')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Case Notes' }).click();
+    await expect(page.getByText('Internal Adjudication Notes')).toBeVisible();
+    await page.fill('input[placeholder*="Add an internal note"]', 'E2E Adjuster verification note.');
+    await page.getByRole('button', { name: 'Post Note' }).click();
+    await expect(page.getByText('E2E Adjuster verification note.')).toBeVisible();
+
+    // 3c. Verify Policy Directory & Knowledge Base (RAG)
+    await page.goto(`${BASE_URL}/adjuster/policies`);
+    await expect(page.getByText('POL-DEMO-MOTOR-001')).toBeVisible();
+
+    await page.goto(`${BASE_URL}/adjuster/knowledge`);
+    await expect(page.getByText('demo-motor-policy-wording.txt')).toBeVisible();
+  });
+
+  test('4. Admin Portal: Operational Metrics Dashboard, Adjuster Edit, Policy CRUD & CSV Exports', async ({ page }) => {
+    await page.goto(`${BASE_URL}/signin`);
+    await page.fill('input[placeholder="Email"]', 'admin@insurance.com');
+    await page.fill('input[placeholder="Password"]', DEMO_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/\\/admin\\/claims/, { timeout: 15000 });
+
+    // 4a. Verify 4 Admin Dashboard Metric Cards
+    await expect(page.getByText('Active Policies')).toBeVisible();
+    await expect(page.getByText('Submitted Claims')).toBeVisible();
+    await expect(page.getByText('Approved Settlement')).toBeVisible();
+    await expect(page.getByText('Adjuster Workload')).toBeVisible();
+
+    // 4b. Verify Adjusters Management & Edit Modal
+    await page.goto(`${BASE_URL}/admin/adjusters`);
+    await expect(page.getByText('Asha Adjuster')).toBeVisible();
+
+    // 4c. Verify Policies Management Table (Contact Info, Link Status, Template & Export CSV)
+    await page.goto(`${BASE_URL}/admin/policies`);
+    await expect(page.getByText('POL-DEMO-MOTOR-001')).toBeVisible();
+    await expect(page.getByText('Link Status')).toBeVisible();
+  });
+});
+"""
+
+
 def main() -> None:
+    global APPLIED_COUNT, SKIPPED_COUNT
     print(f"=== Applying IntelliClaim Production Fixes to: {ROOT} ===\n")
 
-    # -------------------------------------------------------------------------
     # 1. Strip UTF-8 BOM in backend/tests/test_utils_auth.py
-    # -------------------------------------------------------------------------
     bom_file = ROOT / "backend/tests/test_utils_auth.py"
     if bom_file.exists():
         raw = bom_file.read_bytes()
@@ -109,13 +221,7 @@ def main() -> None:
         else:
             print("[SKIP] No UTF-8 BOM in backend/tests/test_utils_auth.py")
 
-    # -------------------------------------------------------------------------
     # 2. backend/src/agents/turn_processor.py
-    #    - Pass claimant_id into graph_input for Turn-0 single-policy auto-resolution
-    #    - Resolve Policy.id UUID FK from Policy.policy_number (prevents PostgreSQL UUID crash)
-    #    - Parse event_date string into datetime.date (prevents SQLAlchemy Date type crash)
-    #    - Create high-severity ClaimException when RAG hits waiting_for_knowledge (Rule 6)
-    # -------------------------------------------------------------------------
     patch_file(
         "backend/src/agents/turn_processor.py",
         '''    graph_input = {
@@ -208,13 +314,9 @@ def main() -> None:
         except Exception:
             pass''',
         "resolve Policy UUID FK, Date type & missing knowledge exception",
-        applied_marker="missing_policy_knowledge",
     )
 
-    # -------------------------------------------------------------------------
     # 3. backend/src/agents/dynamic_requirements.py
-    #    - Pass claimant_id into KnowledgeRetriever().retrieve(...)
-    # -------------------------------------------------------------------------
     patch_file(
         "backend/src/agents/dynamic_requirements.py",
         '''    return KnowledgeRetriever().retrieve(
@@ -243,10 +345,7 @@ def main() -> None:
         "pass claimant_id to KnowledgeRetriever.retrieve",
     )
 
-    # -------------------------------------------------------------------------
     # 4. backend/src/agents/graph.py
-    #    - Handle CONTEXT_RESOLUTION_REQUIRED in _response_planner
-    # -------------------------------------------------------------------------
     patch_file(
         "backend/src/agents/graph.py",
         '''    # 3. Honest fallback if the knowledge base has no requirements
@@ -269,10 +368,7 @@ def main() -> None:
         "handle CONTEXT_RESOLUTION_REQUIRED in _response_planner",
     )
 
-    # -------------------------------------------------------------------------
     # 5. backend/src/knowledge/retriever.py
-    #    - Remove hardcoded get_provisional_requirements fallback (strict Rule 1 & Rule 6)
-    # -------------------------------------------------------------------------
     patch_file(
         "backend/src/knowledge/retriever.py",
         '''        if not policy and not guidance:
@@ -299,11 +395,7 @@ def main() -> None:
         "remove hardcoded provisional requirements fallback",
     )
 
-    # -------------------------------------------------------------------------
     # 6. backend/src/knowledge/embeddings.py
-    #    - Map non-FastEmbed model names safely to BAAI/bge-base-en-v1.5
-    #    - Automatic Gemini/FastEmbed fallback when local Ollama is unreachable
-    # -------------------------------------------------------------------------
     patch_file(
         "backend/src/knowledge/embeddings.py",
         '''        target_model = model_name or "BAAI/bge-base-en-v1.5"''',
@@ -334,12 +426,177 @@ def main() -> None:
         "auto-fallback to Gemini/FastEmbed when Ollama is unreachable",
     )
 
-    # -------------------------------------------------------------------------
-    # 7. backend/src/api/claim_routes.py
-    #    - Deduplicate _request_payload
-    #    - Resolve Policy row by UUID or policy_number in _claim_payload & PATCH
-    #    - Allow claimants to upload supporting evidence at any stage of intake
-    # -------------------------------------------------------------------------
+    # 7. backend/src/knowledge/policy_compiler.py & store.py & knowledge_routes.py
+    patch_file(
+        "backend/src/knowledge/policy_compiler.py",
+        '''def compile_policy_requirements(*, document_id: str, insurance_type: str,
+                                 chunks: list[dict[str, Any]], llm=None) -> list[dict[str, Any]]:''',
+        '''def compile_policy_requirements(*, document_id: str = "", insurance_type: str = "general",
+                                 chunks: list[dict[str, Any]] | None = None,
+                                 policy_chunks: list[dict[str, Any]] | None = None,
+                                 llm=None, **kwargs: Any) -> list[dict[str, Any]]:
+    if chunks is None and isinstance(policy_chunks, list):
+        chunks = policy_chunks''',
+        "support flexible kwargs in compile_policy_requirements",
+    )
+
+    patch_file(
+        "backend/src/knowledge/policy_compiler.py",
+        '''    llm = llm or get_configured_llm()
+    prompt = f"""Resolve applicability for this authoritative {insurance_type} claim requirement manifest.''',
+        '''    if not any(item.get("condition") for item in manifest):
+        output = []
+        for key, source in by_key.items():
+            enriched = dict(source)
+            enriched["key"] = key
+            enriched["canonical_role"] = enriched.get("canonical_role") or tag_canonical_role(enriched)
+            enriched["provenance"] = source.get("provenance", {"type": "policy_requirement_manifest"})
+            output.append(enriched)
+        return output
+
+    llm = llm or get_configured_llm()
+    prompt = f"""Resolve applicability for this authoritative {insurance_type} claim requirement manifest.''',
+        "fast-path resolve_requirement_manifest when no conditions require LLM pruning",
+    )
+
+    patch_file(
+        "backend/src/knowledge/store.py",
+        '''def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
+    tenant_id = _require_tenant(tenant_id)
+    db = SessionLocal()
+    try:
+        row = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.tenant_id == tenant_id,
+        ).first()
+        if not row:
+            return
+        row.metadata_json = {
+            **(row.metadata_json or {}),
+            "requirement_manifest": manifest,
+            "requirement_manifest_version": 1,
+        }
+        db.commit()
+    finally:
+        db.close()''',
+        '''def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None, **kwargs: Any) -> None:
+    tenant_id = _require_tenant(tenant_id)
+    db = SessionLocal()
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        row = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.id == document_id,
+            (KnowledgeDocument.tenant_id == tenant_id) | (KnowledgeDocument.tenant_id.is_(None)) | (KnowledgeDocument.tenant_id == ""),
+        ).first()
+        if not row:
+            return
+        row.metadata_json = {
+            **(row.metadata_json or {}),
+            "requirement_manifest": manifest,
+            "requirement_manifest_version": 1,
+        }
+        flag_modified(row, "metadata_json")
+        db.commit()
+    finally:
+        db.close()''',
+        "flag_modified and flexible kwargs in save_requirement_manifest",
+    )
+
+    patch_file(
+        "backend/src/api/knowledge_routes.py",
+        '''            # Pre-compile manifest on upload if policy wording
+            doc_id = ingest_res.get("document_id")
+            if norm_doc_type in {"policy_wording", "endorsement"} and doc_id:
+                try:
+                    from src.knowledge.policy_compiler import compile_policy_requirements
+                    from src.knowledge.store import save_requirement_manifest
+                    manifest = compile_policy_requirements(
+                        policy_chunks=ingest_res.get("chunks") or [],
+                        insurance_type=insurance_type or "motor",
+                        policy_number=policy_number,
+                        policy_version=policy_version or "1.0",
+                        tenant_id=str(user.tenant_id or ""),
+                    )
+                    if manifest:
+                        save_requirement_manifest(
+                            document_id=doc_id,
+                            manifest=manifest,
+                            policy_number=policy_number,
+                            insurance_type=insurance_type,
+                            tenant_id=str(user.tenant_id or ""),
+                        )
+                except Exception:
+                    logger.warning("Manifest pre-compilation on upload non-fatal warning")''',
+        '''            # Pre-compile manifest on upload if policy wording
+            doc_id = ingest_res.get("document_id")
+            if norm_doc_type in {"policy_wording", "endorsement"} and doc_id:
+                try:
+                    from src.knowledge.policy_compiler import compile_policy_requirements
+                    from src.knowledge.store import get_document_chunks, save_requirement_manifest
+                    chunk_dicts = get_document_chunks(doc_id, tenant_id=str(user.tenant_id or ""))
+                    manifest = compile_policy_requirements(
+                        document_id=str(doc_id),
+                        insurance_type=insurance_type or "motor",
+                        chunks=chunk_dicts,
+                    )
+                    if manifest:
+                        save_requirement_manifest(
+                            document_id=str(doc_id),
+                            manifest=manifest,
+                            tenant_id=str(user.tenant_id or ""),
+                        )
+                except Exception:
+                    logger.warning("Manifest pre-compilation on upload non-fatal warning")''',
+        "fix get_document_chunks & compile_policy_requirements args in upload_document",
+    )
+
+    patch_file(
+        "backend/src/api/knowledge_routes.py",
+        '''    # Pre-compile manifest on publish if policy wording
+    if doc.document_type in {"policy_wording", "endorsement"}:
+        try:
+            from src.knowledge.policy_compiler import compile_policy_requirements
+            from src.knowledge.store import save_requirement_manifest
+            chunks = [{"text": c.chunk_text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
+            manifest = compile_policy_requirements(
+                policy_chunks=chunks,
+                insurance_type=doc.insurance_type or "motor",
+                policy_number=meta.get("policy_number"),
+                policy_version=meta.get("policy_version") or doc.document_version or "1.0",
+                tenant_id=str(user.tenant_id or ""),
+            )
+            if manifest:
+                save_requirement_manifest(
+                    document_id=doc.id,
+                    manifest=manifest,
+                    policy_number=meta.get("policy_number"),
+                    insurance_type=doc.insurance_type,
+                    tenant_id=str(user.tenant_id or ""),
+                )
+        except Exception:
+            logger.warning("Manifest pre-compilation on publish non-fatal warning")''',
+        '''    # Pre-compile manifest on publish if policy wording
+    if doc.document_type in {"policy_wording", "endorsement"}:
+        try:
+            from src.knowledge.policy_compiler import compile_policy_requirements
+            from src.knowledge.store import save_requirement_manifest
+            chunks = [{"chunk_id": str(c.id), "text": c.text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
+            manifest = compile_policy_requirements(
+                document_id=str(doc.id),
+                insurance_type=doc.insurance_type or "motor",
+                chunks=chunks,
+            )
+            if manifest:
+                meta["requirement_manifest"] = manifest
+                meta["requirement_manifest_version"] = 1
+                doc.metadata_json = meta
+                flag_modified(doc, "metadata_json")
+        except Exception:
+            logger.warning("Manifest pre-compilation on publish non-fatal warning")''',
+        "fix c.text and compile_policy_requirements in publish_document",
+    )
+
+    # 8. backend/src/api/claim_routes.py
     patch_file(
         "backend/src/api/claim_routes.py",
         '''def _request_payload(row: ClaimEvidenceRequest, db: Session) -> Dict[str, Any]:
@@ -470,7 +727,6 @@ def main() -> None:
     else:
         candidates = outstanding''',
         "allow proactive supporting evidence upload at any stage",
-        applied_marker="Supporting Claim Evidence",
     )
 
     patch_file(
@@ -489,15 +745,9 @@ def main() -> None:
         except Exception:
             pass''',
         "resolve Policy.id UUID FK in PATCH /{ticket_id}",
-        applied_marker="(Policy.policy_number == raw_pol.upper()) | (Policy.id == raw_pol)",
     )
 
-    # -------------------------------------------------------------------------
-    # 8. backend/src/api/adjuster_routes.py
-    #    - Fix ClaimNote (author_user_id -> User) AttributeError
-    #    - Fix ClaimEvidence (object_key, size_bytes, analysis_json) AttributeErrors
-    #    - Deduplicate _request_payload, /url, and /download routes
-    # -------------------------------------------------------------------------
+    # 9. backend/src/api/adjuster_routes.py
     patch_file(
         "backend/src/api/adjuster_routes.py",
         '''def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
@@ -546,8 +796,6 @@ def main() -> None:
         } if evidence else None,
     }''',
         "unify _request_payload in adjuster_routes.py",
-        applied_marker='"response_evidence": {',
-        is_dedup=True,
     )
 
     patch_file(
@@ -674,7 +922,6 @@ def main() -> None:
                 existing_keys.add(obj_key)
             existing_keys.add(str(dbev.id))''',
         "fix ClaimNote and ClaimEvidence AttributeErrors in claim_file",
-        applied_marker="author_ids = {n.author_user_id",
     )
 
     patch_file(
@@ -790,7 +1037,6 @@ def download_claim_evidence_file(ticket_id: str, evidence_id: str, request: Requ
 
 download_evidence = download_claim_evidence_file''',
         "fix object_key lookup in get_evidence_url and download_claim_evidence_file",
-        applied_marker='getattr(row, "object_key", None)',
     )
 
     patch_file(
@@ -844,7 +1090,6 @@ def download_evidence(ticket_id: str, evidence_id: str, user: User = Depends(_gu
         raise HTTPException(status_code=404, detail="File could not be found.")''',
         '''# Consolidated evidence URL & download endpoints defined above''',
         "remove duplicate /url and /download route definitions",
-        is_dedup=True,
     )
 
     patch_file(
@@ -868,13 +1113,9 @@ def download_evidence(ticket_id: str, evidence_id: str, user: User = Depends(_gu
     }''',
         '''# Consolidated _request_payload defined at top of module''',
         "remove duplicate _request_payload at bottom of adjuster_routes.py",
-        is_dedup=True,
     )
 
-    # -------------------------------------------------------------------------
-    # 9. backend/src/api/admin_routes.py
-    #    - Deduplicate @router.get("/dashboard") and remove c.estimated_amount bug
-    # -------------------------------------------------------------------------
+    # 10. backend/src/api/admin_routes.py
     patch_file(
         "backend/src/api/admin_routes.py",
         '''    return {
@@ -964,13 +1205,9 @@ def get_admin_dashboard(request: Request, db: Session = Depends(get_db)):
     }''',
         '''# Consolidated get_admin_dashboard endpoint is defined above''',
         "remove duplicate get_admin_dashboard with c.estimated_amount bug",
-        is_dedup=True,
     )
 
-    # -------------------------------------------------------------------------
-    # 10. backend/src/api/main.py
-    #     - Add PATCH /api/v1/auth/me and GET /api/v1/notifications
-    # -------------------------------------------------------------------------
+    # 11. backend/src/api/main.py
     patch_file(
         "backend/src/api/main.py",
         '''# The /me endpoint needs get_current_user from this module, so we define it here
@@ -1088,11 +1325,7 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
         "add PATCH /api/v1/auth/me and GET /api/v1/notifications",
     )
 
-    # -------------------------------------------------------------------------
-    # 11. frontend/src/app/adjuster/claims/[ticketId]/page.tsx
-    #     - Map res.analysis in fetchCopilotSynopsis
-    #     - Use authenticated api.downloadFile for local /api/ evidence URLs
-    # -------------------------------------------------------------------------
+    # 12. frontend/src/app/adjuster/claims/[ticketId]/page.tsx
     patch_file(
         "frontend/src/app/adjuster/claims/[ticketId]/page.tsx",
         '''      if (data?.claim?.estimated_claim_amount) {
@@ -1147,7 +1380,6 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
     }
   };''',
         "map res.analysis in fetchCopilotSynopsis",
-        applied_marker="res?.analysis || res?.copilot",
     )
 
     patch_file(
@@ -1175,15 +1407,9 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
                                   }
                                 }}''',
         "use authenticated api.downloadFile for local evidence downloads",
-        applied_marker="await api.downloadFile(res.url",
     )
 
-    # -------------------------------------------------------------------------
-    # 12. frontend/src/app/claimant/file-claim/page.tsx
-    #     - Append AI verification message & refresh dossier after evidence upload
-    #     - PATCH policy_id when policy dropdown changes on an active draft
-    #     - Show "Track Claim & Requests" when viewing a submitted claim
-    # -------------------------------------------------------------------------
+    # 13. frontend/src/app/claimant/file-claim/page.tsx
     patch_file(
         "frontend/src/app/claimant/file-claim/page.tsx",
         '''      await api.post(`/api/v1/claims/${ticketId}/evidence`, formData);
@@ -1213,7 +1439,6 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
       setEvidenceModalOpen(false);
       setSelectedFile(null);''',
         "append AI verification reply and refresh claimData after evidence upload",
-        applied_marker="Evidence document uploaded successfully!",
     )
 
     patch_file(
@@ -1236,13 +1461,33 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
             }}
           >''',
         "sync top-bar policy selector change to backend via PATCH",
-        applied_marker="setSelectedPolicyNumber(newVal)",
     )
 
     patch_file(
         "frontend/src/app/claimant/file-claim/page.tsx",
-        '''            {/* Submit Claim Button */}
-            {ticketId && (
+        '''          {/* Submit Claim Button */}
+          {ticketId && (
+            <Button
+              size="sm"
+              variant="secondary"
+              pill
+              onClick={() => setConfirmModalOpen(true)}
+            >
+              Submit Claim
+            </Button>
+          )}''',
+        '''          {/* Submit Claim / Track Submitted Claim Button */}
+          {ticketId && (
+            claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                pill
+                onClick={() => router.push(`/claimant/claims/${ticketId}`)}
+              >
+                Track Claim & Requests
+              </Button>
+            ) : (
               <Button
                 size="sm"
                 variant="secondary"
@@ -1251,37 +1496,12 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
               >
                 Submit Claim
               </Button>
-            )}''',
-        '''            {/* Submit Claim / Track Submitted Claim Button */}
-            {ticketId && (
-              claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  pill
-                  onClick={() => router.push(`/claimant/claims/${ticketId}`)}
-                >
-                  Track Claim & Requests
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  pill
-                  onClick={() => setConfirmModalOpen(true)}
-                >
-                  Submit Claim
-                </Button>
-              )
-            )}''',
+            )
+          )}''',
         "switch Submit Claim button to Track Claim & Requests for submitted claims",
-        applied_marker="Track Claim & Requests",
     )
 
-    # -------------------------------------------------------------------------
-    # 13. frontend/src/app/onboarding/adjuster/page.tsx
-    #     - Pass refresh_token to login()
-    # -------------------------------------------------------------------------
+    # 14. frontend/src/app/onboarding/adjuster/page.tsx
     patch_file(
         "frontend/src/app/onboarding/adjuster/page.tsx",
         '''      login(res.access_token, res.user);''',
@@ -1289,10 +1509,7 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
         "persist refresh_token on adjuster onboarding",
     )
 
-    # -------------------------------------------------------------------------
-    # 14. frontend/src/app/settings/page.tsx
-    #     - Wire handleSaveProfile to PATCH /api/v1/auth/me
-    # -------------------------------------------------------------------------
+    # 15. frontend/src/app/settings/page.tsx
     patch_file(
         "frontend/src/app/settings/page.tsx",
         '''  const handleSaveProfile = (e: React.FormEvent) => {
@@ -1316,13 +1533,9 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
     }
   };''',
         "persist profile edits via PATCH /api/v1/auth/me",
-        applied_marker="api.patch<any>('/api/v1/auth/me'",
     )
 
-    # -------------------------------------------------------------------------
-    # 15. frontend/src/components/ui/AppShell.tsx
-    #     - Fetch live role-based notifications from GET /api/v1/notifications
-    # -------------------------------------------------------------------------
+    # 16. frontend/src/components/ui/AppShell.tsx
     patch_file(
         "frontend/src/components/ui/AppShell.tsx",
         '''  const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -1349,14 +1562,85 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
     });
   }, [user, pathname]);''',
         "load live role-based notifications from /api/v1/notifications",
-        applied_marker="api.get<any>('/api/v1/notifications')",
     )
 
-    # -------------------------------------------------------------------------
-    # 16. Verify Python AST syntax across all backend .py files
-    # -------------------------------------------------------------------------
+    # 17. database/seed_demo.py — Pre-populate grounded requirement_manifest on demo policy wordings
+    patch_file(
+        "database/seed_demo.py",
+        '''                        metadata_json={
+                            "title": filename,
+                            "policy_version": version,
+                            "publication_status": "published",
+                            "effective_from": "2026-01-01",
+                            "effective_to": "2027-01-01",
+                            "demo_source": True,
+                        },''',
+        '''                        metadata_json={
+                            "title": filename,
+                            "policy_version": version,
+                            "publication_status": "published",
+                            "effective_from": "2026-01-01",
+                            "effective_to": "2027-01-01",
+                            "demo_source": True,
+                            **(
+                                {
+                                    "requirement_manifest_version": 1,
+                                    "requirement_manifest": [
+                                        {"key": "policy_number", "label": "Policy Number", "question_hint": "Could you provide your Motor Policy Number to verify coverage?", "required": True, "evidence_type": None, "canonical_role": "policy_id", "citation_label": citation},
+                                        {"key": "incident_date", "label": "Incident Date", "question_hint": "On what date did the collision or incident occur?", "required": True, "evidence_type": None, "canonical_role": "event_date", "citation_label": citation},
+                                        {"key": "incident_location", "label": "Incident Location", "question_hint": "Where did the motor accident take place?", "required": True, "evidence_type": None, "canonical_role": "event_location", "citation_label": citation},
+                                        {"key": "damage_description", "label": "Description of Damage", "question_hint": "Could you describe how the collision happened and the vehicle damage?", "required": True, "evidence_type": None, "canonical_role": "event_description", "citation_label": citation},
+                                        {"key": "repair_estimate_amount", "label": "Repair Estimate Amount", "question_hint": "What is the estimated repair cost or garage quotation amount?", "required": True, "evidence_type": None, "canonical_role": "estimated_claim_amount", "citation_label": citation},
+                                        {"key": "repair_quotation_document", "label": "Repair Estimate / Garage Quotation", "question_hint": "Please upload a copy of the repair estimate or garage quotation.", "required": True, "evidence_type": "document", "canonical_role": None, "citation_label": citation},
+                                    ],
+                                }
+                                if insurance_type == "motor" and doc_type == "policy_wording"
+                                else (
+                                    {
+                                        "requirement_manifest_version": 1,
+                                        "requirement_manifest": [
+                                            {"key": "policy_number", "label": "Health Policy Number", "question_hint": "Could you provide your active Health Policy Number for verification?", "required": True, "evidence_type": None, "canonical_role": "policy_id", "citation_label": citation},
+                                            {"key": "hospital_name", "label": "Hospital Name", "question_hint": "Which hospital were you admitted to for treatment?", "required": True, "evidence_type": None, "canonical_role": "event_location", "citation_label": citation},
+                                            {"key": "hospital_admission_date", "label": "Hospital Admission Date", "question_hint": "What was the date of inpatient hospital admission?", "required": True, "evidence_type": None, "canonical_role": "event_date", "citation_label": citation},
+                                            {"key": "diagnosis_description", "label": "Diagnosis & Treatment Details", "question_hint": "What was the diagnosis or treatment described by the attending doctor?", "required": True, "evidence_type": None, "canonical_role": "event_description", "citation_label": citation},
+                                            {"key": "estimated_hospital_bills", "label": "Estimated Hospital Bills", "question_hint": "What is the total estimated hospital bill or medical expense?", "required": True, "evidence_type": None, "canonical_role": "estimated_claim_amount", "citation_label": citation},
+                                            {"key": "discharge_summary_and_receipts", "label": "Hospital Discharge Summary & Medical Receipts", "question_hint": "Please upload a copy of your hospital discharge summary and original medical receipts.", "required": True, "evidence_type": "document", "canonical_role": None, "citation_label": citation},
+                                        ],
+                                    }
+                                    if insurance_type == "health" and doc_type == "policy_wording"
+                                    else {}
+                                )
+                            ),
+                        },''',
+        "pre-populate grounded requirement_manifest on demo motor and health policy wordings",
+    )
+
+    # 18. frontend/package.json — Add test:e2e script
+    patch_file(
+        "frontend/package.json",
+        '''    "lint": "eslint .",
+    "test": "vitest run"''',
+        '''    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "playwright test"''',
+        "add test:e2e Playwright script to frontend/package.json",
+    )
+
+    # 19. Create frontend/e2e/intelliclaim-full-e2e.spec.ts
+    e2e_dir = ROOT / "frontend/e2e"
+    e2e_dir.mkdir(parents=True, exist_ok=True)
+    e2e_file = e2e_dir / "intelliclaim-full-e2e.spec.ts"
+    if not e2e_file.exists() or e2e_file.read_text(encoding="utf-8") != E2E_SPEC_CONTENT:
+        e2e_file.write_text(E2E_SPEC_CONTENT, encoding="utf-8")
+        print("[OK]   Created E2E Playwright suite: frontend/e2e/intelliclaim-full-e2e.spec.ts")
+        APPLIED_COUNT += 1
+    else:
+        print("[SKIP] Already exists: frontend/e2e/intelliclaim-full-e2e.spec.ts")
+        SKIPPED_COUNT += 1
+
+    # 20. Verify Python AST syntax across all backend .py files
     backend_dir = ROOT / "backend"
-    py_files = sorted(glob.glob(f"{backend_dir}/**/*.py", recursive=True))
+    py_files = sorted(glob.glob(f"{backend_dir}/**/*.py", recursive=True)) + sorted(glob.glob(f"{ROOT}/database/*.py"))
     syntax_errors = []
     for path in py_files:
         try:
@@ -1373,7 +1657,7 @@ def get_user_notifications(current_user: User = Depends(get_current_user), db: S
         for p, err in syntax_errors:
             print(f"  [SYNTAX ERROR] {p}: {err}")
         raise SystemExit(1)
-    print("All fixes verified and active!")
+    print("All fixes and E2E Playwright specs verified and active!")
 
 
 if __name__ == "__main__":

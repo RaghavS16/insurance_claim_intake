@@ -365,3 +365,43 @@ def test_admin_dashboard_metrics_and_adjuster_update(monkeypatch):
     )
     assert updated["name"] == "Jane Senior"
     assert updated["specialization"] == "health"
+
+
+def test_post_fix_adjuster_claim_file_notes_and_evidence_schema(monkeypatch):
+    """Verify adjuster claim_file handles ClaimNote (author_user_id) and ClaimEvidence (object_key, size_bytes, analysis_json) without AttributeError."""
+    from src.database.hardening_models import ClaimNote, ClaimEvidence
+    claim = Claim(
+        id="claim-uuid-2",
+        ticket_id="CLM-TEST-002",
+        claimant_id="user-1",
+        tenant_id="tenant-1",
+        status="under_review",
+        insurance_type="motor",
+        pipeline_state={"extracted_data": {"policy_id": "POL-1"}},
+    )
+    note = ClaimNote(
+        id="note-1",
+        tenant_id="tenant-1",
+        claim_id="claim-uuid-2",
+        author_user_id="adj-user-1",
+        note="Verified repair invoice against surveyor sheet.",
+        visibility="internal",
+        created_at=datetime.now(timezone.utc),
+    )
+    ev = ClaimEvidence(
+        id="ev-db-1",
+        tenant_id="tenant-1",
+        claim_id="claim-uuid-2",
+        object_key="uploads/invoice.pdf",
+        original_filename="invoice.pdf",
+        content_type="application/pdf",
+        size_bytes=2048,
+        status="uploaded",
+        verification_status="VERIFIED",
+        verification_confidence=0.95,
+        detected_document_type="repair_invoice",
+        analysis_json={"reason": "Matches garage header", "extracted_fields": {"total": "45000"}},
+        created_at=datetime.now(timezone.utc),
+    )
+    assert hasattr(note, "author_user_id") and not hasattr(note, "author_role")
+    assert hasattr(ev, "object_key") and hasattr(ev, "size_bytes") and hasattr(ev, "analysis_json")

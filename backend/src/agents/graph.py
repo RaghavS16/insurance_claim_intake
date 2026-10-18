@@ -429,15 +429,6 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["conversation_phase"] = "source_of_truth_intake" if (dynamic_missing or missing_evidence) else "gap_analysis"
         return state
 
-    if rag_status == "CONTEXT_RESOLUTION_REQUIRED":
-        state["conversation_phase"] = "source_of_truth_intake"
-        state["conversation_status"] = "collecting"
-        state["next_question_field"] = "policy_id"
-        msg = (state.get("knowledge_context") or {}).get("question") or "Could you provide your policy number or specify which type of policy you are filing a claim under?"
-        state["next_question"] = msg
-        state["message"] = msg
-        return state
-
     # 2b. Context resolution required when neither policy_number nor insurance_type is known yet
     if not requirements and rag_status == "CONTEXT_RESOLUTION_REQUIRED":
         state["conversation_phase"] = "source_of_truth_intake"

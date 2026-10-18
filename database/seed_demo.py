@@ -147,6 +147,35 @@ Clause 3.4: The claimant must furnish a copy of the hospital discharge summary a
                             "effective_from": "2026-01-01",
                             "effective_to": "2027-01-01",
                             "demo_source": True,
+                            **(
+                                {
+                                    "requirement_manifest_version": 1,
+                                    "requirement_manifest": [
+                                        {"key": "policy_number", "label": "Policy Number", "question_hint": "Could you provide your Motor Policy Number to verify coverage?", "required": True, "evidence_type": None, "canonical_role": "policy_id", "citation_label": citation},
+                                        {"key": "incident_date", "label": "Incident Date", "question_hint": "On what date did the collision or incident occur?", "required": True, "evidence_type": None, "canonical_role": "event_date", "citation_label": citation},
+                                        {"key": "incident_location", "label": "Incident Location", "question_hint": "Where did the motor accident take place?", "required": True, "evidence_type": None, "canonical_role": "event_location", "citation_label": citation},
+                                        {"key": "damage_description", "label": "Description of Damage", "question_hint": "Could you describe how the collision happened and the vehicle damage?", "required": True, "evidence_type": None, "canonical_role": "event_description", "citation_label": citation},
+                                        {"key": "repair_estimate_amount", "label": "Repair Estimate Amount", "question_hint": "What is the estimated repair cost or garage quotation amount?", "required": True, "evidence_type": None, "canonical_role": "estimated_claim_amount", "citation_label": citation},
+                                        {"key": "repair_quotation_document", "label": "Repair Estimate / Garage Quotation", "question_hint": "Please upload a copy of the repair estimate or garage quotation.", "required": True, "evidence_type": "document", "canonical_role": None, "citation_label": citation},
+                                    ],
+                                }
+                                if insurance_type == "motor" and doc_type == "policy_wording"
+                                else (
+                                    {
+                                        "requirement_manifest_version": 1,
+                                        "requirement_manifest": [
+                                            {"key": "policy_number", "label": "Health Policy Number", "question_hint": "Could you provide your active Health Policy Number for verification?", "required": True, "evidence_type": None, "canonical_role": "policy_id", "citation_label": citation},
+                                            {"key": "hospital_name", "label": "Hospital Name", "question_hint": "Which hospital were you admitted to for treatment?", "required": True, "evidence_type": None, "canonical_role": "event_location", "citation_label": citation},
+                                            {"key": "hospital_admission_date", "label": "Hospital Admission Date", "question_hint": "What was the date of inpatient hospital admission?", "required": True, "evidence_type": None, "canonical_role": "event_date", "citation_label": citation},
+                                            {"key": "diagnosis_description", "label": "Diagnosis & Treatment Details", "question_hint": "What was the diagnosis or treatment described by the attending doctor?", "required": True, "evidence_type": None, "canonical_role": "event_description", "citation_label": citation},
+                                            {"key": "estimated_hospital_bills", "label": "Estimated Hospital Bills", "question_hint": "What is the total estimated hospital bill or medical expense?", "required": True, "evidence_type": None, "canonical_role": "estimated_claim_amount", "citation_label": citation},
+                                            {"key": "discharge_summary_and_receipts", "label": "Hospital Discharge Summary & Medical Receipts", "question_hint": "Please upload a copy of your hospital discharge summary and original medical receipts.", "required": True, "evidence_type": "document", "canonical_role": None, "citation_label": citation},
+                                        ],
+                                    }
+                                    if insurance_type == "health" and doc_type == "policy_wording"
+                                    else {}
+                                )
+                            ),
                         },
                     )
                     db.add(doc)

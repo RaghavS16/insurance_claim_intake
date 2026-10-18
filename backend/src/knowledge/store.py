@@ -523,13 +523,14 @@ def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = No
         db.close()
 
 
-def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None) -> None:
+def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], tenant_id: str | None = None, **kwargs: Any) -> None:
     tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
+        from sqlalchemy.orm.attributes import flag_modified
         row = db.query(KnowledgeDocument).filter(
             KnowledgeDocument.id == document_id,
-            KnowledgeDocument.tenant_id == tenant_id,
+            (KnowledgeDocument.tenant_id == tenant_id) | (KnowledgeDocument.tenant_id.is_(None)) | (KnowledgeDocument.tenant_id == ""),
         ).first()
         if not row:
             return
@@ -538,6 +539,7 @@ def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], 
             "requirement_manifest": manifest,
             "requirement_manifest_version": 1,
         }
+        flag_modified(row, "metadata_json")
         db.commit()
     finally:
         db.close()

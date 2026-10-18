@@ -47,16 +47,6 @@ function FileClaimContent() {
 
   const [ticketId, setTicketId] = useState<string>(queryTicketId || '');
   const [claimData, setClaimData] = useState<any>(null);
-  const isSubmitted = !!claimData?.status && [
-    'submitted',
-    'assigned',
-    'under_review',
-    'pending_evidence',
-    'approved',
-    'partially_approved',
-    'rejected',
-    'closed',
-  ].includes(claimData.status);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -370,10 +360,6 @@ function FileClaimContent() {
 
   // Send turn (text or voice) to backend
   const handleSendText = async (textToSend?: string) => {
-    if (isSubmitted) {
-      showToast('This claim is already submitted and read-only.', 'info');
-      return;
-    }
     const text = (textToSend || inputTurn).trim();
     if (!text) return;
 
@@ -481,25 +467,27 @@ function FileClaimContent() {
       formData.append('document_type', 'damage_evidence');
 
       const res = await api.post<any>(`/api/v1/claims/${ticketId}/evidence`, formData);
-      showToast('Evidence document uploaded successfully!', 'success');
-      setEvidenceModalOpen(false);
-      setSelectedFile(null);
-
       if (res?.message) {
         setMessages((prev) => [
           ...prev,
           {
-            id: `msg-${Date.now()}`,
+            id: `ev-${Date.now()}`,
             speaker: 'assistant',
             text: res.message,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            time: 'Just now',
+            citations: res.citations || [],
           },
         ]);
       }
       try {
-        const refreshed = await api.get<any>(`/api/v1/claims/${ticketId}`);
-        setClaimData(refreshed);
-      } catch {}
+        const updatedClaim = await api.get<any>(`/api/v1/claims/${ticketId}`);
+        if (updatedClaim) setClaimData(updatedClaim);
+      } catch {
+        // ignore refresh error
+      }
+      showToast('Evidence document uploaded and analyzed!', 'success');
+      setEvidenceModalOpen(false);
+      setSelectedFile(null);
     } catch (err: any) {
       showToast(err.message || 'Evidence upload failed.', 'error');
     } finally {
@@ -560,17 +548,15 @@ function FileClaimContent() {
             className="snow-select"
             style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #D1D5DB', fontSize: 13, minWidth: 260 }}
             value={selectedPolicyNumber}
-            disabled={isSubmitted}
             onChange={async (e) => {
               const newVal = e.target.value;
               setSelectedPolicyNumber(newVal);
-              if (ticketId && (!claimData?.status || ['draft', 'verified'].includes(claimData.status))) {
+              if (ticketId && (!claimData?.status || ['draft', 'verified', 'pending_confirmation'].includes(claimData.status))) {
                 try {
-                  const updated = await api.patch<any>(`/api/v1/claims/${ticketId}`, { policy_id: newVal });
-                  setClaimData(updated);
-                  showToast(`Policy updated to ${newVal || 'auto-detect'}`, 'info');
-                } catch (err: any) {
-                  showToast(err.message || 'Failed to update policy on active claim session.', 'error');
+                  const patched = await api.patch<any>(`/api/v1/claims/${ticketId}`, { policy_id: newVal || null });
+                  if (patched) setClaimData(patched);
+                } catch {
+                  // non-fatal
                 }
               }
             }}
@@ -760,180 +746,147 @@ function FileClaimContent() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Bar or Read-Only Banner */}
-        {isSubmitted ? (
-          <div
-            className="snow-card"
+        {/* Input Bar */}
+        <div
+          className="snow-card"
+          style={{
+            padding: '8px 12px',
+            borderRadius: 24,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            boxShadow: '0 4px 18px rgba(0,0,0,0.06)',
+            backgroundColor: '#FFFFFF',
+          }}
+        >
+          {/* Reset Chat Button */}
+          <button
+            type="button"
+            onClick={() => setDiscardModalOpen(true)}
             style={{
-              padding: '14px 18px',
-              borderRadius: 16,
+              width: 36,
+              height: 36,
+              borderRadius: '50%',
+              border: 'none',
+              background: '#F4F5F7',
+              color: '#71717A',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              backgroundColor: '#F0F9FF',
-              border: '1px solid #BAE6FD',
-              boxShadow: '0 4px 18px rgba(0,0,0,0.04)',
-              gap: 12,
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
             }}
+            title="Reset conversation"
           >
-            <div>
-              <div style={{ fontWeight: 600, color: '#0369A1', fontSize: 13 }}>
-                Claim #{ticketId} has been submitted ({claimData?.status?.replace(/_/g, ' ')})
-              </div>
-              <div style={{ color: '#0284C7', fontSize: 12, marginTop: 2 }}>
-                Intake conversation is complete and read-only.
-              </div>
-            </div>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => router.push(`/claimant/claims/${ticketId}`)}
-            >
-              Track Claim & Respond to Adjuster
-            </Button>
-          </div>
-        ) : (
-          <div
-            className="snow-card"
+            <RotateCcw size={15} />
+          </button>
+
+          {/* Attach Evidence */}
+          <button
+            type="button"
+            onClick={() => setEvidenceModalOpen(true)}
             style={{
-              padding: '8px 12px',
-              borderRadius: 24,
+              width: 36,
+              height: 36,
+              borderRadius: '50%',
+              border: 'none',
+              background: '#F4F5F7',
+              color: '#71717A',
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
-              boxShadow: '0 4px 18px rgba(0,0,0,0.06)',
-              backgroundColor: '#FFFFFF',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
             }}
+            title="Attach Evidence Photo/Receipt"
           >
-            {/* Reset Chat Button */}
-            <button
-              type="button"
-              onClick={() => setDiscardModalOpen(true)}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: '50%',
-                border: 'none',
-                background: '#F4F5F7',
-                color: '#71717A',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                flexShrink: 0,
-              }}
-              title="Reset conversation"
-            >
-              <RotateCcw size={15} />
-            </button>
+            <Paperclip size={17} />
+          </button>
 
-            {/* Attach Evidence */}
-            <button
-              type="button"
-              onClick={() => setEvidenceModalOpen(true)}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: '50%',
-                border: 'none',
-                background: '#F4F5F7',
-                color: '#71717A',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                flexShrink: 0,
-              }}
-              title="Attach Evidence Photo/Receipt"
-            >
-              <Paperclip size={17} />
-            </button>
+          {/* Text Input */}
+          <input
+            type="text"
+            className="snow-input"
+            style={{
+              border: 'none',
+              boxShadow: 'none',
+              fontSize: 14,
+              padding: '0 8px',
+              height: 38,
+              flex: 1,
+              minWidth: 0,
+            }}
+            placeholder={
+              isVoiceActive
+                ? 'Listening & transcribing simultaneously... Speak or click mic to send'
+                : 'Type your message or click the mic to speak...'
+            }
+            value={inputTurn}
+            onChange={(e) => setInputTurn(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSendText();
+            }}
+          />
 
-            {/* Text Input */}
-            <input
-              type="text"
-              className="snow-input"
-              style={{
-                border: 'none',
-                boxShadow: 'none',
-                fontSize: 14,
-                padding: '0 8px',
-                height: 38,
-                flex: 1,
-                minWidth: 0,
-              }}
-              placeholder={
-                isVoiceActive
-                  ? 'Listening & transcribing simultaneously... Speak or click mic to send'
-                  : 'Type your message or click the mic to speak...'
-              }
-              value={inputTurn}
-              onChange={(e) => setInputTurn(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSendText();
-              }}
-            />
+          {/* Microphone Button with Real-Time Listening State */}
+          <button
+            type="button"
+            onClick={toggleVoiceMode}
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: '50%',
+              border: 'none',
+              background: isVoiceActive ? '#EF4444' : '#1C1C1C',
+              color: '#FFFFFF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              flexShrink: 0,
+              animation: isVoiceActive ? 'snowPulseRing 1.4s infinite' : 'none',
+            }}
+            title={isVoiceActive ? 'Click to cut microphone & send message immediately' : 'Click to speak & transcribe live'}
+          >
+            {isVoiceActive ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
 
-            {/* Microphone Button with Real-Time Listening State */}
-            <button
-              type="button"
-              onClick={toggleVoiceMode}
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: '50%',
-                border: 'none',
-                background: isVoiceActive ? '#EF4444' : '#1C1C1C',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                flexShrink: 0,
-                animation: isVoiceActive ? 'snowPulseRing 1.4s infinite' : 'none',
-              }}
-              title={isVoiceActive ? 'Click to cut microphone & send message immediately' : 'Click to speak & transcribe live'}
-            >
-              {isVoiceActive ? <MicOff size={18} /> : <Mic size={18} />}
-            </button>
+          {/* Send Button */}
+          <Button
+            pill
+            size="sm"
+            variant="primary"
+            onClick={() => handleSendText()}
+            disabled={!inputTurn.trim()}
+            icon={<Send size={14} />}
+          >
+            Send
+          </Button>
 
-            {/* Send Button */}
-            <Button
-              pill
-              size="sm"
-              variant="primary"
-              onClick={() => handleSendText()}
-              disabled={!inputTurn.trim()}
-              icon={<Send size={14} />}
-            >
-              Send
-            </Button>
-
-            {/* Submit Claim / Track Submitted Claim Button */}
-            {ticketId && (
-              claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  pill
-                  onClick={() => router.push(`/claimant/claims/${ticketId}`)}
-                >
-                  Track Claim & Requests
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  pill
-                  onClick={() => setConfirmModalOpen(true)}
-                >
-                  Submit Claim
-                </Button>
-              )
-            )}
-          </div>
-        )}
+          {/* Submit Claim / Track Submitted Claim Button */}
+          {ticketId && (
+            claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                pill
+                onClick={() => router.push(`/claimant/claims/${ticketId}`)}
+              >
+                Track Claim & Requests
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                pill
+                onClick={() => setConfirmModalOpen(true)}
+              >
+                Submit Claim
+              </Button>
+            )
+          )}
+        </div>
       </div>
 
       {/* Right Column: Live Claim Dossier Panel */}

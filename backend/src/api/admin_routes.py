@@ -893,3 +893,6 @@ def list_system_audit_events(
         ]
     }
 
+
+# Consolidated get_admin_dashboard endpoint is defined above
+

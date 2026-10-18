@@ -7,7 +7,6 @@ import {
   FileText,
   Download,
   Copy,
-  Printer,
   MessageSquare,
   ShieldCheck,
   Calendar,
@@ -25,7 +24,6 @@ import { Input } from '@/components/ui/Input';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
-import { downloadDossierFile, printAdjudicationCertificate } from '@/lib/dossier-export';
 
 export default function ClaimDetailsPage({
   params,
@@ -44,7 +42,6 @@ export default function ClaimDetailsPage({
   // Export Dossier Modal
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [dossierText, setDossierText] = useState('');
-  const [certificateData, setCertificateData] = useState<any>(null);
 
   // Respond Request Modal
   const [respondModalOpen, setRespondModalOpen] = useState(false);
@@ -93,7 +90,6 @@ export default function ClaimDetailsPage({
     try {
       const res = await api.get<any>(`/api/v1/claims/${ticketId}/export`);
       setDossierText(res?.formatted_text || (typeof res === 'string' ? res : JSON.stringify(res, null, 2)));
-      setCertificateData(res?.certificate || null);
       setExportModalOpen(true);
     } catch (err: any) {
       showToast(err.message || 'Failed to export dossier.', 'error');
@@ -422,13 +418,9 @@ export default function ClaimDetailsPage({
       <Modal
         isOpen={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
-        title={`Claim Dossier & Settlement Certificate — #${ticketId}`}
-        maxWidth={640}
+        title="Claim Dossier Export"
+        maxWidth={600}
       >
-        <p className="snow-caption" style={{ color: '#71717A', marginBottom: 12 }}>
-          Export the complete intake transcript dossier or print/save an official adjudication certificate with verified checksums.
-        </p>
-
         <div style={{ position: 'relative' }}>
           <pre
             style={{
@@ -439,7 +431,7 @@ export default function ClaimDetailsPage({
               fontSize: 12,
               fontFamily: 'monospace',
               whiteSpace: 'pre-wrap',
-              maxHeight: 280,
+              maxHeight: 340,
               overflowY: 'auto',
             }}
           >
@@ -447,39 +439,13 @@ export default function ClaimDetailsPage({
           </pre>
         </div>
 
-        <div className="snow-flex snow-justify-between snow-items-center snow-gap-2" style={{ marginTop: 20, flexWrap: 'wrap' }}>
-          <div className="snow-flex snow-gap-2">
-            <Button
-              variant="secondary"
-              icon={<Download size={14} />}
-              onClick={() => downloadDossierFile(dossierText, `claim_${ticketId}_dossier.md`, 'text/markdown')}
-            >
-              .MD
-            </Button>
-            <Button
-              variant="secondary"
-              icon={<Download size={14} />}
-              onClick={() => downloadDossierFile(dossierText, `claim_${ticketId}_dossier.txt`, 'text/plain')}
-            >
-              .TXT
-            </Button>
-            <Button
-              variant="primary"
-              icon={<Printer size={14} />}
-              onClick={() => printAdjudicationCertificate(certificateData)}
-              disabled={!certificateData}
-            >
-              Print / Save PDF Certificate
-            </Button>
-          </div>
-          <div className="snow-flex snow-gap-2">
-            <Button variant="secondary" icon={<Copy size={14} />} onClick={handleCopyDossier}>
-              Copy Text
-            </Button>
-            <Button variant="secondary" onClick={() => setExportModalOpen(false)}>
-              Close
-            </Button>
-          </div>
+        <div className="snow-flex snow-justify-between snow-items-center" style={{ marginTop: 20 }}>
+          <Button variant="secondary" onClick={() => setExportModalOpen(false)}>
+            Close
+          </Button>
+          <Button variant="primary" icon={<Copy size={14} />} onClick={handleCopyDossier}>
+            Copy Dossier
+          </Button>
         </div>
       </Modal>
 

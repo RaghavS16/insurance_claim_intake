@@ -145,20 +145,17 @@ async def upload_document(
             if norm_doc_type in {"policy_wording", "endorsement"} and doc_id:
                 try:
                     from src.knowledge.policy_compiler import compile_policy_requirements
-                    from src.knowledge.store import save_requirement_manifest
+                    from src.knowledge.store import get_document_chunks, save_requirement_manifest
+                    chunk_dicts = get_document_chunks(doc_id, tenant_id=str(user.tenant_id or ""))
                     manifest = compile_policy_requirements(
-                        policy_chunks=ingest_res.get("chunks") or [],
+                        document_id=str(doc_id),
                         insurance_type=insurance_type or "motor",
-                        policy_number=policy_number,
-                        policy_version=policy_version or "1.0",
-                        tenant_id=str(user.tenant_id or ""),
+                        chunks=chunk_dicts,
                     )
                     if manifest:
                         save_requirement_manifest(
-                            document_id=doc_id,
+                            document_id=str(doc_id),
                             manifest=manifest,
-                            policy_number=policy_number,
-                            insurance_type=insurance_type,
                             tenant_id=str(user.tenant_id or ""),
                         )
                 except Exception:
@@ -455,22 +452,17 @@ def publish_document(
         try:
             from src.knowledge.policy_compiler import compile_policy_requirements
             from src.knowledge.store import save_requirement_manifest
-            chunks = [{"text": c.chunk_text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
+            chunks = [{"chunk_id": str(c.id), "text": c.text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
             manifest = compile_policy_requirements(
-                policy_chunks=chunks,
+                document_id=str(doc.id),
                 insurance_type=doc.insurance_type or "motor",
-                policy_number=meta.get("policy_number"),
-                policy_version=meta.get("policy_version") or doc.document_version or "1.0",
-                tenant_id=str(user.tenant_id or ""),
+                chunks=chunks,
             )
             if manifest:
-                save_requirement_manifest(
-                    document_id=doc.id,
-                    manifest=manifest,
-                    policy_number=meta.get("policy_number"),
-                    insurance_type=doc.insurance_type,
-                    tenant_id=str(user.tenant_id or ""),
-                )
+                meta["requirement_manifest"] = manifest
+                meta["requirement_manifest_version"] = 1
+                doc.metadata_json = meta
+                flag_modified(doc, "metadata_json")
         except Exception:
             logger.warning("Manifest pre-compilation on publish non-fatal warning")
 
@@ -497,40 +489,4 @@ def delete_document(
     db.delete(doc)
     db.commit()
     return {"document_id": document_id, "message": "Knowledge document deleted successfully.", "success": True}
-
-
-@router.get("/escalations")
-def get_missing_knowledge_escalations(
-    user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
-    db: Session = Depends(get_db),
-):
-    """Return all open missing_policy_knowledge exceptions across claims."""
-    from src.database.hardening_models import ClaimException
-    from src.database.models import Claim
-
-    rows = (
-        db.query(ClaimException, Claim)
-        .join(Claim, ClaimException.claim_id == Claim.id)
-        .filter(
-            ClaimException.event_type == "missing_policy_knowledge",
-            ClaimException.status == "open",
-        )
-        .order_by(ClaimException.created_at.desc())
-        .limit(20)
-        .all()
-    )
-
-    items = []
-    for exc, claim in rows:
-        res = exc.resolution_json or {}
-        items.append({
-            "id": exc.id,
-            "claim_id": claim.id,
-            "ticket_id": claim.ticket_id,
-            "policy_number": res.get("policy_number") or claim.policy_number or "",
-            "insurance_type": res.get("insurance_type") or claim.insurance_type or "motor",
-            "reason": exc.reason,
-            "created_at": exc.created_at.isoformat() if exc.created_at else None,
-        })
-    return {"items": items, "count": len(items)}
 
