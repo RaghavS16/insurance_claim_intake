@@ -166,3 +166,28 @@ variable "outbox_desired_count" {
   type    = number
   default = 1
 }
+
+variable "frontend_container_image" {
+  type    = string
+  default = ""
+}
+
+variable "frontend_cpu" {
+  type    = number
+  default = 1024
+}
+
+variable "frontend_memory" {
+  type    = number
+  default = 2048
+}
+
+variable "frontend_desired_count" {
+  type    = number
+  default = 2
+}
+
+variable "frontend_container_port" {
+  type    = number
+  default = 3000
+}

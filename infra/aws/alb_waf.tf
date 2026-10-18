@@ -33,6 +33,25 @@ resource "aws_lb_target_group" "api" {
   }
 }
 
+resource "aws_lb_target_group" "frontend" {
+  name                 = substr(replace("${local.name}-web", "_", "-"), 0, 32)
+  port                 = var.frontend_container_port
+  protocol             = "HTTP"
+  target_type          = "ip"
+  vpc_id               = aws_vpc.main.id
+  deregistration_delay = 30
+  tags                 = local.tags
+
+  health_check {
+    path                = "/"
+    matcher             = "200,307,308"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+}
+
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.app.arn
   port              = 443
@@ -42,7 +61,23 @@ resource "aws_lb_listener" "https" {
 
   default_action {
     type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend.arn
+  }
+}
+
+resource "aws_lb_listener_rule" "api" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 10
+
+  action {
+    type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/api/*", "/docs*", "/redoc*", "/openapi.json", "/ready", "/health"]
+    }
   }
 }
 
