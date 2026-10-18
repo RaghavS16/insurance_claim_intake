@@ -20,55 +20,75 @@ import { BadgeDot } from '@/components/ui/Badge';
 import { DonutChart, BarChart } from '@/components/ui/Charts';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
+import { usePolling, LiveIndicator } from '@/lib/use-polling';
+
+interface AdjusterDashboardState {
+  metrics: {
+    totalClaims: number;
+    assignedToMe: number;
+    slaBreaches: number;
+    underReview: number;
+    pendingEvidence: number;
+  };
+  recentClaims: any[];
+}
 
 export default function AdjusterDashboardPage() {
   const router = useRouter();
   const { showToast } = useToast();
 
-  const [metrics, setMetrics] = useState({
+  const {
+    data: dashData,
+    isLoading: loading,
+    secondsAgo,
+    isRefreshing,
+  } = usePolling<AdjusterDashboardState>(
+    async (signal) => {
+      const pDash = api.get<any>('/api/v1/adjuster/dashboard', { signal }).catch(() => null);
+      const pQueue = api.get<any>('/api/v1/adjuster/queue', { signal }).catch(() => null);
+
+      const [dashRes, qRes] = await Promise.allSettled([pDash, pQueue]);
+      const data = dashRes.status === 'fulfilled' ? dashRes.value : null;
+      const qData = qRes.status === 'fulfilled' ? qRes.value : null;
+
+      const newMetrics = {
+        totalClaims: data?.total_filed_claims ?? data?.total_claims ?? 0,
+        assignedToMe: data?.assigned_to_me ?? data?.claims_assigned ?? 0,
+        slaBreaches: data?.sla_breached ?? data?.sla_breaches ?? 0,
+        underReview: data?.under_review ?? 0,
+        pendingEvidence: data?.pending_evidence ?? 0,
+      };
+
+      let recents: any[] = [];
+      if (Array.isArray(data?.recent_claims) && data.recent_claims.length > 0) {
+        recents = data.recent_claims;
+      } else {
+        const items = Array.isArray(qData) ? qData : qData?.items || [];
+        if (items.length > 0) recents = items.slice(0, 5);
+      }
+
+      return {
+        metrics: newMetrics,
+        recentClaims: recents,
+      };
+    },
+    {
+      intervalMs: 8000,
+      initialData: {
+        metrics: { totalClaims: 0, assignedToMe: 0, slaBreaches: 0, underReview: 0, pendingEvidence: 0 },
+        recentClaims: [],
+      },
+    }
+  );
+
+  const metrics = dashData?.metrics || {
     totalClaims: 0,
     assignedToMe: 0,
     slaBreaches: 0,
     underReview: 0,
     pendingEvidence: 0,
-  });
-
-  const [recentClaims, setRecentClaims] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-
-    const pDash = api.get<any>('/api/v1/adjuster/dashboard')
-      .then((data) => {
-        if (data) {
-          setMetrics({
-            totalClaims: data.total_filed_claims ?? data.total_claims ?? 0,
-            assignedToMe: data.assigned_to_me ?? data.claims_assigned ?? 0,
-            slaBreaches: data.sla_breached ?? data.sla_breaches ?? 0,
-            underReview: data.under_review ?? 0,
-            pendingEvidence: data.pending_evidence ?? 0,
-          });
-          if (Array.isArray(data.recent_claims) && data.recent_claims.length > 0) {
-            setRecentClaims(data.recent_claims);
-          }
-        }
-      })
-      .catch(() => {});
-
-    const pQueue = api.get<any>('/api/v1/adjuster/queue')
-      .then((qData) => {
-        const items = Array.isArray(qData) ? qData : qData?.items || [];
-        if (items.length > 0) {
-          setRecentClaims((prev) => (prev.length > 0 ? prev : items.slice(0, 5)));
-        }
-      })
-      .catch(() => {});
-
-    Promise.allSettled([pDash, pQueue]).finally(() => {
-      setLoading(false);
-    });
-  }, []);
+  };
+  const recentClaims = dashData?.recentClaims || [];
 
   const donutSegments = [
     { label: 'Under Review', value: Math.max(metrics.underReview, 1), color: '#8B5CF6' },
@@ -101,6 +121,11 @@ export default function AdjusterDashboardPage() {
 
   return (
     <AppShell breadcrumbs={['Adjuster', 'Dashboard']} activeTitle="Adjuster Workspace">
+      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+        <div className="snow-body" style={{ fontWeight: 600, color: '#374151' }}>Real-Time Queue Metrics</div>
+        <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+      </div>
+
       {/* 4 Pastel Metric Cards */}
       <div
         style={{

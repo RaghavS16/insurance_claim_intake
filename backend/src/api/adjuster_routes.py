@@ -6,7 +6,10 @@ from typing import Any
 import json
 import re
 import uuid
+import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
@@ -374,11 +377,16 @@ def next_claim(user: User = Depends(_guard), db: Session = Depends(get_db)):
 
 
 @router.get("/claims/{ticket_id}")
-def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+def claim_file(ticket_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     if str(c.tenant_id) != str(user.tenant_id):
         raise HTTPException(status_code=404, detail="Claim not found.")
     if not _can_access_claim(c, user, db): raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
+
+    etag = f'"{hashlib.sha256(f"{c.updated_at}_{c.status}".encode("utf-8")).hexdigest()[:16]}"'
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers={"ETag": etag})
     state=dict(c.pipeline_state or {})
     turns=db.query(ConversationTurn).filter(ConversationTurn.claim_id==c.id).order_by(ConversationTurn.turn_number,ConversationTurn.created_at).all()
     package = state.get("submission_package")
@@ -472,7 +480,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
                 existing_keys.add(obj_key)
             existing_keys.add(str(dbev.id))
 
-    return {
+    payload = {
         "claim": _item(c, db=db),
         "extracted_data": extracted,
         "extracted_fields": state.get("extracted_fields", []),
@@ -492,6 +500,7 @@ def claim_file(ticket_id: str, user: User = Depends(_guard), db: Session = Depen
         "conversation_phase": state.get("conversation_phase", "source_of_truth_intake"),
         "gap_analysis": state.get("gap_analysis", {}),
     }
+    return JSONResponse(content=jsonable_encoder(payload), headers={"ETag": etag})
 
 @router.post("/claims/{ticket_id}/exceptions/{exception_id}/resolve")
 def resolve_exception(ticket_id: str, exception_id: str, request: Request, user: User = Depends(_guard), db: Session = Depends(get_db)):

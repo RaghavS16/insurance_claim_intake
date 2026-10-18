@@ -25,14 +25,17 @@ import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/Toast';
 import { Claim } from '@/lib/types';
 import { api } from '@/lib/api';
+import { usePolling, LiveIndicator } from '@/lib/use-polling';
+
+interface DashboardData {
+  claims: Claim[];
+  policiesCount: number;
+  activeDraft: Claim | null;
+}
 
 export default function ClaimantDashboardPage() {
   const router = useRouter();
   const { showToast } = useToast();
-  const [claims, setClaims] = useState<Claim[]>([]);
-  const [policiesCount, setPoliciesCount] = useState(0);
-  const [activeDraft, setActiveDraft] = useState<Claim | null>(null);
-  const [loading, setLoading] = useState(true);
 
   // Rename Chat Modal State
   const [renameModalOpen, setRenameModalOpen] = useState(false);
@@ -45,50 +48,57 @@ export default function ClaimantDashboardPage() {
   const [chatToDelete, setChatToDelete] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const fetchDashboardData = () => {
-    setLoading(true);
+  const {
+    data: dashboardData,
+    setData: setDashboardData,
+    isLoading: loading,
+    secondsAgo,
+    isRefreshing,
+    refresh: refreshDashboard,
+  } = usePolling<DashboardData>(
+    async (signal) => {
+      const pClaims = api
+        .get<any>('/api/v1/claims', { signal })
+        .then((data) => (Array.isArray(data) ? data : data?.items || []))
+        .catch(() => []);
+      const pPolicies = api
+        .get<any>('/api/v1/policies/my-policies', { signal })
+        .then((data) => (Array.isArray(data) ? data : data?.items || []))
+        .catch(() => []);
+      const pActive = api
+        .get<any>('/api/v1/claims/active', { signal })
+        .then((data) => (data && (data.active || data.status === 'draft') ? data : null))
+        .catch(() => null);
 
-    const pClaims = api
-      .get<any>('/api/v1/claims')
-      .then((data) => {
-        const list = Array.isArray(data) ? data : data?.items || [];
-        setClaims(list);
-      })
-      .catch(() => {
-        setClaims([]);
-      });
+      const [cRes, polRes, actRes] = await Promise.allSettled([pClaims, pPolicies, pActive]);
+      return {
+        claims: cRes.status === 'fulfilled' ? cRes.value : [],
+        policiesCount: polRes.status === 'fulfilled' ? polRes.value.length : 0,
+        activeDraft: actRes.status === 'fulfilled' ? actRes.value : null,
+      };
+    },
+    {
+      intervalMs: 8000,
+      isEditing: renameModalOpen || deleteModalOpen,
+      initialData: { claims: [], policiesCount: 0, activeDraft: null },
+    }
+  );
 
-    const pPolicies = api
-      .get<any>('/api/v1/policies/my-policies')
-      .then((data) => {
-        const list = Array.isArray(data) ? data : data?.items || [];
-        setPoliciesCount(list.length);
-      })
-      .catch(() => {
-        setPoliciesCount(0);
-      });
+  const claims = dashboardData?.claims || [];
+  const policiesCount = dashboardData?.policiesCount || 0;
+  const activeDraft = dashboardData?.activeDraft || null;
 
-    const pActive = api
-      .get<any>('/api/v1/claims/active')
-      .then((data) => {
-        if (data && (data.active || data.status === 'draft')) {
-          setActiveDraft(data);
-        } else {
-          setActiveDraft(null);
-        }
-      })
-      .catch(() => {
-        setActiveDraft(null);
-      });
-
-    Promise.allSettled([pClaims, pPolicies, pActive]).finally(() => {
-      setLoading(false);
-    });
+  const setClaims = (updater: (prev: Claim[]) => Claim[]) => {
+    setDashboardData((prev) =>
+      prev ? { ...prev, claims: updater(prev.claims) } : prev
+    );
   };
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
+  const setActiveDraft = (draft: Claim | null) => {
+    setDashboardData((prev) =>
+      prev ? { ...prev, activeDraft: draft } : prev
+    );
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -191,6 +201,11 @@ export default function ClaimantDashboardPage() {
 
   return (
     <AppShell breadcrumbs={['Claimant', 'Overview']} activeTitle="Claims Overview">
+      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+        <div className="snow-body" style={{ fontWeight: 600, color: '#374151' }}>Real-Time Activity</div>
+        <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+      </div>
+
       {/* Metric Cards Row */}
       <div
         style={{

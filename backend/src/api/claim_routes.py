@@ -9,7 +9,10 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
+import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse, Response
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -468,7 +471,14 @@ def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
     if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
     enforce_claim_ownership(claim, current_user)
-    return {**_claim_payload(claim, db=db), "conversation": _conversation_payload(db, claim)}
+
+    etag = f'"{hashlib.sha256(f"{claim.updated_at}_{claim.status}".encode("utf-8")).hexdigest()[:16]}"'
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+
+    payload = {**_claim_payload(claim, db=db), "conversation": _conversation_payload(db, claim)}
+    return JSONResponse(content=jsonable_encoder(payload), headers={"ETag": etag})
 
 
 @router.post("/intake")

@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/Input';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
+import { usePolling, LiveIndicator } from '@/lib/use-polling';
 
 export default function ClaimDetailsPage({
   params,
@@ -34,10 +35,6 @@ export default function ClaimDetailsPage({
   const { showToast } = useToast();
   const resolvedParams = use(params);
   const ticketId = resolvedParams.ticketId;
-
-  const [claim, setClaim] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
 
   // Export Dossier Modal
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -53,38 +50,34 @@ export default function ClaimDetailsPage({
   const [transcriptDrawerOpen, setTranscriptDrawerOpen] = useState(false);
   const [turns, setTurns] = useState<{ speaker: string; text: string }[]>([]);
 
-  const fetchClaimData = () => {
-    setLoading(true);
-    setNotFound(false);
+  const isEditing = respondModalOpen || Boolean(respondNote.trim()) || Boolean(respondFile);
 
-    api.get<any>(`/api/v1/claims/${ticketId}`)
-      .then((data) => {
-        if (data) {
-          setClaim(data);
-        } else {
-          setNotFound(true);
-        }
-      })
-      .catch((err) => {
-        setNotFound(true);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+  const {
+    data: claim,
+    isLoading: loading,
+    error: claimError,
+    secondsAgo,
+    isRefreshing,
+    refresh: refreshClaim,
+  } = usePolling<any>(
+    async (signal) => {
+      const data = await api.get<any>(`/api/v1/claims/${ticketId}`, { signal });
+      api.get<any>(`/api/v1/claims/${ticketId}/conversation`, { signal })
+        .then((conv) => {
+          const convList = Array.isArray(conv) ? conv : conv?.turns || conv?.conversation || [];
+          setTurns(convList);
+        })
+        .catch(() => {});
+      return data;
+    },
+    {
+      intervalMs: 8000,
+      enabled: Boolean(ticketId),
+      isEditing,
+    }
+  );
 
-    api.get<any>(`/api/v1/claims/${ticketId}/conversation`)
-      .then((data) => {
-        const convList = Array.isArray(data) ? data : data?.turns || data?.conversation || [];
-        setTurns(convList);
-      })
-      .catch(() => {
-        setTurns([]);
-      });
-  };
-
-  useEffect(() => {
-    fetchClaimData();
-  }, [ticketId]);
+  const notFound = !loading && (!claim || Boolean(claimError));
 
   const handleExportDossier = async () => {
     try {
@@ -117,7 +110,7 @@ export default function ClaimDetailsPage({
       setRespondModalOpen(false);
       setRespondNote('');
       setRespondFile(null);
-      fetchClaimData();
+      refreshClaim();
     } catch (err: any) {
       showToast(err.message || 'Failed to submit response to adjuster.', 'error');
     } finally {
@@ -185,11 +178,14 @@ export default function ClaimDetailsPage({
       activeTitle={`Claim File #${ticketId}`}
     >
       <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-        <Link href="/claimant/claims">
-          <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
-            Back to Claims
-          </Button>
-        </Link>
+        <div className="snow-flex snow-items-center snow-gap-3">
+          <Link href="/claimant/claims">
+            <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
+              Back to Claims
+            </Button>
+          </Link>
+          <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+        </div>
 
         <div className="snow-flex snow-gap-2">
           {(claim.status === 'draft' || claim.status === 'pending_confirmation') && (

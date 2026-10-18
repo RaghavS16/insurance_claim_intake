@@ -8,6 +8,8 @@ const API_BASE =
 let inMemoryAccessToken: string | null = null;
 
 class ApiClient {
+  private etagCache = new Map<string, { etag: string; data: any }>();
+
   public getToken(): string | null {
     return inMemoryAccessToken;
   }
@@ -23,6 +25,7 @@ class ApiClient {
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE}${endpoint}`;
     const token = this.getToken();
+    const isGet = (options.method || 'GET').toUpperCase() === 'GET';
 
     const headers: Record<string, string> = {
       ...(options.headers as Record<string, string>),
@@ -37,7 +40,16 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const cached = isGet ? this.etagCache.get(url) : undefined;
+    if (cached?.etag && !headers['If-None-Match']) {
+      headers['If-None-Match'] = cached.etag;
+    }
+
     const res = await fetch(url, { ...options, headers, credentials: 'include' });
+
+    if (res.status === 304 && cached) {
+      return cached.data as T;
+    }
 
     if (res.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/refresh') && !endpoint.includes('/auth/logout')) {
       try {
@@ -89,16 +101,27 @@ class ApiClient {
 
     // Check if response is empty (e.g. 204 No Content)
     const text = await res.text();
-    if (!text) return {} as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as unknown as T;
+    let data: T;
+    if (!text) {
+      data = {} as T;
+    } else {
+      try {
+        data = JSON.parse(text) as T;
+      } catch {
+        data = text as unknown as T;
+      }
     }
+
+    const etag = res.headers.get('ETag');
+    if (isGet && etag && res.ok) {
+      this.etagCache.set(url, { etag, data });
+    }
+
+    return data;
   }
 
-  get<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'GET' });
+  get<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: 'GET' });
   }
 
   post<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {

@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { usePolling } from '@/lib/use-polling';
 import { Button } from './Button';
 import { Tooltip } from './Tooltip';
 
@@ -53,22 +54,22 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [rightDrawerOpen, setRightDrawerOpen] = useState(Boolean(rightDrawerContent && !hideRightDrawer));
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<any[]>([
-    { id: '1', title: 'IntelliClaim Engine Active', message: 'Claims intake and policy verification pipeline operational.', time: 'Just now', unread: true },
-  ]);
-
-  useEffect(() => {
-    if (!user) return;
-    import('@/lib/api').then(({ api }) => {
-      api.get<any>('/api/v1/notifications')
-        .then((res) => {
-          if (Array.isArray(res?.items) && res.items.length > 0) {
-            setNotifications(res.items);
-          }
-        })
-        .catch(() => {});
-    });
-  }, [user, pathname]);
+  const { data: notificationsData, setData: setNotificationsData } = usePolling<any[]>(
+    async () => {
+      const { api } = await import('@/lib/api');
+      const res = await api.get<any>('/api/v1/notifications');
+      return Array.isArray(res?.items) ? res.items : [];
+    },
+    {
+      intervalMs: 30000,
+      enabled: Boolean(user),
+      initialData: [],
+    }
+  );
+  const notifications = notificationsData || [];
+  const setNotifications = (updater: any) => {
+    setNotificationsData(updater);
+  };
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
 
@@ -472,7 +473,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                           fontWeight: 500,
                         }}
                         onClick={() =>
-                          setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
+                          setNotifications((prev: any[]) => prev.map((n: any) => ({ ...n, unread: false })))
                         }
                       >
                         Mark all read

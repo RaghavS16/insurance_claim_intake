@@ -25,34 +25,36 @@ import { Card } from '@/components/ui/Card';
 import { useToast } from '@/components/ui/Toast';
 import { Claim, ClaimStatus } from '@/lib/types';
 import { api } from '@/lib/api';
+import { usePolling, LiveIndicator } from '@/lib/use-polling';
 
 export default function AdjusterQueuePage() {
   const router = useRouter();
   const { showToast } = useToast();
 
   const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
-  const [claims, setClaims] = useState<Claim[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const fetchQueue = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<any>('/api/v1/adjuster/queue');
-      const list: Claim[] = Array.isArray(data) ? data : data?.items || [];
-      setClaims(list);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load claims queue from server.');
-      setClaims([]);
-    } finally {
-      setLoading(false);
+  const {
+    data: claimsData,
+    setData: setClaimsData,
+    isLoading: loading,
+    error: pollError,
+    secondsAgo,
+    isRefreshing,
+    refresh: fetchQueue,
+  } = usePolling<Claim[]>(
+    async (signal) => {
+      const data = await api.get<any>('/api/v1/adjuster/queue', { signal });
+      return Array.isArray(data) ? data : data?.items || [];
+    },
+    {
+      intervalMs: 8000,
+      initialData: [],
     }
-  };
+  );
 
-  useEffect(() => {
-    fetchQueue();
-  }, []);
+  const claims = claimsData || [];
+  const setClaims = (updater: any) => setClaimsData(updater);
+  const error = pollError ? pollError.message : null;
 
   const handleNextClaim = async () => {
     try {
@@ -88,8 +90,8 @@ export default function AdjusterQueuePage() {
         status: newStatus,
         reason: 'Adjuster Kanban status change',
       });
-      setClaims((prev) =>
-        prev.map((c) => (c.ticket_id === ticketId ? { ...c, status: newStatus } : c))
+      setClaims((prev: Claim[]) =>
+        prev.map((c: Claim) => (c.ticket_id === ticketId ? { ...c, status: newStatus } : c))
       );
       showToast(`Claim #${ticketId} moved to ${newStatus}`, 'success');
     } catch (err: any) {
@@ -200,6 +202,9 @@ export default function AdjusterQueuePage() {
           >
             Kanban Board
           </Button>
+          <div style={{ marginLeft: 8, display: 'flex', alignItems: 'center' }}>
+            <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+          </div>
         </div>
 
         <Button

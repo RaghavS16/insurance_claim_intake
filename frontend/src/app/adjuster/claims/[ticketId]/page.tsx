@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/Input';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
+import { usePolling, LiveIndicator } from '@/lib/use-polling';
 
 interface CopilotChat {
   id: string;
@@ -48,11 +49,6 @@ export default function AdjusterClaimWorkspacePage({
   const ticketId = resolvedParams.ticketId;
 
   const [activeTab, setActiveTab] = useState<'facts' | 'evidence' | 'exceptions' | 'notes' | 'audit'>('facts');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Claim details from server
-  const [claimData, setClaimData] = useState<any>(null);
   const [auditEvents, setAuditEvents] = useState<any[]>([]);
 
   // Copilot State
@@ -78,45 +74,66 @@ export default function AdjusterClaimWorkspacePage({
   // Note Modal
   const [newNote, setNewNote] = useState('');
 
-  const loadClaim = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}`);
-      setClaimData(data);
-      if (data?.claim?.estimated_claim_amount) {
-        setPayoutAmount(String(data.claim.estimated_claim_amount));
-      }
-      if (data?.copilot && Object.keys(data.copilot).length > 0) {
-        setCopilotSynopsis((prev: any) => prev || data.copilot);
-      }
+  const isEditing =
+    decisionModalOpen ||
+    requestModalOpen ||
+    Boolean(newNote.trim()) ||
+    Boolean(copilotInput.trim());
 
-      // Populate copilot chat history if stored in pipeline state
-      if (Array.isArray(data?.copilot_chat) && data.copilot_chat.length > 0) {
-        setCopilotChats(
-          data.copilot_chat.map((msg: any, i: number) => ({
-            id: `msg-${i}`,
-            sender: msg.speaker === 'adjuster' ? 'adjuster' : 'copilot',
-            text: msg.text || msg.message || '',
-            citations: msg.citations || [],
-          }))
-        );
-      } else if (data?.copilot?.summary) {
-        setCopilotChats([
-          {
-            id: 'init-copilot',
-            sender: 'copilot',
-            text: data.copilot.summary,
-            citations: data.copilot.citations || [],
-          },
-        ]);
-      }
-    } catch (err: any) {
-      setError(err.message || `Failed to load claim #${ticketId}`);
-    } finally {
-      setLoading(false);
+  const {
+    data: claimData,
+    setData: setClaimData,
+    isLoading: loading,
+    error: pollError,
+    secondsAgo,
+    isRefreshing,
+    refresh: loadClaim,
+  } = usePolling<any>(
+    async (signal) => {
+      const data = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}`, { signal });
+      return data;
+    },
+    {
+      intervalMs: 8000,
+      enabled: Boolean(ticketId),
+      isEditing,
+      onSuccess: (data) => {
+        if (data?.claim?.estimated_claim_amount && !payoutAmount) {
+          setPayoutAmount(String(data.claim.estimated_claim_amount));
+        }
+        if (data?.copilot && Object.keys(data.copilot).length > 0) {
+          setCopilotSynopsis((prev: any) => prev || data.copilot);
+        }
+        if (Array.isArray(data?.copilot_chat) && data.copilot_chat.length > 0) {
+          setCopilotChats((prev) =>
+            prev.length > 0
+              ? prev
+              : data.copilot_chat.map((msg: any, i: number) => ({
+                  id: `msg-${i}`,
+                  sender: msg.speaker === 'adjuster' ? 'adjuster' : 'copilot',
+                  text: msg.text || msg.message || '',
+                  citations: msg.citations || [],
+                }))
+          );
+        } else if (data?.copilot?.summary) {
+          setCopilotChats((prev) =>
+            prev.length > 0
+              ? prev
+              : [
+                  {
+                    id: 'init-copilot',
+                    sender: 'copilot',
+                    text: data.copilot.summary,
+                    citations: data.copilot.citations || [],
+                  },
+                ]
+          );
+        }
+      },
     }
-  };
+  );
+
+  const error = pollError ? pollError.message : null;
 
   const loadAuditEvents = async () => {
     try {
@@ -282,11 +299,14 @@ export default function AdjusterClaimWorkspacePage({
     >
       {/* Top Header Actions */}
       <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-        <Link href="/adjuster/queue">
-          <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
-            Back to Queue
-          </Button>
-        </Link>
+        <div className="snow-flex snow-items-center snow-gap-3">
+          <Link href="/adjuster/queue">
+            <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
+              Back to Queue
+            </Button>
+          </Link>
+          <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+        </div>
 
         <div className="snow-flex snow-gap-2">
           <Button
