@@ -30,6 +30,14 @@ USERS = [
 ]
 
 def seed_demo():
+    env = (os.getenv("ENVIRONMENT") or "development").lower().strip()
+    if env in ("production", "staging"):
+        sys.exit("Error: seed_demo is strictly forbidden in production or staging environments.")
+
+    demo_password = os.getenv("DEMO_PASSWORD")
+    if not demo_password:
+        sys.exit("Error: DEMO_PASSWORD environment variable is required to run seed_demo.")
+
     db=SessionLocal()
     try:
         tenant=db.query(Tenant).filter(Tenant.id==TENANT_ID).first()
@@ -38,7 +46,6 @@ def seed_demo():
             db.add(tenant)
             db.flush()
 
-        demo_password=os.getenv("DEMO_PASSWORD") or "DemoPass123!"
         users={}
         for uid,name,email,role,phone in USERS:
             user=db.query(User).filter(User.id==uid).first()

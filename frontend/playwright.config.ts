@@ -43,7 +43,7 @@ export default defineConfig({
       reuseExistingServer: true,
       env: {
         ...process.env,
-        DEMO_PASSWORD: process.env.DEMO_PASSWORD || 'DemoPass123!',
+        DEMO_PASSWORD: process.env.DEMO_PASSWORD || '',
       },
     },
     {

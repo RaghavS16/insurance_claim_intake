@@ -63,7 +63,7 @@ def queue_otp_email(db, *, to_email: str, otp: str, full_name: Optional[str], pu
 
 def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     """Send an email using configured EMAIL_BACKEND (mailpit vs real SMTP) with retry logic."""
-    from_email = settings.SMTP_FROM_EMAIL or "raghavradhakrishnan.d@gmail.com"
+    from_email = settings.SMTP_FROM_EMAIL or "no-reply@insurance-claims.local"
     from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
 
     msg = MIMEText(body)
