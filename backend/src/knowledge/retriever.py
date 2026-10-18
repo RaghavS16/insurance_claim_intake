@@ -1,6 +1,6 @@
 """Production RAG orchestration extracting requirements directly from authoritative policy and regulatory documents."""
 from datetime import date
-from src.agents.llm_factory import get_configured_llm
+from src.agents.llm_factory import get_configured_llm, LLMTransientError, is_transient_llm_error
 from .requirements import get_requirements_from_context
 from .store import search, list_policy_documents, get_document_chunks, get_cached_requirement_manifest, save_requirement_manifest
 from .reranker import rerank

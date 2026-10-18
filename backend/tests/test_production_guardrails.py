@@ -27,9 +27,33 @@ def test_production_requires_redis():
     cfg = Settings(
         ENVIRONMENT="production",
         DEBUG=False,
+        ALLOW_INSECURE_TEST_AUTH=False,
         SECRET_KEY="x" * 48,
         DATABASE_URL="postgresql://postgres:password@db.example/claims",
         REDIS_URL=None,
+        PUBLIC_APP_URL="https://app.example.com",
     )
     with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+        cfg.validate_startup()
+
+
+def test_production_requires_https_public_app_url():
+    from src.config import Settings
+    import pytest
+    cfg = Settings(
+        ENVIRONMENT="production",
+        DEBUG=False,
+        ALLOW_INSECURE_TEST_AUTH=False,
+        SECRET_KEY="x" * 48,
+        DATABASE_URL="postgresql://postgres:password@db.example/claims",
+        REDIS_URL="redis://127.0.0.1:6379/0",
+        EMAIL_BACKEND="smtp",
+        SMTP_HOST="smtp.example.com",
+        SMTP_USERNAME="smtp-user",
+        SMTP_PASSWORD="smtp-password",
+        SMTP_FROM_EMAIL="claims@example.com",
+        SMTP_USE_TLS=True,
+        PUBLIC_APP_URL="http://app.example.com",
+    )
+    with pytest.raises(RuntimeError, match="PUBLIC_APP_URL must use HTTPS"):
         cfg.validate_startup()

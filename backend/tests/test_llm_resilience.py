@@ -126,20 +126,9 @@ def test_ordinal_claim_date_is_extracted_without_reasking():
 def test_provisional_planning_keeps_intake_moving_without_policy_documents():
     from src.knowledge.retriever import KnowledgeRetriever
 
-    provisional = [{
-        "key": "vehicle_damage",
-        "label": "Vehicle damage",
-        "question_hint": "Could you tell me which parts of the bike were damaged?",
-        "required": True,
-        "evidence_type": "photo",
-    }]
-
     with patch(
         "src.knowledge.retriever.search",
         side_effect=[[], []],
-    ), patch(
-        "src.knowledge.retriever.get_provisional_requirements",
-        return_value=provisional,
     ):
         result = KnowledgeRetriever().retrieve(
             insurance_type="motor",
@@ -147,7 +136,60 @@ def test_provisional_planning_keeps_intake_moving_without_policy_documents():
             query="motorcycle collided with a car and the bike fell over",
         )
 
-    assert result["available"] is True
-    assert result["status"] == "PROVISIONAL"
+    assert result["available"] is False
+    assert result["status"] == "NO_RELEVANT_KNOWLEDGE"
     assert result["authoritative"] is False
-    assert result["requirements"] == provisional
+    assert result["requirements"] == []
+
+
+def test_claimant_conversation_handles_no_relevant_knowledge():
+    from src.agents.graph import _response_planner
+
+    state = {
+        "extracted_data": {"insurance_type": "motor", "policy_id": "POL-1234"},
+        "policy_valid": True,
+        "dynamic_requirements": [],
+        "rag_status": "NO_RELEVANT_KNOWLEDGE",
+    }
+    result = _response_planner(state)
+    assert result["conversation_status"] == "waiting_for_knowledge"
+    msg = result["next_question"].lower()
+    assert "cannot determine" in msg or "not been indexed" in msg
+    assert "save this draft" in msg or "save your draft" in msg
+    assert "adjuster" in msg
+
+
+def test_claimant_conversation_handles_policy_manifest_unavailable():
+    from src.agents.graph import _response_planner
+
+    state = {
+        "extracted_data": {"insurance_type": "health", "policy_id": "POL-5678"},
+        "policy_valid": True,
+        "dynamic_requirements": [],
+        "rag_status": "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE",
+    }
+    result = _response_planner(state)
+    assert result["conversation_status"] == "waiting_for_knowledge"
+    msg = result["next_question"].lower()
+    assert "cannot determine" in msg or "not been indexed" in msg
+    assert "save this draft" in msg or "save your draft" in msg
+    assert "adjuster" in msg
+
+
+def test_claimant_conversation_handles_llm_temporarily_unavailable():
+    from src.agents.graph import _response_planner
+
+    state = {
+        "extracted_data": {"insurance_type": "home", "policy_id": "POL-9999"},
+        "policy_valid": True,
+        "dynamic_requirements": [],
+        "rag_status": "LLM_TEMPORARILY_UNAVAILABLE",
+    }
+    result = _response_planner(state)
+    assert result["conversation_status"] == "waiting_for_knowledge"
+    msg = result["next_question"].lower()
+    assert "temporarily unavailable" in msg
+    assert "no filing requirements have been invented" in msg
+    assert "save your draft" in msg or "save this draft" in msg
+    assert "adjuster" in msg
+

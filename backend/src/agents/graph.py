@@ -442,15 +442,33 @@ def _response_planner(state: ClaimState) -> ClaimState:
         state["message"] = ctx_q
         return state
 
-    # 3. Honest fallback if the knowledge base has no requirements
-    if not requirements and rag_status in {"NO_RELEVANT_KNOWLEDGE", "REQUIREMENT_PLAN_UNAVAILABLE", "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE", "NO_POLICY_WORDING"}:
+    # 3. Honest fallback if the knowledge base has no requirements or LLM is unavailable
+    if not requirements and rag_status in {
+        "NO_RELEVANT_KNOWLEDGE",
+        "REQUIREMENT_PLAN_UNAVAILABLE",
+        "POLICY_REQUIREMENT_MANIFEST_UNAVAILABLE",
+        "NO_POLICY_WORDING",
+        "LLM_TEMPORARILY_UNAVAILABLE",
+    }:
         state["conversation_phase"] = "source_of_truth_intake"
         state["conversation_status"] = "waiting_for_knowledge"
-        reply = (
-            "I cannot determine the filing requirements for this claim because the applicable policy wording "
-            "and regulatory guidelines have not been indexed in our knowledge base. I have flagged this for an "
-            "administrator or claims specialist to review and index the necessary policy documentation."
-        )
+        if rag_status == "LLM_TEMPORARILY_UNAVAILABLE":
+            reply = (
+                "Our AI analysis service is temporarily unavailable. No filing requirements have been invented. "
+                "You can save your draft claim now and request adjuster follow-up, or try again shortly."
+            )
+        elif rag_status == "REQUIREMENT_PLAN_UNAVAILABLE":
+            reply = (
+                "I cannot determine the filing requirements for this claim because the applicable policy wording "
+                "and regulatory guidelines have not been indexed in our knowledge base. I have flagged this for an "
+                "administrator or claims specialist to review and index the necessary policy documentation."
+            )
+        else:
+            reply = (
+                "I cannot determine the filing requirements for this claim because the applicable policy wording "
+                "and regulatory guidelines have not been indexed in our knowledge base. No filing requirements have been invented. "
+                "You can save this draft and request adjuster follow-up to proceed."
+            )
         state["next_question_field"] = "escalate"
         state["next_question"] = reply
         state["message"] = reply
