@@ -22,7 +22,7 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
     user_id_str = str(current_user.id)
     if role == "ADJUSTER":
         if db is None:
-            if settings.ENVIRONMENT == "test":
+            if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
                 return
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Claim access requires assignment context.")
         from src.database.hardening_models import ClaimAssignment

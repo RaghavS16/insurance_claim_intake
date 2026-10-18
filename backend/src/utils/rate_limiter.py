@@ -80,9 +80,26 @@ def _build_limiter():
     return RedisSlidingWindowRateLimiter(settings.REDIS_URL) if settings.REDIS_URL else InMemorySlidingWindowRateLimiter()
 limiter=_build_limiter()
 
+def _is_loopback(ip: str) -> bool:
+    if not ip or ip == "unknown":
+        return False
+    if ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        import ipaddress
+        return ipaddress.ip_address(ip).is_loopback
+    except Exception:
+        return False
+
 def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seconds:int=60,allow_test_bypass:bool=True)->None:
-    if allow_test_bypass and settings.ENVIRONMENT in ("development", "test") and not request.headers.get("X-Test-Enforce-Rate-Limit"): return
     ip=request.client.host if request.client else "unknown"
+    if allow_test_bypass:
+        if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
+            if not request.headers.get("X-Test-Enforce-Rate-Limit"):
+                return
+        elif settings.ENVIRONMENT == "development" and _is_loopback(ip):
+            if not request.headers.get("X-Test-Enforce-Rate-Limit"):
+                return
     # Never trust a client-supplied identity header for throttling. When a bearer
     # token is present, use a stable token fingerprint; pre-auth routes fall back
     # to the source IP. Authenticated route handlers also set tenant/user context

@@ -15,7 +15,7 @@ class KnowledgeRetriever:
     def retrieve(self, *, insurance_type: str | None = None, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None, claimant_id: str | None = None) -> dict:
         tenant_id = (tenant_id or "").strip()
         if not tenant_id:
-            if settings.ENVIRONMENT == "test":
+            if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
                 tenant_id = "test-tenant"
             else:
                 raise KnowledgeRetrievalError("tenant_id is required for knowledge retrieval.")

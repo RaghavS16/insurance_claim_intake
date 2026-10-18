@@ -138,10 +138,11 @@ class Settings(BaseSettings):
     MAX_EXTRACTED_TEXT_CHARS: int = Field(2_000_000, ge=10_000, le=20_000_000)
     MAX_OCR_SECONDS: int = Field(30, ge=5, le=300)
     MAX_ARCHIVE_EXPANDED_BYTES: int = Field(200 * 1024 * 1024, ge=10 * 1024 * 1024, le=2 * 1024 * 1024 * 1024)
+    ALLOW_INSECURE_TEST_AUTH: bool = Field(False)
     SECURITY_FAIL_CLOSED: bool = Field(True)
-    REQUIRE_REDIS_IN_PRODUCTION: bool = Field(False)
-    REQUIRE_S3_IN_PRODUCTION: bool = Field(False)
-    REQUIRE_MALWARE_SCAN: bool = Field(False)
+    REQUIRE_REDIS_IN_PRODUCTION: bool = Field(True)
+    REQUIRE_S3_IN_PRODUCTION: bool = Field(True)
+    REQUIRE_MALWARE_SCAN: bool = Field(True)
     RUN_EMBEDDED_OUTBOX_WORKER: bool = Field(True)
     REQUIRE_MIGRATIONS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_EMAIL_VERIFICATION: bool = Field(False)
@@ -213,6 +214,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_security(self) -> "Settings":
+        if self.ALLOW_INSECURE_TEST_AUTH and self.ENVIRONMENT != "test":
+            raise ValueError("ALLOW_INSECURE_TEST_AUTH is only permitted when ENVIRONMENT == 'test'")
         if self.ENVIRONMENT in ("production", "staging"):
             if self.SECRET_KEY == "dev-secret-key-change-in-production":
                 raise ValueError("SECRET_KEY must be changed in production/staging.")

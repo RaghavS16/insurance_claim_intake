@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 # Ensure test environment before importing anything from src
 os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("ALLOW_INSECURE_TEST_AUTH", "true")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-32chars!")
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -18,6 +19,7 @@ def patch_settings(monkeypatch):
     """Patch settings to use safe test values without touching real .env."""
     from src.config import settings
     monkeypatch.setattr(settings, "ENVIRONMENT", "test")
+    monkeypatch.setattr(settings, "ALLOW_INSECURE_TEST_AUTH", True)
     monkeypatch.setattr(settings, "SECRET_KEY", "test-secret-key-at-least-32-chars!!")
     monkeypatch.setattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 60)
     monkeypatch.setattr(settings, "OTP_LENGTH", 6)

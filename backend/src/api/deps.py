@@ -93,8 +93,8 @@ def get_current_user(
                 detail="Not authenticated: Invalid or expired token.",
             )
     else:
-        # X-User-ID fallback is ONLY available in test environment
-        if settings.ENVIRONMENT == "test":
+        # X-User-ID fallback is ONLY available in test environment when explicit insecure test auth is enabled
+        if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
             uid = request.headers.get("X-User-ID")
         else:
             raise HTTPException(
@@ -103,7 +103,7 @@ def get_current_user(
             )
 
     if not uid:
-        if settings.ENVIRONMENT == "test" and not request.headers.get("X-Test-No-Fallback"):
+        if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True and not request.headers.get("X-Test-No-Fallback"):
             uid = "TEST_USER_ID"
         else:
             raise HTTPException(
@@ -114,7 +114,7 @@ def get_current_user(
     # Fetch user from DB and enforce current account/session state.
     user = db.query(User).filter(User.id == uid).first()
     if not user:
-        if settings.ENVIRONMENT == "test":
+        if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
             # Autocreate mock user dynamically to prevent breaking existing Phase 1 tests
             user = db.query(User).filter(User.email == f"{uid.lower()}@test.com").first()
             if not user:

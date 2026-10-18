@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _require_tenant(tenant_id: str | None) -> str:
     value = (tenant_id or "").strip()
     if not value:
-        if settings.ENVIRONMENT == "test":
+        if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
             return "test-tenant"
         raise ValueError("tenant_id is required for knowledge-store access")
     return value
