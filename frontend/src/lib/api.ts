@@ -2,7 +2,9 @@ import { User, Policy, Claim, Adjuster, KnowledgeDocument, AuditEvent } from './
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== 'undefined' ? '' : 'http://127.0.0.1:8000');
+  (typeof window !== 'undefined'
+    ? ''
+    : (process.env.INTERNAL_API_URL || 'http://backend:8000'));
 
 // In-memory access token storage (never written to localStorage or cookies on client)
 let inMemoryAccessToken: string | null = null;

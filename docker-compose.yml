@@ -226,6 +226,11 @@ services:
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
     command: ["python", "-m", "src.services.outbox_worker"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'exit(0)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -237,6 +242,7 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:8000}
     restart: unless-stopped
     ports:
       - "${FRONTEND_BIND_IP:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
