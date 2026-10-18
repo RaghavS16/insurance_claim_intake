@@ -29,9 +29,22 @@ jobs:
           HF_TOKEN=test-token
           VOICE_ICE_SERVERS=turn:turn.example.invalid:3478
           AI_ALLOWED_MODELS=test-model
-          PASSKEY_RP_ID=localhost
-          PASSKEY_ORIGIN=http://localhost:3000
+          S3_BUCKET=test-bucket
           S3_KMS_KEY_ID=test-kms-key
+          SMTP_HOST=mailpit
+          SMTP_PORT=1025
+          SMTP_USERNAME=test
+          SMTP_PASSWORD=test
+          SMTP_FROM_EMAIL=noreply@example.com
+          SMTP_USE_TLS=false
+          SMTP_USE_SSL=false
+          EMAIL_BACKEND=smtp
+          FORWARDED_ALLOW_IPS=127.0.0.1,172.16.0.0/12,10.0.0.0/8
+          ALLOWED_ORIGINS=http://localhost:3000
+          PUBLIC_APP_URL=http://localhost:3000
+          DEMO_PASSWORD=ci-demo-password-123!
+          ADMIN_PASSWORD=ci-admin-password-123!
+          DOMAIN=localhost
           EOF
           docker compose --env-file .env.ci config --quiet
           echo "docker compose configuration is valid"

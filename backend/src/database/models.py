@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON
+from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON, Index, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 from src.config import settings
@@ -27,12 +27,13 @@ class Base(DeclarativeBase):
 
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
+    __table_args__ = (Index("uq_knowledge_documents_content_sha256", "content_sha256", unique=True),)
     id: Mapped[str] = _UUID(primary_key=True)
     source_name: Mapped[str] = mapped_column(String, nullable=False)
     source_uri: Mapped[str] = mapped_column(String, nullable=False)
     document_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     insurance_type: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
-    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     jurisdiction: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     document_version: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
@@ -46,6 +47,14 @@ class KnowledgeDocument(Base):
 
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        Index(
+            "knowledge_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
     id: Mapped[str] = _UUID(primary_key=True)
     document_id: Mapped[str] = _UUID(
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
@@ -66,6 +75,7 @@ class KnowledgeChunk(Base):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (Index("idx_users_status_role", "status", "role"),)
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     full_name: Mapped[str] = mapped_column(String, nullable=False)
@@ -141,6 +151,7 @@ class Adjuster(Base):
 
 class Claim(Base):
     __tablename__ = "claims"
+    __table_args__ = (Index("idx_claims_claimant_updated", "claimant_id", "updated_at"),)
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     ticket_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
@@ -172,6 +183,7 @@ class Claim(Base):
 class VoiceSession(Base):
     """Durable metadata for managed realtime voice sessions."""
     __tablename__ = "voice_sessions"
+    __table_args__ = (Index("ix_voice_sessions_worker_lease", "worker_id", "lease_expires_at"),)
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     call_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
@@ -204,10 +216,14 @@ class PasswordResetOTP(Base):
 
 class ConversationTurn(Base):
     __tablename__ = "conversation_turns"
+    __table_args__ = (
+        Index("idx_conversation_turns_claim_created", "claim_id", "created_at", "id"),
+        Index("uq_conversation_turn_event_id", "event_id", unique=True),
+    )
     id: Mapped[str] = _UUID(primary_key=True, default=lambda: str(uuid.uuid4()))
     claim_id: Mapped[str] = _UUID(ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, default=None, index=True)
     turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    event_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     speaker: Mapped[str] = mapped_column(String, nullable=False)
     text: Mapped[str] = mapped_column(String, nullable=False)
     audio_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)

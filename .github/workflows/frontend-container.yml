@@ -8,7 +8,9 @@ on:
       - ".github/workflows/frontend-container.yml"
   push:
     branches:
+      - "release/production-ready"
       - "production-grade-UI-UX"
+      - "main"
     paths:
       - "frontend/**"
       - "docker-compose.yml"

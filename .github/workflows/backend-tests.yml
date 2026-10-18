@@ -49,6 +49,10 @@ jobs:
         run: alembic upgrade head
       - name: Migration idempotency
         run: alembic upgrade head
+      - name: Verify zero schema migration drift
+        run: alembic check
+      - name: Audit python dependencies
+        run: pip-audit -r requirements.lock
       - name: ORM metadata check
         run: |
           python - <<'PY'
@@ -203,13 +207,17 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm ci
       - name: Lint
         run: npm run lint
+      - name: Type check
+        run: npx tsc --noEmit
       - name: Unit tests
         run: npm run test
       - name: Production build
         run: npm run build
+      - name: Audit frontend dependencies
+        run: npm audit --omit=dev --audit-level=high
 
   production-release-gate:
     runs-on: ubuntu-latest

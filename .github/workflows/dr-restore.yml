@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: "15 3 * * 0"
   push:
-    branches: [production-grade-hardening-2026-10]
+    branches: [release/production-ready, production-grade-UI-UX, main]
 
 jobs:
   restore-drill:

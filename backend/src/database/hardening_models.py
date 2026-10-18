@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import uuid
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Index, JSON
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Index, JSON, text
 from sqlalchemy.orm import Mapped, mapped_column
 from src.database.models import Base, _UUID, _JSONB
 
@@ -12,16 +12,20 @@ def _uuid(): return str(uuid.uuid4())
 class AdjusterInvitation(Base):
     """Single-use, tenant-scoped invitation used to onboard an adjuster."""
     __tablename__ = "adjuster_invitations"
+    __table_args__ = (
+        Index("ix_adjuster_invitations_expires", "expires_at"),
+        Index("ix_adjuster_invitations_tenant", "tenant_id"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
     email: Mapped[str] = mapped_column(String(254), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
     specialization: Mapped[str] = mapped_column(String(60), nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    accepted_user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
+    accepted_user_id: Mapped[Optional[str]] = mapped_column(String(36))
     created_by: Mapped[str] = mapped_column(String(36), nullable=False)
     email_event_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -30,7 +34,11 @@ class AdjusterInvitation(Base):
 class ClaimAssignment(Base):
     __tablename__="claim_assignments"
     tenant_id: Mapped[str]=mapped_column(String(36),nullable=False,default="",index=True)
-    __table_args__=(Index("ix_claim_assignments_active","claim_id","is_active"),Index("ix_claim_assignments_adjuster","adjuster_id","is_active"))
+    __table_args__=(
+        Index("ix_claim_assignments_active","claim_id","is_active"),
+        Index("ix_claim_assignments_adjuster","adjuster_id","is_active"),
+        Index("uq_claim_assignments_active_claim","claim_id",unique=True,postgresql_where=text("is_active = true")),
+    )
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=_uuid)
     claim_id: Mapped[str]=_UUID(ForeignKey("claims.id",ondelete="CASCADE"),nullable=False)
     adjuster_id: Mapped[str]=_UUID(ForeignKey("adjusters.id",ondelete="RESTRICT"),nullable=False)
@@ -263,3 +271,61 @@ class TenantMembership(Base):
     role: Mapped[str]=mapped_column(String(40),nullable=False)
     status: Mapped[str]=mapped_column(String(30),nullable=False,default="active")
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False,default=_now)
+
+
+class MFAChallenge(Base):
+    __tablename__ = "mfa_challenges"
+    __table_args__ = (
+        UniqueConstraint("challenge_token_hash", name="uq_mfa_challenge_token_hash"),
+        Index("ix_mfa_challenges_user_expires", "user_id", "expires_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, default="", index=True)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    challenge_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class MFARecoveryCode(Base):
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "code_hash", name="uq_mfa_recovery_user_code"),
+        Index("ix_mfa_recovery_user", "user_id", "consumed"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, default="", index=True)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class WebAuthnCredential(Base):
+    __tablename__ = "webauthn_credentials"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    credential_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    device_type: Mapped[Optional[str]] = mapped_column(String(80))
+    backed_up: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class WebAuthnChallenge(Base):
+    __tablename__ = "webauthn_challenges"
+    __table_args__ = (Index("ix_webauthn_challenges_consumed", "consumed"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False)
+    challenge: Mapped[str] = mapped_column(String(512), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
