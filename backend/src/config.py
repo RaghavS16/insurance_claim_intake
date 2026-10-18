@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     EMAIL_BACKEND: str = Field("mailpit")
     MAILPIT_API_URL: str = Field("http://localhost:8025")
+    ENABLE_API_DOCS: bool = Field(False)
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 1025
     SMTP_USERNAME: Optional[str] = None
