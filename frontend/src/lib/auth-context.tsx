@@ -11,6 +11,7 @@ interface AuthContextType {
   isLoading: boolean;
   login: (access: string, user: User, refresh?: string) => void;
   logout: () => Promise<void>;
+  updateUser: (user: User) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -20,6 +21,7 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   login: () => {},
   logout: async () => {},
+  updateUser: () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -28,22 +30,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-    if (!token) {
-      setUser(null);
-      setRole(null);
-      setIsLoading(false);
-      return;
-    }
-
-    // Call /api/v1/auth/me to verify real session on live backend
-    api.get<User>('/api/v1/auth/me')
-      .then((me) => {
-        if (me && me.id && me.role) {
-          setUser(me);
-          setRole(me.role);
-          localStorage.setItem('snow_user', JSON.stringify(me));
-          localStorage.setItem('snow_role', me.role);
+    // Restore session on load with a silent POST /api/v1/auth/refresh using HttpOnly cookie
+    api.request<{ access_token: string; user?: User }>('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then(async (data) => {
+        if (data && data.access_token) {
+          api.setToken(data.access_token);
+          if (data.user && data.user.id && data.user.role) {
+            setUser(data.user);
+            setRole(data.user.role);
+          } else {
+            const me = await api.get<User>('/api/v1/auth/me');
+            if (me && me.id && me.role) {
+              setUser(me);
+              setRole(me.role);
+            }
+          }
         } else {
           api.clearTokens();
           setUser(null);
@@ -60,19 +64,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
-  const login = (access: string, newUser: User, refresh?: string) => {
-    api.setToken(access, refresh);
-    localStorage.setItem('snow_user', JSON.stringify(newUser));
-    localStorage.setItem('snow_role', newUser.role);
+  const login = (access: string, newUser: User, _refresh?: string) => {
+    api.setToken(access);
     setUser(newUser);
     setRole(newUser.role);
   };
 
+  const updateUser = (updated: User) => {
+    setUser(updated);
+    if (updated.role) {
+      setRole(updated.role);
+    }
+  };
+
   const logout = async () => {
     try {
-      await api.post('/api/v1/auth/logout');
+      await api.post('/api/v1/auth/logout', {}, { credentials: 'include' });
     } catch {
-      // Ignore backend logout network error when clearing local session
+      // Ignore network errors during remote session invalidation
     }
     api.clearTokens();
     setUser(null);
@@ -88,6 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         login,
         logout,
+        updateUser,
       }}
     >
       {children}

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,7 @@ def preview_adjuster_invitation(token: str, db: Session = Depends(get_db)):
     return {"valid": True, "name": invite.name, "email": invite.email, "specialization": invite.specialization, "expires_at": invite.expires_at.isoformat()}
 
 @router.post("/adjuster/accept")
-def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, db: Session = Depends(get_db)):
+def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, response: Response, db: Session = Depends(get_db)):
     invite = _find_invite(db, payload.token)
     if not invite:
         raise HTTPException(status_code=400, detail="Invitation is invalid or expired.")
@@ -86,12 +86,13 @@ def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Reque
             "amr": ["invite"],
         }
     )
-    from src.api.auth_routes import _issue_refresh_token
+    from src.api.auth_routes import _issue_refresh_token, set_refresh_token_cookie
     refresh_token = _issue_refresh_token(
         db,
         user,
         auth_context={"mfa": False, "amr": ["invite"]},
     )
+    set_refresh_token_cookie(response, refresh_token)
     return {
         "accepted": True,
         "access_token": token,

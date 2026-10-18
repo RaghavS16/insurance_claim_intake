@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
 
 export default function SettingsPage() {
-  const { user, role, logout } = useAuth();
+  const { user, role, logout, updateUser } = useAuth();
   const { showToast } = useToast();
 
   const [activeTab, setActiveTab] = useState<'settings' | 'notifications'>('settings');
@@ -51,8 +51,8 @@ export default function SettingsPage() {
         full_name: fullName || undefined,
         phone: contactPhone.trim(),
       });
-      if (updated && typeof window !== 'undefined') {
-        localStorage.setItem('snow_user', JSON.stringify(updated));
+      if (updated) {
+        updateUser(updated);
       }
       showToast('Profile updated successfully', 'success');
     } catch (err: any) {

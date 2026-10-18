@@ -4,24 +4,20 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== 'undefined' ? '' : 'http://127.0.0.1:8000');
 
+// In-memory access token storage (never written to localStorage or cookies on client)
+let inMemoryAccessToken: string | null = null;
+
 class ApiClient {
   public getToken(): string | null {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem('access_token');
+    return inMemoryAccessToken;
   }
 
-  public setToken(access: string, refresh?: string) {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('access_token', access);
-    if (refresh) localStorage.setItem('refresh_token', refresh);
+  public setToken(access: string | null, _refresh?: string) {
+    inMemoryAccessToken = access;
   }
 
   public clearTokens() {
-    if (typeof window === 'undefined') return;
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('snow_user');
-    localStorage.removeItem('snow_role');
+    inMemoryAccessToken = null;
   }
 
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -41,39 +37,38 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(url, { ...options, headers });
+    const res = await fetch(url, { ...options, headers, credentials: 'include' });
 
-    if (res.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/refresh')) {
-      const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
-      if (refreshToken) {
-        try {
-          const refreshRes = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: refreshToken }),
-          });
-          if (refreshRes.ok) {
-            const data = await refreshRes.json();
-            this.setToken(data.access_token, data.refresh_token);
-            headers['Authorization'] = `Bearer ${data.access_token}`;
-            const retryRes = await fetch(url, { ...options, headers });
-            if (!retryRes.ok) {
-              const errorData = await retryRes.json().catch(() => ({}));
-              let msg = `Request failed with status ${retryRes.status}`;
-              if (typeof errorData.detail === 'string') {
-                msg = errorData.detail;
-              } else if (Array.isArray(errorData.detail)) {
-                msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
-              } else if (errorData.message) {
-                msg = errorData.message;
-              }
-              throw new Error(msg);
+    if (res.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/refresh') && !endpoint.includes('/auth/logout')) {
+      try {
+        const refreshRes = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          this.setToken(data.access_token);
+          headers['Authorization'] = `Bearer ${data.access_token}`;
+          const retryRes = await fetch(url, { ...options, headers, credentials: 'include' });
+          if (!retryRes.ok) {
+            const errorData = await retryRes.json().catch(() => ({}));
+            let msg = `Request failed with status ${retryRes.status}`;
+            if (typeof errorData.detail === 'string') {
+              msg = errorData.detail;
+            } else if (Array.isArray(errorData.detail)) {
+              msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+            } else if (errorData.message) {
+              msg = errorData.message;
             }
-            return (await retryRes.json()) as T;
+            throw new Error(msg);
           }
-        } catch {
+          return (await retryRes.json()) as T;
+        } else {
           this.clearTokens();
         }
+      } catch {
+        this.clearTokens();
       }
     }
 
@@ -106,31 +101,34 @@ class ApiClient {
     return this.request<T>(endpoint, { method: 'GET' });
   }
 
-  post<T>(endpoint: string, body?: any): Promise<T> {
+  post<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     return this.request<T>(endpoint, {
+      ...options,
       method: 'POST',
       body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
   }
 
-  put<T>(endpoint: string, body?: any): Promise<T> {
+  put<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     return this.request<T>(endpoint, {
+      ...options,
       method: 'PUT',
       body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
   }
 
-  patch<T>(endpoint: string, body?: any): Promise<T> {
+  patch<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
     return this.request<T>(endpoint, {
+      ...options,
       method: 'PATCH',
       body: body ? JSON.stringify(body) : undefined,
     });
   }
 
-  delete<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'DELETE' });
+  delete<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: 'DELETE' });
   }
 
   async downloadFile(endpoint: string, filename: string): Promise<void> {
@@ -141,7 +139,7 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(url, { headers });
+    const res = await fetch(url, { headers, credentials: 'include' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       let msg = `Download failed with status ${res.status}`;

@@ -10,7 +10,7 @@ import hashlib
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -58,7 +58,29 @@ class VerifyOtpRequest(BaseModel):
 
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str = Field(..., min_length=20, max_length=512)
+    refresh_token: Optional[str] = Field(None, min_length=20, max_length=512)
+
+
+def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=(settings.ENVIRONMENT == "production"),
+        samesite="strict",
+        path="/api/v1/auth",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+    )
+
+
+def clear_refresh_token_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/v1/auth",
+        httponly=True,
+        secure=(settings.ENVIRONMENT == "production"),
+        samesite="strict",
+    )
 
 
 class ResetPasswordRequest(BaseModel):
@@ -224,7 +246,7 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
 
 
 @router.post("/login")
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """Authenticate a user and return a JWT access token."""
     enforce_rate_limit(request, action="login", max_requests=10, window_seconds=60)
     try:
@@ -286,6 +308,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     auth_context = {"mfa": False, "amr": ["pwd"]}
     refresh_token = _issue_refresh_token(db, user, auth_context=auth_context)
     db.commit()
+    set_refresh_token_cookie(response, refresh_token)
     access_token = create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": user.session_version, **auth_context})
     return {
         "access_token": access_token,
@@ -621,23 +644,53 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
 
 @router.post("/refresh")
-def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Session = Depends(get_db)):
+def refresh_access_token(
+    request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
+    db: Session = Depends(get_db),
+):
     enforce_rate_limit(request, action="refresh", max_requests=30, window_seconds=60)
-    raw = payload.refresh_token.strip()
+    origin = request.headers.get("origin")
+    if origin:
+        allowed = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+        if origin not in allowed:
+            raise HTTPException(status_code=403, detail="Cross-origin refresh forbidden.")
+
+    raw = request.cookies.get("refresh_token")
     if not raw:
-        raise HTTPException(status_code=401, detail="Refresh token is required.")
+        if settings.ENVIRONMENT != "production" and payload and payload.refresh_token:
+            raw = payload.refresh_token.strip()
+        else:
+            raise HTTPException(status_code=401, detail="Refresh token is required.")
+
     user, replacement = _rotate_refresh_token(db, raw)
     db.commit()
+    set_refresh_token_cookie(response, replacement)
     old_row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashlib.sha256(raw.encode("utf-8")).hexdigest()).first()
     context: dict[str, Any] = dict((old_row.auth_context_json if old_row else None) or {"mfa": False, "amr": ["pwd"]})
     return _auth_response(user, replacement, amr=list(context.get("amr") or []), mfa_authenticated=bool(context.get("mfa")))
 
 
 @router.post("/logout")
-def logout(request: Request, db: Session = Depends(get_db)):
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     """
-    Logout endpoint. Immediately revokes the JWT access token server-side.
+    Logout endpoint. Clears refresh token cookie and revokes the token family.
     """
+    clear_refresh_token_cookie(response)
+    raw_cookie = request.cookies.get("refresh_token")
+    now = datetime.now(timezone.utc)
+    if raw_cookie:
+        cookie_hash = hashlib.sha256(raw_cookie.encode("utf-8")).hexdigest()
+        row = db.query(RefreshToken).filter(RefreshToken.token_hash == cookie_hash).first()
+        if row and row.family_id:
+            db.query(RefreshToken).filter(
+                RefreshToken.family_id == row.family_id,
+                RefreshToken.tenant_id == row.tenant_id,
+                RefreshToken.revoked_at.is_(None),
+            ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
+            db.commit()
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
@@ -647,7 +700,7 @@ def logout(request: Request, db: Session = Depends(get_db)):
             revoke_token(token)
             jti = payload.get("jti") or token
             exp_ts = payload.get("exp")
-            exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(hours=1)
+            exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else now + timedelta(hours=1)
             user_id = str(payload.get("sub") or "")
             user = db.query(User).filter(User.id == user_id, User.tenant_id.is_not(None)).first()
             db.add(RevokedToken(
@@ -661,9 +714,11 @@ def logout(request: Request, db: Session = Depends(get_db)):
                     RefreshToken.user_id == user.id,
                     RefreshToken.tenant_id == user.tenant_id,
                     RefreshToken.revoked_at.is_(None),
-                ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
+                ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
             db.commit()
         except Exception:
             db.rollback()
+
+    return {"message": "Logged out successfully. Token has been revoked."}
 
     return {"message": "Logged out successfully. Token has been revoked."}
