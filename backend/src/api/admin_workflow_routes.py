@@ -57,6 +57,7 @@ def _parse_date(value: str, label: str):
         raise HTTPException(status_code=400, detail=f"{label} must be YYYY-MM-DD.") from exc
 
 def _csv_or_xlsx(rows: list[list], headers: list[str], filename_base: str, fmt: str):
+    from src.utils.file_security import build_attachment_headers
     if fmt.lower() == "xlsx":
         from openpyxl import Workbook
         bio = io.BytesIO()
@@ -67,12 +68,20 @@ def _csv_or_xlsx(rows: list[list], headers: list[str], filename_base: str, fmt: 
             ws.append(row)
         wb.save(bio)
         bio.seek(0)
-        return StreamingResponse(bio, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'})
+        return StreamingResponse(
+            bio,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=build_attachment_headers(f"{filename_base}.xlsx"),
+        )
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(headers)
     writer.writerows(rows)
-    return StreamingResponse(iter([out.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'})
+    return StreamingResponse(
+        iter([out.getvalue()]),
+        media_type="text/csv",
+        headers=build_attachment_headers(f"{filename_base}.csv"),
+    )
 
 @router.post("/adjusters/invite")
 def invite_adjuster(payload: InviteAdjusterRequest, request: Request, db: Session = Depends(get_db)):

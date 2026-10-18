@@ -527,7 +527,7 @@ def get_evidence_url(ticket_id: str, evidence_id: str, user: User = Depends(_gua
         else:
             raise HTTPException(status_code=404, detail="Evidence item not found")
     else:
-        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri") or ev.get("name")
+        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri")
     if not key:
         raise HTTPException(status_code=404, detail="Evidence object key not found.")
 
@@ -547,27 +547,30 @@ def download_claim_evidence_file(ticket_id: str, evidence_id: str, request: Requ
     state = dict(c.pipeline_state or {})
     evidence_list = state.get("evidence", [])
     ev = next((e for e in evidence_list if str(e.get("id")) == str(evidence_id)), None)
-    content_type = "application/octet-stream"
     filename = "evidence"
     if not ev:
         row = db.query(ClaimEvidence).filter(ClaimEvidence.id == evidence_id, ClaimEvidence.claim_id == c.id).first()
         if not row:
             raise HTTPException(status_code=404, detail="Evidence item not found")
         key = getattr(row, "object_key", None) or getattr(row, "s3_key", None) or getattr(row, "s3_uri", None)
-        content_type = getattr(row, "content_type", None) or content_type
         filename = getattr(row, "original_filename", None) or getattr(row, "filename", None) or filename
     else:
-        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri") or ev.get("name")
-        content_type = ev.get("content_type") or content_type
+        key = ev.get("s3_key") or ev.get("object_key") or ev.get("s3_uri")
         filename = ev.get("original_filename") or ev.get("name") or filename
+
+    if not key:
+        raise HTTPException(status_code=404, detail="File not found")
 
     from src.storage.s3 import get_bytes
     from fastapi.responses import Response
+    from src.utils.file_security import get_safe_media_type, build_attachment_headers
     try:
         data = get_bytes(key)
-        return Response(content=data, media_type=content_type, headers={"Content-Disposition": f'inline; filename="{filename}"'})
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"File not found: {exc}")
+        safe_media_type = get_safe_media_type(filename)
+        headers = build_attachment_headers(filename)
+        return Response(content=data, media_type=safe_media_type, headers=headers)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found")
 
 download_evidence = download_claim_evidence_file
 

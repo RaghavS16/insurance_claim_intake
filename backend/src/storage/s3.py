@@ -54,11 +54,11 @@ def put_bytes(content:bytes,*,prefix:str,filename:str,content_type:str|None=None
         logger.info("Successfully uploaded object to S3: s3://%s/%s", settings.S3_BUCKET, key)
         return {"bucket":settings.S3_BUCKET,"key":key,"uri":f"s3://{settings.S3_BUCKET}/{key}"}
     except Exception as exc:
-        logger.warning("S3 upload to bucket '%s' failed (%s: %s). Falling back to local disk storage.", settings.S3_BUCKET, type(exc).__name__, exc)
-        if settings.ENVIRONMENT in ("production", "staging") and settings.REQUIRE_S3_IN_PRODUCTION:
+        logger.warning("S3 upload to bucket '%s' failed (%s: %s).", settings.S3_BUCKET, type(exc).__name__, exc)
+        if settings.ENVIRONMENT in ("production", "staging"):
             raise RuntimeError(f"Production S3 upload failed: {exc}") from exc
-        # Graceful local fallback for development
-        local_dir = Path("uploads") / prefix.rstrip("/")
+        # Graceful local fallback for development/test only
+        local_dir = Path(settings.UPLOAD_DIR) / prefix.rstrip("/")
         local_dir.mkdir(parents=True, exist_ok=True)
         local_path = (local_dir / f"{uuid.uuid4().hex}{suffix}").resolve()
         local_path.write_bytes(content)
@@ -69,11 +69,20 @@ def get_bytes(key:str)->bytes:
         response=_client().get_object(Bucket=settings.S3_BUCKET,Key=_safe_key(key))
         return response["Body"].read()
     except Exception as exc:
-        if settings.ENVIRONMENT in {"production", "staging"} and settings.REQUIRE_S3_IN_PRODUCTION:
+        if settings.ENVIRONMENT in {"production", "staging"}:
             raise RuntimeError("Production object storage read failed.") from exc
-        p = Path(key)
-        if p.exists() and p.is_file():
-            return p.read_bytes()
+        # Local fallback allowed only in development/test and strictly inside UPLOAD_DIR
+        try:
+            upload_root = Path(settings.UPLOAD_DIR).resolve()
+            p = Path(key).resolve()
+            if not p.is_relative_to(upload_root):
+                raise ValueError("Path traversal denied: object key is outside upload directory.")
+            if p.exists() and p.is_file():
+                return p.read_bytes()
+        except ValueError:
+            raise
+        except Exception:
+            pass
         raise
 
 download_bytes = get_bytes
@@ -84,7 +93,13 @@ def delete_bytes(key: str) -> None:
     if settings.S3_BUCKET:
         _client().delete_object(Bucket=settings.S3_BUCKET, Key=key)
         return
-    path = Path(key)
+    if settings.ENVIRONMENT in {"production", "staging"}:
+        raise RuntimeError("Production object deletion failed: S3_BUCKET not configured.")
+    # Local fallback allowed only in development/test and strictly inside UPLOAD_DIR
+    upload_root = Path(settings.UPLOAD_DIR).resolve()
+    path = Path(key).resolve()
+    if not path.is_relative_to(upload_root):
+        raise ValueError("Path traversal denied: object key is outside upload directory.")
     if path.exists() and path.is_file():
         path.unlink()
 
@@ -146,9 +161,14 @@ def promote_quarantined(source_key: str, *, ticket_id: str, filename: str, conte
         )
         client.delete_object(Bucket=settings.S3_BUCKET, Key=source_key)
         return {"bucket": settings.S3_BUCKET, "key": destination, "uri": f"s3://{settings.S3_BUCKET}/{destination}"}
-    source = Path(source_key)
+    if settings.ENVIRONMENT in {"production", "staging"}:
+        raise RuntimeError("Production quarantined object promotion failed: S3 copy failed or S3_BUCKET not configured.")
+    source = Path(source_key).resolve()
+    upload_root = Path(settings.UPLOAD_DIR).resolve()
+    if not source.is_relative_to(upload_root):
+        raise ValueError("Path traversal denied: quarantined source key is outside upload directory.")
     if source.exists() and source.is_file():
-        local_dir = Path("uploads") / settings.S3_EVIDENCE_PREFIX / _safe_key(ticket_id)
+        local_dir = upload_root / settings.S3_EVIDENCE_PREFIX / _safe_key(ticket_id)
         local_dir.mkdir(parents=True, exist_ok=True)
         target = local_dir / f"{uuid.uuid4().hex}{suffix}"
         source.replace(target)

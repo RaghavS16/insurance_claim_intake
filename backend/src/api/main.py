@@ -291,7 +291,7 @@ def health_check():
 
 @app.get("/ready")
 def readiness_check():
-    """Readiness probe that verifies the database and required production storage."""
+    """Readiness probe that verifies the database, S3 head_bucket, Redis, and ClamAV."""
     from sqlalchemy import text
     try:
         with engine.connect() as conn:
@@ -299,11 +299,16 @@ def readiness_check():
         if settings.ENVIRONMENT in ("production", "staging"):
             if not settings.S3_BUCKET:
                 raise RuntimeError("S3_BUCKET is not configured")
-            if settings.REQUIRE_REDIS_IN_PRODUCTION:
+            from src.storage.s3 import _client
+            _client().head_bucket(Bucket=settings.S3_BUCKET)
+            if settings.REQUIRE_REDIS_IN_PRODUCTION or settings.REDIS_URL:
                 if not settings.REDIS_URL:
                     raise RuntimeError("REDIS_URL is not configured")
                 import redis
                 redis.Redis.from_url(settings.REDIS_URL, socket_timeout=1.5, socket_connect_timeout=1.5).ping()
+            if settings.REQUIRE_MALWARE_SCAN:
+                from src.utils.clamav import ping_clamav
+                ping_clamav()
         return {"status": "ready", "database": "ok", "storage": "configured", "redis": "ok" if settings.REDIS_URL else "not_required"}
     except Exception as exc:
         logger.exception("Readiness check failed: %s", type(exc).__name__)

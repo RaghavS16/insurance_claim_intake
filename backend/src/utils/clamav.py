@@ -27,3 +27,19 @@ def scan_bytes(content: bytes) -> tuple[bool, str]:
         if settings.ENVIRONMENT in ("production", "staging"):
             return False, "malware_scanner_unavailable"
         return True, "scanner_unavailable_non_production"
+
+
+def ping_clamav() -> bool:
+    if not settings.REQUIRE_MALWARE_SCAN:
+        return True
+    host = settings.CLAMAV_HOST
+    if not host:
+        if settings.ENVIRONMENT in ("production", "staging"):
+            raise RuntimeError("CLAMAV_HOST is not configured while malware scan is required.")
+        return True
+    with socket.create_connection((host, settings.CLAMAV_PORT), timeout=settings.CLAMAV_TIMEOUT_SECONDS) as sock:
+        sock.sendall(b"zPING\0")
+        response = sock.recv(1024).decode("utf-8", errors="replace").strip()
+        if "PONG" in response:
+            return True
+        raise RuntimeError(f"ClamAV ping failed with response: {response}")

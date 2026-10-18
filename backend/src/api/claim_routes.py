@@ -760,6 +760,13 @@ async def respond_to_evidence_request(
             raise HTTPException(status_code=400, detail="Unsupported evidence format.")
         try:
             content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+            from src.utils.file_security import verify_upload_magic_bytes
+            valid_sig, sig_reason = verify_upload_magic_bytes(content, file.filename)
+            if not valid_sig:
+                raise HTTPException(status_code=400, detail=sig_reason)
+            clean, scan_reason = await asyncio.to_thread(scan_bytes, content)
+            if not clean:
+                raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
             quarantine = await asyncio.to_thread(
                 quarantine_bytes,
                 content,
@@ -767,9 +774,6 @@ async def respond_to_evidence_request(
                 filename=file.filename or "evidence",
                 content_type=file.content_type or "application/octet-stream",
             )
-            clean, scan_reason = await asyncio.to_thread(scan_bytes, content)
-            if not clean:
-                raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")
             s3 = await asyncio.to_thread(
                 promote_quarantined,
                 quarantine["key"],
@@ -888,6 +892,10 @@ async def upload_claim_evidence(ticket_id: str, request: Request, file: UploadFi
         raise HTTPException(status_code=400, detail="Unsupported evidence format.")
     try:
         content = await read_limited(file, settings.MAX_EVIDENCE_UPLOAD_BYTES)
+        from src.utils.file_security import verify_upload_magic_bytes
+        valid_sig, sig_reason = verify_upload_magic_bytes(content, file.filename)
+        if not valid_sig:
+            raise HTTPException(status_code=400, detail=sig_reason)
         clean, scan_reason = scan_bytes(content)
         if not clean:
             raise HTTPException(status_code=422, detail="The uploaded document failed security scanning.")

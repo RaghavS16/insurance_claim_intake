@@ -88,6 +88,10 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="A document file is required.")
     try:
         raw = await read_limited(file, 150 * 1024 * 1024)
+        from src.utils.file_security import verify_upload_magic_bytes
+        valid_sig, sig_reason = verify_upload_magic_bytes(raw, file.filename)
+        if not valid_sig:
+            raise HTTPException(status_code=400, detail=sig_reason)
         clean, scan_reason = await asyncio.to_thread(scan_bytes, raw)
         if not clean:
             raise HTTPException(status_code=422, detail="The document failed security scanning.")
@@ -324,6 +328,10 @@ async def replace_document_content(
         raise HTTPException(status_code=400, detail="A document file is required.")
     try:
         raw = await read_limited(file, 150 * 1024 * 1024)
+        from src.utils.file_security import verify_upload_magic_bytes
+        valid_sig, sig_reason = verify_upload_magic_bytes(raw, file.filename)
+        if not valid_sig:
+            raise HTTPException(status_code=400, detail=sig_reason)
         clean, _scan_reason = await asyncio.to_thread(scan_bytes, raw)
         if not clean:
             raise HTTPException(status_code=422, detail="The document failed security scanning.")
