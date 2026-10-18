@@ -230,18 +230,36 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     try:
         clean_email = validate_email(payload.email)
     except ValueError:
-        # Don't reveal whether the email format was the issue
+        # Constant-time dummy verify to prevent timing enumeration
+        DUMMY_BCRYPT_HASH = "$2b$12$e86g5WzY44dE9Bsm4N4b5uQj9Uomv1d/c2zF5tXq2K1s5c8c5z1G."
+        verify_password(payload.password, DUMMY_BCRYPT_HASH)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
 
+    from src.utils.account_lockout import check_account_lock, record_auth_failure, record_auth_success
+    check_account_lock("login", clean_email)
+
     user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+    if not user:
+        # Constant-time dummy verify for non-existent account
+        DUMMY_BCRYPT_HASH = "$2b$12$e86g5WzY44dE9Bsm4N4b5uQj9Uomv1d/c2zF5tXq2K1s5c8c5z1G."
+        verify_password(payload.password, DUMMY_BCRYPT_HASH)
+        record_auth_failure("login", clean_email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
+
+    if not verify_password(payload.password, user.password_hash):
+        record_auth_failure("login", clean_email)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+        )
+
+    record_auth_success("login", clean_email)
 
     if user.status != "active":
         raise HTTPException(
@@ -290,8 +308,13 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
         clean_email = validate_email(payload.email)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid email or verification code.")
+
+    from src.utils.account_lockout import check_account_lock, record_auth_failure, record_auth_success
+    check_account_lock("verify_email", clean_email)
+
     user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user:
+        record_auth_failure("verify_email", clean_email)
         raise HTTPException(status_code=400, detail="Invalid email or verification code.")
     record = (
         db.query(PasswordResetOTP)
@@ -301,19 +324,23 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
         .first()
     )
     if not record:
+        record_auth_failure("verify_email", clean_email)
         raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
     now = datetime.now(timezone.utc)
     expires = record.expires_at.replace(tzinfo=timezone.utc) if record.expires_at.tzinfo is None else record.expires_at
     if now > expires or (record.attempts or 0) >= settings.OTP_MAX_ATTEMPTS:
+        record_auth_failure("verify_email", clean_email)
         raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
     if hash_otp(payload.otp.strip()) != record.otp_hash:
         record.attempts = (record.attempts or 0) + 1
         db.commit()
+        record_auth_failure("verify_email", clean_email)
         raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
     record.verified = True
     record.consumed = True
     user.email_verified_at = now
     db.commit()
+    record_auth_success("verify_email", clean_email)
     return {"message": "Email verified successfully. You can now sign in."}
 
 
@@ -471,6 +498,9 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email format.")
 
+    from src.utils.account_lockout import check_account_lock, record_auth_failure, record_auth_success
+    check_account_lock("verify_otp", clean_email)
+
     generic_invalid = HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid or expired code. Please request a new one.",
@@ -478,6 +508,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 
     user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user:
+        record_auth_failure("verify_otp", clean_email)
         raise generic_invalid
 
     record = (
@@ -488,6 +519,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         .first()
     )
     if not record:
+        record_auth_failure("verify_otp", clean_email)
         raise generic_invalid
 
     now = datetime.now(timezone.utc)
@@ -496,9 +528,11 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
     if expires_at and now > expires_at:
+        record_auth_failure("verify_otp", clean_email)
         raise generic_invalid
 
     if (record.attempts or 0) >= settings.OTP_MAX_ATTEMPTS:
+        record_auth_failure("verify_otp", clean_email)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many incorrect attempts. Please request a new code.",
@@ -508,10 +542,12 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
     if hash_otp(payload.otp.strip()) != record.otp_hash:
         record.attempts = (record.attempts or 0) + 1  # type: ignore[assignment]
         db.commit()
+        record_auth_failure("verify_otp", clean_email)
         raise generic_invalid
 
     record.verified = True  # type: ignore[assignment]
     db.commit()
+    record_auth_success("verify_otp", clean_email)
 
     reset_token = create_access_token(
         data={"sub": user.id, "purpose": "password_reset", "otp_id": record.id},
@@ -548,8 +584,12 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
     if not user or not getattr(user, "tenant_id", None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid reset token.")
 
+    from src.utils.account_lockout import check_account_lock, record_auth_failure, record_auth_success
+    check_account_lock("reset_password", user.email)
+
     record = db.query(PasswordResetOTP).filter(PasswordResetOTP.id == otp_id, PasswordResetOTP.user_id == user.id, PasswordResetOTP.tenant_id == user.tenant_id).first()
     if not record or not record.verified or record.consumed:
+        record_auth_failure("reset_password", user.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="This reset code has already been used or is no longer valid. Please restart the process.",
@@ -568,6 +608,10 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
     try:
         db.commit()
+        record_auth_success("reset_password", user.email)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Password reset could not be completed.")
     except Exception:
         db.rollback()
         logger.exception("Failed to reset password for user %s", user_id)

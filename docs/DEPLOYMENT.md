@@ -35,3 +35,13 @@ The following items require human operator action and must never be committed to
 - [ ] **Compliance & Security Reviews**:
   - Legal and privacy review regarding claimant PII and document retention.
   - External penetration test and automated vulnerability scan against production endpoint.
+
+---
+
+## 3. Proxy & Forwarded Headers Security
+> [!WARNING]
+> **Proxy Headers Configuration (`FORWARDED_ALLOW_IPS`)**:
+> - Uvicorn must only trust forwarded headers (`X-Forwarded-For`, `X-Forwarded-Proto`) from trusted reverse proxies.
+> - `FORWARDED_ALLOW_IPS` must be configured with specific CIDR blocks corresponding to the VPC/ALB subnets or Docker network (e.g. `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1`).
+> - **`FORWARDED_ALLOW_IPS` MUST NEVER BE SET TO `*`** unless the container is deployed in a strictly isolated private network where ONLY the load balancer can physically reach the container. Allowing arbitrary forwarded IPs enables client IP spoofing and bypasses rate limits and security controls.
+
