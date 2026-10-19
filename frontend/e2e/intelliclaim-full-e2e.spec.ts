@@ -4,7 +4,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
-const DEMO_PASSWORD = process.env.DEMO_PASSWORD || '';
+const env = (process.env.ENVIRONMENT || 'development').toLowerCase().trim();
+const isProd = env === 'prod' || env === 'production';
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || (isProd ? '' : 'DemoPass123!');
 
 test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', () => {
   test.beforeAll(() => {

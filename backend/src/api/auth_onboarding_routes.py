@@ -96,7 +96,6 @@ def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Reque
     return {
         "accepted": True,
         "access_token": token,
-        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
         "message": "Account created and activated successfully.",

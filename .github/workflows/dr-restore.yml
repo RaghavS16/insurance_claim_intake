@@ -7,6 +7,9 @@ on:
   push:
     branches: [release/production-ready, production-grade-UI-UX, main]
 
+permissions:
+  contents: read
+
 jobs:
   restore-drill:
     runs-on: ubuntu-latest
@@ -29,8 +32,8 @@ jobs:
       SECRET_KEY: test-secret-key-at-least-32-characters-long
       DATABASE_URL: postgresql://postgres:test@localhost:5432/insurance_claims
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fb737c3360840042b45025708ab9a8a # v5.3.0
         with:
           python-version: "3.11"
       - name: Install database dependencies
@@ -42,7 +45,7 @@ jobs:
       - name: Execute restore drill
         run: python scripts/restore_drill.py
       - name: Upload measured DR report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: postgres-dr-report-${{ github.sha }}
           path: /tmp/insurance_claims_dr_report.json

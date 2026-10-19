@@ -71,6 +71,7 @@ def test_cookie_auth_lifecycle(cookie_test_db, monkeypatch):
         login_res = client.post("/api/v1/auth/login", json={"email": test_email, "password": "ValidPass123!"})
         assert login_res.status_code == 200
         assert "access_token" in login_res.json()
+        assert "refresh_token" not in login_res.json()
         assert "refresh_token" in login_res.cookies
 
         cookie_header = login_res.headers.get("set-cookie", "")
@@ -88,6 +89,7 @@ def test_cookie_auth_lifecycle(cookie_test_db, monkeypatch):
         )
         assert refresh_res.status_code == 200
         assert "access_token" in refresh_res.json()
+        assert "refresh_token" not in refresh_res.json()
         assert "refresh_token" in refresh_res.cookies
         new_refresh_cookie = refresh_res.cookies["refresh_token"]
         assert new_refresh_cookie != refresh_cookie_val
@@ -144,11 +146,14 @@ def test_refresh_token_body_fallback_in_non_production(cookie_test_db, monkeypat
         db.commit()
 
         login_res = client.post("/api/v1/auth/login", json={"email": test_email, "password": "ValidPass123!"})
-        refresh_token = login_res.json()["refresh_token"]
+        assert "refresh_token" not in login_res.json()
+        refresh_token = login_res.cookies.get("refresh_token")
+        assert refresh_token, "Expected refresh_token in response cookies"
 
         # Send via body without cookies in test environment
         res = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
         assert res.status_code == 200
         assert "access_token" in res.json()
+        assert "refresh_token" not in res.json()
     finally:
         db.close()

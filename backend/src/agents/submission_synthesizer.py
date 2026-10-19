@@ -41,9 +41,15 @@ def synthesize_claims_package(
     policy_row: Optional[Policy] = None
     claimant_user: Optional[User] = None
     if db and policy_id:
-        policy_row = db.query(Policy).filter(Policy.policy_number == policy_id.strip().upper()).first()
+        p_query = db.query(Policy).filter(Policy.policy_number == policy_id.strip().upper())
+        if claim and getattr(claim, "tenant_id", None):
+            p_query = p_query.filter(Policy.tenant_id == claim.tenant_id)
+        policy_row = p_query.first()
     if db and claim and claim.claimant_id:
-        claimant_user = db.query(User).filter(User.id == claim.claimant_id).first()
+        u_query = db.query(User).filter(User.id == claim.claimant_id)
+        if getattr(claim, "tenant_id", None):
+            u_query = u_query.filter(User.tenant_id == claim.tenant_id)
+        claimant_user = u_query.first()
 
     policyholder_name = (
         data.get("policyholder_name")

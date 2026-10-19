@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     REQUIRE_REDIS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_S3_IN_PRODUCTION: bool = Field(True)
     REQUIRE_MALWARE_SCAN: bool = Field(True)
+    CLAMAV_TIMEOUT_SECONDS: int = int(os.getenv("CLAMAV_TIMEOUT_SECONDS", "10"))
     RUN_EMBEDDED_OUTBOX_WORKER: bool = Field(True)
     REQUIRE_MIGRATIONS_IN_PRODUCTION: bool = Field(True)
     REQUIRE_EMAIL_VERIFICATION: bool = Field(False)
@@ -236,6 +237,9 @@ class Settings(BaseSettings):
                 raise RuntimeError("REDIS_URL is required in production/staging for distributed rate limiting and AI governance.")
         if self.ENVIRONMENT == "development" or self.ENVIRONMENT == "test":
             Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        if self.ENVIRONMENT in ("production", "staging"):
+            if not self.PUBLIC_APP_URL.startswith("https://"):
+                raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_MALWARE_SCAN and not self.CLAMAV_HOST:
             raise RuntimeError("CLAMAV_HOST is required when malware scanning is enabled.")
         if self.ENVIRONMENT in ("production", "staging"):
@@ -251,9 +255,6 @@ class Settings(BaseSettings):
                 raise RuntimeError("SMTP_FROM_EMAIL is required in production/staging.")
             if not (self.SMTP_USE_TLS or self.SMTP_USE_SSL):
                 raise RuntimeError("One of SMTP_USE_TLS or SMTP_USE_SSL must be true in production/staging.")
-        if self.ENVIRONMENT in ("production", "staging"):
-            if not self.PUBLIC_APP_URL.startswith("https://"):
-                raise RuntimeError("PUBLIC_APP_URL must use HTTPS in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.REQUIRE_S3_IN_PRODUCTION and not self.S3_BUCKET:
             raise RuntimeError("S3_BUCKET must be configured in production/staging.")
         if self.ENVIRONMENT in ("production", "staging") and self.S3_SERVER_SIDE_ENCRYPTION == "aws:kms" and not self.S3_KMS_KEY_ID:

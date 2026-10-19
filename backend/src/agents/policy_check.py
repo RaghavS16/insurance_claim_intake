@@ -45,13 +45,14 @@ def verify_policy_for_claim(
             return result
 
     tenant_id = getattr(candidate, "tenant_id", None)
-    if tenant_id is not None:
-        policy = db.query(Policy).filter(
-            Policy.policy_number == normalized_policy,
-            Policy.tenant_id == tenant_id,
-        ).first()
-    else:
-        policy = db.query(Policy).filter(Policy.policy_number == normalized_policy).first()
+    if not tenant_id:
+        result["reason"] = "missing_tenant_context"
+        return result
+
+    policy = db.query(Policy).filter(
+        Policy.policy_number == normalized_policy,
+        Policy.tenant_id == tenant_id,
+    ).first()
 
     if not policy:
         result["reason"] = "policy_not_found"

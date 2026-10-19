@@ -11,8 +11,12 @@ for p in (str(repo_root), str(backend_dir)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+env = (os.environ.get("ENVIRONMENT") or "development").lower().strip()
 if not os.environ.get("DEMO_PASSWORD"):
-    raise RuntimeError("DEMO_PASSWORD environment variable is required to run e2e server.")
+    if env not in ("prod", "production"):
+        os.environ["DEMO_PASSWORD"] = "DemoPass123!"
+    else:
+        raise RuntimeError("DEMO_PASSWORD environment variable is required to run e2e server.")
 os.environ.setdefault("ENVIRONMENT", "development")
 
 try:

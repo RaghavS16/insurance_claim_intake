@@ -61,12 +61,19 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: Optional[str] = Field(None, min_length=20, max_length=512)
 
 
+def _is_secure_cookie() -> bool:
+    return (
+        settings.ENVIRONMENT in ("production", "staging")
+        or bool(settings.PUBLIC_APP_URL and settings.PUBLIC_APP_URL.startswith("https://"))
+    )
+
+
 def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=(settings.ENVIRONMENT == "production"),
+        secure=_is_secure_cookie(),
         samesite="strict",
         path="/api/v1/auth",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
@@ -78,9 +85,10 @@ def clear_refresh_token_cookie(response: Response) -> None:
         key="refresh_token",
         path="/api/v1/auth",
         httponly=True,
-        secure=(settings.ENVIRONMENT == "production"),
+        secure=_is_secure_cookie(),
         samesite="strict",
     )
+
 
 
 class ResetPasswordRequest(BaseModel):
@@ -131,11 +139,10 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
     return user, replacement
 
 
-def _auth_response(user: User, refresh_token: str, *, amr: list[str] | None = None, mfa_authenticated: bool = False) -> dict:
+def _auth_response(user: User, refresh_token: str | None = None, *, amr: list[str] | None = None, mfa_authenticated: bool = False) -> dict:
     sv = int(getattr(user, "session_version", 1) or 1)
     return {
         "access_token": create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": sv, "mfa": mfa_authenticated, "amr": amr or []}),
-        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
     }
@@ -312,7 +319,6 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     access_token = create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": user.session_version, **auth_context})
     return {
         "access_token": access_token,
-        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {
             "id": user.id,
@@ -634,13 +640,21 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
         record_auth_success("reset_password", user.email)
     except Exception:
         db.rollback()
+        logger.exception("Failed to reset password for user %s", user.id)
         raise HTTPException(status_code=500, detail="Password reset could not be completed.")
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to reset password for user %s", user_id)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Password reset failed. Please try again.")
 
     return {"message": "Password has been reset successfully. You can now log in with your new password."}
+
+
+def _enforce_origin_security(request: Request) -> None:
+    origin = request.headers.get("origin")
+    raw = request.cookies.get("refresh_token")
+    if origin or raw:
+        allowed = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+        if settings.PUBLIC_APP_URL:
+            allowed.append(settings.PUBLIC_APP_URL.rstrip("/"))
+        if origin and origin not in allowed:
+            raise HTTPException(status_code=403, detail="Cross-origin request forbidden.")
 
 
 @router.post("/refresh")
@@ -651,11 +665,7 @@ def refresh_access_token(
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(request, action="refresh", max_requests=30, window_seconds=60)
-    origin = request.headers.get("origin")
-    if origin:
-        allowed = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
-        if origin not in allowed:
-            raise HTTPException(status_code=403, detail="Cross-origin refresh forbidden.")
+    _enforce_origin_security(request)
 
     raw = request.cookies.get("refresh_token")
     if not raw:
@@ -677,6 +687,7 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Logout endpoint. Clears refresh token cookie and revokes the token family.
     """
+    _enforce_origin_security(request)
     clear_refresh_token_cookie(response)
     raw_cookie = request.cookies.get("refresh_token")
     now = datetime.now(timezone.utc)
@@ -721,4 +732,3 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
 
     return {"message": "Logged out successfully. Token has been revoked."}
 
-    return {"message": "Logged out successfully. Token has been revoked."}

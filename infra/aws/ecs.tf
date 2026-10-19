@@ -388,7 +388,7 @@ resource "aws_ecs_task_definition" "frontend" {
   container_definitions = jsonencode([
     {
       name      = "frontend"
-      image     = coalesce(var.frontend_container_image, var.container_image)
+      image     = var.frontend_container_image
       essential = true
 
       portMappings = [

@@ -58,15 +58,68 @@ def _is_post_submission_status(status: str | None) -> bool:
 # Consolidated _request_payload is defined below
 
 
+SERVER_CONTROLLED_CLAIM_FIELDS = {
+    "policy_verified",
+    "submission_ready",
+    "verification_status",
+    "assigned_adjuster_id",
+    "tenant_id",
+    "claimant_id",
+    "status",
+    "decision",
+    "payout_amount",
+    "audit_events",
+    "id",
+    "ticket_id",
+    "created_at",
+    "updated_at",
+    "customer_id",
+    "policy_verification",
+    "submission_readiness",
+    "workflow_status",
+}
+
+CLIENT_EDITABLE_FIELDS = {
+    "event_date",
+    "event_location",
+    "event_description",
+    "estimated_claim_amount",
+    "insurance_type",
+    "policy_id",
+    "incident_time",
+    "third_party_involved",
+    "police_report_number",
+    "hospital_name",
+}
+
+
+class ClientEditableClaimFacts(BaseModel):
+    event_date: Optional[str] = Field(None, max_length=32)
+    event_location: Optional[str] = Field(None, max_length=255)
+    event_description: Optional[str] = Field(None, max_length=5000)
+    estimated_claim_amount: Optional[float] = Field(None, ge=0, le=100_000_000)
+    insurance_type: Optional[str] = Field(None, max_length=64)
+    policy_id: Optional[str] = Field(None, max_length=64)
+    incident_time: Optional[str] = Field(None, max_length=32)
+    third_party_involved: Optional[bool] = None
+    police_report_number: Optional[str] = Field(None, max_length=64)
+    hospital_name: Optional[str] = Field(None, max_length=255)
+
+
 class UpdateClaimRequest(BaseModel):
-    title: Optional[str] = None
-    policy_id: Optional[str] = None
-    insurance_type: Optional[str] = None
-    event_date: Optional[str] = None
-    event_description: Optional[str] = None
-    event_location: Optional[str] = None
-    estimated_claim_amount: Optional[float] = None
+    title: Optional[str] = Field(None, max_length=120)
+    policy_id: Optional[str] = Field(None, max_length=64)
+    insurance_type: Optional[str] = Field(None, max_length=64)
+    event_date: Optional[str] = Field(None, max_length=32)
+    event_description: Optional[str] = Field(None, max_length=5000)
+    event_location: Optional[str] = Field(None, max_length=255)
+    estimated_claim_amount: Optional[float] = Field(None, ge=0, le=100_000_000)
+    incident_time: Optional[str] = Field(None, max_length=32)
+    third_party_involved: Optional[bool] = None
+    police_report_number: Optional[str] = Field(None, max_length=64)
+    hospital_name: Optional[str] = Field(None, max_length=255)
     extracted_data: Optional[Dict[str, Any]] = None
+
 
 
 def _resolve_user(request: Request, db: Session) -> User:
@@ -148,7 +201,10 @@ def _claim_payload(claim: Claim, db: Optional[Session] = None) -> Dict[str, Any]
             )
             if not policy_row and claim.policy_id:
                 try:
-                    policy_row = db.query(Policy).filter(Policy.id == claim.policy_id).first()
+                    policy_row = db.query(Policy).filter(
+                        Policy.id == claim.policy_id,
+                        Policy.tenant_id == claim.tenant_id,
+                    ).first()
                 except Exception:
                     policy_row = None
 
@@ -1176,16 +1232,29 @@ def update_claim_details(ticket_id: str, payload: UpdateClaimRequest, request: R
         db.refresh(claim)
         return _claim_payload(claim, db=db)
 
-    # Accept edits to ANY dynamic field in extracted_data
+    # Reject any attempt to modify server-controlled state or unrecognized fields
     if payload.extracted_data:
-        for key, value in payload.extracted_data.items():
-            extracted[key] = value
+        forbidden = set(payload.extracted_data.keys()).intersection(SERVER_CONTROLLED_CLAIM_FIELDS)
+        if forbidden:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Modification of server-controlled fields {sorted(forbidden)} is forbidden.",
+            )
+        disallowed = set(payload.extracted_data.keys()) - CLIENT_EDITABLE_FIELDS
+        if disallowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Modification of disallowed fields {sorted(disallowed)} is rejected.",
+            )
+        try:
+            validated_facts = ClientEditableClaimFacts(**payload.extracted_data)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid claim facts format: {exc}")
+        for key, val in validated_facts.model_dump(exclude_unset=True).items():
+            if val is not None:
+                extracted[key] = val
 
-    canonical_fields = [
-        "policy_id", "insurance_type", "event_date",
-        "event_description", "event_location", "estimated_claim_amount",
-    ]
-    for field in canonical_fields:
+    for field in CLIENT_EDITABLE_FIELDS:
         value = getattr(payload, field, None)
         if value is not None:
             extracted[field] = value

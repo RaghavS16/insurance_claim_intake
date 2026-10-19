@@ -2,14 +2,14 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, UserRole } from './types';
-import { api } from './api';
+import { api, clearApiCache } from './api';
 
 interface AuthContextType {
   user: User | null;
   role: UserRole | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (access: string, user: User, refresh?: string) => void;
+  login: (access: string, user: User) => void;
   logout: () => Promise<void>;
   updateUser: (user: User) => void;
 }
@@ -50,12 +50,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         } else {
           api.clearTokens();
+          clearApiCache();
           setUser(null);
           setRole(null);
         }
       })
       .catch(() => {
         api.clearTokens();
+        clearApiCache();
         setUser(null);
         setRole(null);
       })
@@ -64,7 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
-  const login = (access: string, newUser: User, _refresh?: string) => {
+  const login = (access: string, newUser: User) => {
+    clearApiCache();
     api.setToken(access);
     setUser(newUser);
     setRole(newUser.role);
@@ -83,6 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // Ignore network errors during remote session invalidation
     }
+    clearApiCache();
     api.clearTokens();
     setUser(null);
     setRole(null);

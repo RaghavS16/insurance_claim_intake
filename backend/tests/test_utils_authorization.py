@@ -60,12 +60,29 @@ class TestEnforceClaimOwnership:
             enforce_claim_ownership(claim, user)
         assert exc.value.status_code == 403
 
-    def test_claimant_with_no_ids_on_claim_does_not_raise(self):
-        """If claim has no claimant_id or customer_id, no ownership conflict."""
+    def test_claimant_with_no_ids_on_claim_raises_403(self):
+        """If claim has no claimant_id or customer_id, it must fail closed with 403."""
         from src.utils.authorization import enforce_claim_ownership
         user = self._make_user(uid="user-1", role="CLAIMANT")
         claim = self._make_claim(claimant_id=None, customer_id=None)
-        enforce_claim_ownership(claim, user)  # should not raise
+        with pytest.raises(HTTPException) as exc:
+            enforce_claim_ownership(claim, user)
+        assert exc.value.status_code == 403
+
+    def test_missing_tenant_id_raises_403(self):
+        """Missing tenant ID on claim or user must fail closed with 403."""
+        from src.utils.authorization import enforce_claim_ownership
+        user = self._make_user(uid="user-1", role="CLAIMANT", tenant_id="")
+        claim = self._make_claim(claimant_id="user-1", tenant_id="tenant-1")
+        with pytest.raises(HTTPException) as exc:
+            enforce_claim_ownership(claim, user)
+        assert exc.value.status_code == 403
+
+        user2 = self._make_user(uid="user-1", role="CLAIMANT", tenant_id="tenant-1")
+        claim2 = self._make_claim(claimant_id="user-1", tenant_id=None)
+        with pytest.raises(HTTPException) as exc2:
+            enforce_claim_ownership(claim2, user2)
+        assert exc2.value.status_code == 403
 
     def test_unknown_role_checks_ownership(self):
         """An unknown role is treated like a CLAIMANT — ownership IS checked."""
@@ -83,4 +100,5 @@ class TestEnforceClaimOwnership:
         claim = self._make_claim(claimant_id=123)  # integer
         # str(123) == "123" == user.id  => no 403
         enforce_claim_ownership(claim, user)
+
 

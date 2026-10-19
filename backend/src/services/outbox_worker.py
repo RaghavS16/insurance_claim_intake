@@ -46,9 +46,21 @@ async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
     finally:
         db.close()
 
+def _touch_heartbeat(path: str = "/tmp/outbox_worker_heartbeat") -> None:
+    try:
+        import time
+        from pathlib import Path
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
+
+
 async def run_worker(handlers: dict[str, object], poll_seconds: float = 1.0) -> None:
     while True:
         try:
+            _touch_heartbeat()
             processed = await dispatch_once(handlers)
             if processed == 0:
                 await asyncio.sleep(poll_seconds)

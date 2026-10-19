@@ -5,13 +5,20 @@ const scriptSrc = isProd
   ? "script-src 'self' 'unsafe-inline';"
   : "script-src 'self' 'unsafe-inline' 'unsafe-eval';";
 
+const backendTarget =
+  process.env.INTERNAL_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
+
+const connectSrc = ["'self'", backendTarget].filter(Boolean).join(" ");
+
 const cspHeader = [
   "default-src 'self';",
   scriptSrc,
   "style-src 'self' 'unsafe-inline';",
   "img-src 'self' data: blob:;",
   "media-src 'self' blob:;",
-  "connect-src 'self';",
+  `connect-src ${connectSrc};`,
   "font-src 'self' data:;",
   "object-src 'none';",
   "base-uri 'self';",
@@ -38,10 +45,6 @@ const nextConfig: NextConfig = {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
   async rewrites() {
-    const backendTarget =
-      process.env.INTERNAL_API_URL ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      (process.env.NODE_ENV === "production" ? "http://backend:8000" : "http://127.0.0.1:8000");
     return [
       {
         source: "/api/:path*",

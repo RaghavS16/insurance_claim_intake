@@ -227,10 +227,11 @@ services:
       SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
     command: ["python", "-m", "src.services.outbox_worker"]
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'exit(0)'"]
+      test: ["CMD-SHELL", "python -c 'import time, os, sys; p = \"/tmp/outbox_worker_heartbeat\"; sys.exit(0 if os.path.exists(p) and (time.time() - os.path.getmtime(p) < 60) else 1)'"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy

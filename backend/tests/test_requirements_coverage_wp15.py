@@ -57,6 +57,7 @@ def test_auth_full_lifecycle_and_cookie_flow(monkeypatch):
         return True
 
     monkeypatch.setattr("src.api.auth_routes.send_otp_email", mock_send_otp)
+    monkeypatch.setattr(settings, "REQUIRE_EMAIL_VERIFICATION", True)
 
     email = f"test_auth_wp15_{int(datetime.now().timestamp())}@example.com"
     pwd = "StrongPassword123!"
@@ -90,16 +91,18 @@ def test_auth_full_lifecycle_and_cookie_flow(monkeypatch):
     assert login_res.status_code == 200, login_res.text
     login_data = login_res.json()
     assert "access_token" in login_data
+    assert "refresh_token" not in login_data
     access_token = login_data["access_token"]
     refresh_cookie = login_res.cookies.get("refresh_token")
+    assert refresh_cookie, "Expected refresh_token cookie"
 
     # 4. Refresh token
     refresh_res = client.post(
         "/api/v1/auth/refresh",
-        cookies={"refresh_token": refresh_cookie} if refresh_cookie else {},
-        json={"refresh_token": login_data.get("refresh_token")} if not refresh_cookie else {}
+        cookies={"refresh_token": refresh_cookie},
     )
     assert refresh_res.status_code == 200, refresh_res.text
+    assert "refresh_token" not in refresh_res.json()
     new_token = refresh_res.json()["access_token"]
     assert new_token
 

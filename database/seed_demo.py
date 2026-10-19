@@ -31,10 +31,10 @@ USERS = [
 
 def seed_demo():
     env = (os.getenv("ENVIRONMENT") or "development").lower().strip()
-    if env in ("production", "staging"):
+    if env in ("production", "staging", "prod"):
         sys.exit("Error: seed_demo is strictly forbidden in production or staging environments.")
 
-    demo_password = os.getenv("DEMO_PASSWORD")
+    demo_password = os.getenv("DEMO_PASSWORD") or ("DemoPass123!" if env not in ("prod", "production") else None)
     if not demo_password:
         sys.exit("Error: DEMO_PASSWORD environment variable is required to run seed_demo.")
 

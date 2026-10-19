@@ -494,7 +494,7 @@ def get_document_chunks(document_id: str, tenant_id: str | None = None) -> list[
     try:
         rows = db.execute(
             select(KnowledgeChunk)
-            .where(KnowledgeChunk.document_id == document_id, *([KnowledgeChunk.tenant_id == tenant_id] if tenant_id else []))
+            .where(KnowledgeChunk.document_id == document_id, KnowledgeChunk.tenant_id == tenant_id)
             .order_by(KnowledgeChunk.chunk_index.asc())
         ).scalars().all()
         return [
@@ -514,7 +514,7 @@ def get_cached_requirement_manifest(document_id: str, tenant_id: str | None = No
     tenant_id = _require_tenant(tenant_id)
     db = SessionLocal()
     try:
-        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, *([KnowledgeDocument.tenant_id == tenant_id] if tenant_id else [])).first()
+        row = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id, KnowledgeDocument.tenant_id == tenant_id).first()
         if not row:
             return []
         manifest = (row.metadata_json or {}).get("requirement_manifest")
@@ -530,7 +530,7 @@ def save_requirement_manifest(document_id: str, manifest: list[dict[str, Any]], 
         from sqlalchemy.orm.attributes import flag_modified
         row = db.query(KnowledgeDocument).filter(
             KnowledgeDocument.id == document_id,
-            (KnowledgeDocument.tenant_id == tenant_id) | (KnowledgeDocument.tenant_id.is_(None)) | (KnowledgeDocument.tenant_id == ""),
+            KnowledgeDocument.tenant_id == tenant_id,
         ).first()
         if not row:
             return

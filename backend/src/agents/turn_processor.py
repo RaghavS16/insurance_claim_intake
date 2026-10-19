@@ -260,8 +260,6 @@ async def process_claimant_turn(
                 Policy.policy_number == pol_str,
                 Policy.tenant_id == claim.tenant_id,
             ).first()
-            if not pol_row:
-                pol_row = db.query(Policy).filter(Policy.policy_number == pol_str).first()
             if pol_row and getattr(pol_row, "id", None):
                 claim.policy_id = str(pol_row.id)
         except Exception:

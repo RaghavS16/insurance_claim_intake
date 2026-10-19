@@ -15,11 +15,14 @@ on:
       - "frontend/**"
       - ".github/workflows/production-compose-validation.yml"
 
+permissions:
+  contents: read
+
 jobs:
   compose-config:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Validate production compose interpolation
         run: |
           cat > .env.ci <<'EOF'

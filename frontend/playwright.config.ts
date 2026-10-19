@@ -14,6 +14,10 @@ const pythonCandidates = [
 ];
 const pythonCmd = pythonCandidates.find((p) => fs.existsSync(p)) || 'python';
 
+const env = (process.env.ENVIRONMENT || 'development').toLowerCase().trim();
+const isProd = env === 'prod' || env === 'production';
+const defaultDemoPassword = isProd ? '' : 'DemoPass123!';
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 60000,
@@ -43,7 +47,7 @@ export default defineConfig({
       reuseExistingServer: true,
       env: {
         ...process.env,
-        DEMO_PASSWORD: process.env.DEMO_PASSWORD || '',
+        DEMO_PASSWORD: process.env.DEMO_PASSWORD || defaultDemoPassword,
       },
     },
     {

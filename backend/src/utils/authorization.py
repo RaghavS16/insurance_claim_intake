@@ -11,13 +11,11 @@ from src.database.models import Adjuster, Claim, User
 
 def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None = None) -> None:
     role = current_user.role.upper()
-    claim_tenant = str(getattr(claim, "tenant_id", "") or "")
-    user_tenant = str(getattr(current_user, "tenant_id", "") or "")
-    if claim_tenant and user_tenant and claim_tenant != user_tenant:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant boundary violation.")
+    claim_tenant = str(getattr(claim, "tenant_id", "") or "").strip()
+    user_tenant = str(getattr(current_user, "tenant_id", "") or "").strip()
+    if not claim_tenant or not user_tenant or claim_tenant != user_tenant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant boundary violation or missing tenant context.")
     if role == "ADMIN":
-        if not user_tenant:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required.")
         return
     user_id_str = str(current_user.id)
     if role == "ADJUSTER":
@@ -47,5 +45,9 @@ def enforce_claim_ownership(claim: Claim, current_user: User, db: Session | None
         return
     claimant_id = None if claim.claimant_id is None else str(claim.claimant_id)
     customer_id = None if claim.customer_id is None else str(claim.customer_id)
-    if (claimant_id and claimant_id != user_id_str) or (customer_id and customer_id != user_id_str):
+    if claimant_id is None and customer_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: Claim has no valid ownership record.")
+    is_owner = (claimant_id == user_id_str) or (customer_id == user_id_str)
+    if not is_owner:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not own this claim.")
+

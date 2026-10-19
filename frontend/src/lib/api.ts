@@ -1,10 +1,9 @@
 import { User, Policy, Claim, Adjuster, KnowledgeDocument, AuditEvent } from './types';
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== 'undefined'
+  typeof window !== 'undefined'
     ? ''
-    : (process.env.INTERNAL_API_URL || 'http://backend:8000'));
+    : (process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
 
 // In-memory access token storage (never written to localStorage or cookies on client)
 let inMemoryAccessToken: string | null = null;
@@ -16,13 +15,19 @@ class ApiClient {
     return inMemoryAccessToken;
   }
 
-  public setToken(access: string | null, _refresh?: string) {
+  public setToken(access: string | null) {
     inMemoryAccessToken = access;
+  }
+
+  public clearCache() {
+    this.etagCache.clear();
   }
 
   public clearTokens() {
     inMemoryAccessToken = null;
+    this.clearCache();
   }
+
 
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE}${endpoint}`;
@@ -186,3 +191,5 @@ class ApiClient {
 }
 
 export const api = new ApiClient();
+export const clearApiCache = () => api.clearCache();
+

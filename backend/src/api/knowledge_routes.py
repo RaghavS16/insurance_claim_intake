@@ -225,13 +225,9 @@ def list_documents(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    query = db.query(KnowledgeDocument)
-    if user.tenant_id:
-        query = query.filter(
-            (KnowledgeDocument.tenant_id == str(user.tenant_id))
-            | (KnowledgeDocument.tenant_id.is_(None))
-            | (KnowledgeDocument.tenant_id == "")
-        )
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
+    query = db.query(KnowledgeDocument).filter(KnowledgeDocument.tenant_id == str(user.tenant_id))
     docs = query.order_by(KnowledgeDocument.created_at.desc()).limit(500).all()
     return {"items": [
         {
@@ -269,11 +265,11 @@ def update_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        (KnowledgeDocument.tenant_id == str(user.tenant_id))
-        | (KnowledgeDocument.tenant_id.is_(None))
-        | (KnowledgeDocument.tenant_id == ""),
+        KnowledgeDocument.tenant_id == str(user.tenant_id),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -316,11 +312,11 @@ async def replace_document_content(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
     old = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        (KnowledgeDocument.tenant_id == str(user.tenant_id))
-        | (KnowledgeDocument.tenant_id.is_(None))
-        | (KnowledgeDocument.tenant_id == ""),
+        KnowledgeDocument.tenant_id == str(user.tenant_id),
     ).first()
     if not old:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -377,11 +373,11 @@ async def reindex_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        (KnowledgeDocument.tenant_id == str(user.tenant_id))
-        | (KnowledgeDocument.tenant_id.is_(None))
-        | (KnowledgeDocument.tenant_id == ""),
+        KnowledgeDocument.tenant_id == str(user.tenant_id),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -440,11 +436,11 @@ def publish_document(
     user: User = Depends(require_role(["ADJUSTER", "ADMIN"])),
     db: Session = Depends(get_db),
 ):
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        (KnowledgeDocument.tenant_id == str(user.tenant_id))
-        | (KnowledgeDocument.tenant_id.is_(None))
-        | (KnowledgeDocument.tenant_id == ""),
+        KnowledgeDocument.tenant_id == str(user.tenant_id),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
@@ -485,11 +481,11 @@ def delete_document(
     db: Session = Depends(get_db),
 ):
     """Delete a knowledge document and cascade delete its chunks."""
+    if not user.tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context is required.")
     doc = db.query(KnowledgeDocument).filter(
         KnowledgeDocument.id == document_id,
-        (KnowledgeDocument.tenant_id == str(user.tenant_id))
-        | (KnowledgeDocument.tenant_id.is_(None))
-        | (KnowledgeDocument.tenant_id == ""),
+        KnowledgeDocument.tenant_id == str(user.tenant_id),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")

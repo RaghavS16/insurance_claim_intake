@@ -143,3 +143,47 @@ Log format: Structured JSON logs emitted to stdout/stderr. Forward to CloudWatch
 
 > [!NOTE]
 > MFA and Passkeys (WebAuthn) tables are retained in database migrations for architectural provenance (`0015_mfa`, `0018_worker_identity_and_webauthn`). However, hardware passkey/MFA verification flows are currently not active on user login endpoints. Authentication uses secure email OTP verification, argon2/bcrypt password hashing with constant-time verification, and HttpOnly SameSite=Strict cookie session management. The setting `PRIVILEGED_PASSKEY_REQUIRED` has been deprecated and removed.
+
+---
+
+## 10. Zero-Dollar Demo Deployment Architecture (Synthetic Data Only)
+
+> [!CAUTION]
+> **SYNTHETIC DATA RESTRICTION**:
+> The zero-dollar local and cloud deployment architectures described below are strictly designed for proof-of-concept demonstrations, developer testing, and non-sensitive synthetic data. They MUST NEVER be used for production operations or actual claimant PII / PHI.
+
+### 10.1 Zero-Dollar Local Demo Profile (`docker-compose.free-demo.yml`)
+For completely free, self-hosted, offline-capable demonstrations:
+- **Database & Vectors**: PostgreSQL 16 with pgvector (`pgvector/pgvector:pg16`), bound strictly to `127.0.0.1:5432`.
+- **Cache & Locks**: Redis 7 Alpine (`redis:7-alpine`), bound strictly to `127.0.0.1:6379`.
+- **Object Storage**: Local MinIO container (`minio/minio`), providing an S3-compatible API bound to `127.0.0.1:9000`. Storage is persisted in Docker named volume `demo_minio_data`.
+- **AI Models**: Local small language models via Ollama (`llama3.2:3b` or `mistral:7b`) with FastEmbed (`BAAI/bge-base-en-v1.5`) embeddings running on local CPU.
+- **Voice**: Disabled (`ENABLE_VOICE=false`) since TURN infrastructure is not provisioned.
+- **Reverse Proxy**: Optional Caddy proxy terminating TLS for demo subdomains (`profiles: ["proxy"]`).
+
+To run:
+```bash
+docker compose -f docker-compose.free-demo.yml --env-file deploy/free-demo.env.example up -d
+```
+
+### 10.2 Zero-Dollar Cloud Demo Architecture
+For public-facing online demonstrations using cloud free tiers with synthetic claims:
+1. **Frontend**: **Vercel Hobby Tier**
+   - Hosts Next.js 16 app with automatic CI deployments.
+   - Configure environment variables:
+     - `INTERNAL_API_URL`: URL of the FastAPI backend on Render.
+     - `NEXT_PUBLIC_API_URL`: Public backend endpoint or left empty for same-origin rewrite proxying.
+2. **Backend**: **Render Free Web Service**
+   - Deploys FastAPI container from `backend/Dockerfile`.
+   - Supports dynamic `$PORT` via the updated CMD.
+   - Configure `ALLOWED_ORIGINS` to include your Vercel deployment domain.
+3. **Database**: **Neon Serverless PostgreSQL**
+   - Free tier includes PostgreSQL 16 with `pgvector` extension enabled.
+   - Provide standard `DATABASE_URL` with SSL mode `sslmode=require`.
+4. **Cache**: **Upstash Serverless Redis**
+   - Free tier with TLS endpoint and token authentication for distributed rate limiting.
+5. **Storage**: **AWS S3 (Free Usage Tier)**
+   - 5 GB standard S3 storage with private bucket policies and IAM programmatic credentials.
+6. **Email**: **Gmail SMTP (Free via App Password)**
+   - Free transactional email delivery for test OTPs using standard TLS on port 587.
+

@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   static-and-unit:
     runs-on: ubuntu-latest
@@ -35,8 +38,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       REQUIRE_MIGRATIONS_IN_PRODUCTION: "true"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fb737c3360840042b45025708ab9a8a # v5.3.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -88,8 +91,8 @@ jobs:
       SECRET_KEY: test-secret-key-at-least-32-characters-long
       RUN_VOICE_INTEGRATION: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fb737c3360840042b45025708ab9a8a # v5.3.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -105,8 +108,8 @@ jobs:
       run:
         working-directory: infra/aws
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.8.5"
       - name: Terraform format check
@@ -122,17 +125,17 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build backend image
         run: docker build --pull -t insurance-claim-intake:${{ github.sha }} ./backend
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@fc46e5eb6d9539d09a2e6f47702f2323e2049e7b # v0.17.9
         with:
           image: insurance-claim-intake:${{ github.sha }}
           format: cyclonedx-json
           output-file: sbom.cdx.json
       - name: Scan image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # 0.29.0
         with:
           image-ref: insurance-claim-intake:${{ github.sha }}
           format: sarif
@@ -148,11 +151,11 @@ jobs:
           test "${findings}" -eq 0
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@6bb034414c76740fce704593702f4470b1a451d8 # v3.28.11
         with:
           sarif_file: trivy.sarif
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: sbom-${{ github.sha }}
           path: sbom.cdx.json
@@ -178,8 +181,8 @@ jobs:
       SECRET_KEY: test-secret-key-at-least-32-characters-long
       DATABASE_URL: postgresql://postgres:test@localhost:5432/insurance_claims
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fb737c3360840042b45025708ab9a8a # v5.3.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -191,7 +194,7 @@ jobs:
       - name: Execute restore drill
         run: python scripts/restore_drill.py
       - name: Upload DR report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: postgres-dr-report-${{ github.sha }}
           path: /tmp/insurance_claims_dr_report.json
@@ -202,8 +205,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f63919601466da006da38814ec5a6c3f3050 # v4.0.3
         with:
           node-version: 22
       - name: Install dependencies

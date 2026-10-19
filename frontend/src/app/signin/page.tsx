@@ -26,12 +26,12 @@ export default function SignInPage() {
     setLoading(true);
 
     try {
-      const res = await api.post<{ access_token: string; refresh_token: string; user: any }>(
+      const res = await api.post<{ access_token: string; user: any }>(
         '/api/v1/auth/login',
         { email, password }
       );
 
-      login(res.access_token, res.user, res.refresh_token);
+      login(res.access_token, res.user);
       showToast('Signed in successfully', 'success');
 
       if (res.user.role === 'CLAIMANT') router.push('/claimant/dashboard');

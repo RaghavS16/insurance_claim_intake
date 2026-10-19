@@ -168,8 +168,13 @@ variable "outbox_desired_count" {
 }
 
 variable "frontend_container_image" {
-  type    = string
-  default = ""
+  type        = string
+  description = "Pinned container image digest for the frontend service"
+
+  validation {
+    condition     = length(var.frontend_container_image) > 0 && can(regex("@sha256:[a-f0-9]{64}$", var.frontend_container_image))
+    error_message = "frontend_container_image must be non-empty and pinned by an immutable @sha256: digest."
+  }
 }
 
 variable "frontend_cpu" {
