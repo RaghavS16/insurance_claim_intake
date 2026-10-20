@@ -25,6 +25,26 @@ export default function SettingsPage() {
   const [statusActive, setStatusActive] = useState(true);
 
   useEffect(() => {
+    let active = true;
+    api.get<any>('/api/v1/auth/me')
+      .then((me) => {
+        if (active && me && me.id) {
+          updateUser(me);
+          const parts = (me.full_name || '').split(' ');
+          setFirstName(parts[0] || '');
+          setLastName(parts.slice(1).join(' ') || '');
+          setContactPhone(me.phone || '');
+          setEmail(me.email || '');
+          setStatusActive(me.status === 'active');
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (user) {
       const parts = (user.full_name || '').split(' ');
       setFirstName(parts[0] || '');

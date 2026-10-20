@@ -1,6 +1,7 @@
 import os
 import sys
 import getpass
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add backend directory to sys.path so it works locally and inside container
@@ -64,6 +65,7 @@ def create_admin() -> None:
                 role="ADMIN",
                 status="active",
                 tenant_id=tenant.id,
+                email_verified_at=datetime.now(timezone.utc),
             )
             db.add(admin)
             db.flush()
@@ -77,6 +79,7 @@ def create_admin() -> None:
             admin.status = "active"
             admin.tenant_id = tenant.id
             admin.password_hash = get_password_hash(admin_password)
+            admin.email_verified_at = datetime.now(timezone.utc)
             membership = db.query(TenantMembership).filter(
                 TenantMembership.tenant_id == tenant.id,
                 TenantMembership.user_id == admin.id,

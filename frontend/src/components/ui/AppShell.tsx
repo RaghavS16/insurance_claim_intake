@@ -37,6 +37,8 @@ export interface AppShellProps {
   activeTitle?: string;
   rightDrawerContent?: React.ReactNode;
   hideRightDrawer?: boolean;
+  noScroll?: boolean;
+  contentStyle?: React.CSSProperties;
 }
 
 export const AppShell: React.FC<AppShellProps> = ({
@@ -45,6 +47,8 @@ export const AppShell: React.FC<AppShellProps> = ({
   activeTitle,
   rightDrawerContent,
   hideRightDrawer = true,
+  noScroll = false,
+  contentStyle,
 }) => {
   const pathname = usePathname();
   const router = useRouter();
@@ -145,7 +149,6 @@ export const AppShell: React.FC<AppShellProps> = ({
         { label: 'Claims Oversight', href: '/admin/claims', icon: FolderOpen },
         { label: 'Adjusters Management', href: '/admin/adjusters', icon: Users },
         { label: 'Policies Management', href: '/admin/policies', icon: ShieldCheck },
-        { label: 'Knowledge Base (RAG)', href: '/adjuster/knowledge', icon: BookOpen },
         { label: 'System Audit Trail', href: '/admin/audit', icon: Activity },
       ];
     }
@@ -543,8 +546,15 @@ export const AppShell: React.FC<AppShellProps> = ({
         </header>
 
         {/* Content View */}
-        <main className="snow-content">
-          {activeTitle && <h1 className="snow-h1" style={{ marginBottom: 20 }}>{activeTitle}</h1>}
+        <main
+          className={`snow-content ${noScroll ? 'snow-no-scroll' : ''}`}
+          style={contentStyle}
+        >
+          {activeTitle && (
+            <h1 className="snow-h1" style={{ marginBottom: 16, flexShrink: 0 }}>
+              {activeTitle}
+            </h1>
+          )}
           {children}
         </main>
       </div>

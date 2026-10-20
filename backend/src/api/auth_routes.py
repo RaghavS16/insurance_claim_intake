@@ -144,7 +144,7 @@ def _auth_response(user: User, refresh_token: str | None = None, *, amr: list[st
     return {
         "access_token": create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": sv, "mfa": mfa_authenticated, "amr": amr or []}),
         "token_type": "bearer",
-        "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "role": user.role},
+        "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "phone": user.phone, "role": user.role},
     }
 
 
@@ -324,6 +324,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
             "id": user.id,
             "full_name": user.full_name,
             "email": user.email,
+            "phone": user.phone,
             "role": user.role,
         },
     }

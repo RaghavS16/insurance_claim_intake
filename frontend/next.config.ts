@@ -10,7 +10,7 @@ const backendTarget =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:8000";
 
-const connectSrc = ["'self'", backendTarget].filter(Boolean).join(" ");
+const connectSrc = ["'self'", backendTarget, "https://*.google.com", "https://*.googleapis.com", "wss:", "ws:"].filter(Boolean).join(" ");
 
 const cspHeader = [
   "default-src 'self';",

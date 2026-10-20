@@ -30,6 +30,51 @@ interface Message {
   citations?: string[];
 }
 
+function downsampleTo16k(input: Float32Array, inputSampleRate: number): Float32Array {
+  if (inputSampleRate === 16000) return input;
+  const ratio = inputSampleRate / 16000;
+  const newLength = Math.round(input.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const origIndex = Math.min(Math.round(i * ratio), input.length - 1);
+    result[i] = input[origIndex];
+  }
+  return result;
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number = 16000): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 function FileClaimContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -38,12 +83,19 @@ function FileClaimContent() {
 
   const { showToast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
   const liveTranscriptRef = useRef<string>('');
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const isVoiceActiveRef = useRef<boolean>(false);
+  const whisperIntervalRef = useRef<any>(null);
+  const audioContextRef = useRef<any>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const pcmChunksRef = useRef<Float32Array[]>([]);
+  const isTranscribingRef = useRef<boolean>(false);
+  const hasSpokenRef = useRef<boolean>(false);
+  const animFrameRef = useRef<number | null>(null);
 
   const [ticketId, setTicketId] = useState<string>(queryTicketId || '');
   const [claimData, setClaimData] = useState<any>(null);
@@ -59,6 +111,7 @@ function FileClaimContent() {
   const [inputTurn, setInputTurn] = useState('');
   const [liveTranscript, setLiveTranscript] = useState('');
   const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
   const [isThinking, setIsThinking] = useState(false);
   const [speechSynthesisEnabled, setSpeechSynthesisEnabled] = useState(true);
 
@@ -142,7 +195,12 @@ function FileClaimContent() {
   }, [queryTicketId, isFreshRequest]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
   }, [messages, liveTranscript, isThinking]);
 
   // Clean up speech recognition & silence timer on unmount
@@ -191,86 +249,85 @@ function FileClaimContent() {
     }, 120_000); // 2 minutes of silence
   };
 
-  const stopVoiceRecording = (sendImmediately = true) => {
+  const stopVoiceRecording = async (sendImmediately = true) => {
+    isVoiceActiveRef.current = false;
+    setIsVoiceActive(false);
+
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+    if (whisperIntervalRef.current) {
+      clearInterval(whisperIntervalRef.current);
+      whisperIntervalRef.current = null;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (scriptProcessorRef.current) {
+      try {
+        scriptProcessorRef.current.disconnect();
+      } catch {}
+      scriptProcessorRef.current = null;
+    }
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch {}
+    }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch {
-        // Ignore stop error on cleanup
-      }
+      } catch {}
       recognitionRef.current = null;
     }
-    setIsVoiceActive(false);
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    }
+    setAudioLevel(0);
 
-    const textFromSpeechApi = liveTranscriptRef.current.trim();
+    let finalText = liveTranscriptRef.current.trim();
     setLiveTranscript('');
     liveTranscriptRef.current = '';
 
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      recorder.onstop = async () => {
-        // Cleanup microphone hardware stream
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-          mediaStreamRef.current = null;
-        }
-
-        let finalText = textFromSpeechApi;
-
-        // If Web Speech API had network error or returned empty text, transcribe the recorded audio via local Whisper
-        if (!finalText && audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-          if (audioBlob.size > 800) {
-            try {
-              const formData = new FormData();
-              formData.append('file', audioBlob, 'recording.webm');
-              const res = await api.post<{ text: string }>('/api/v1/voice/transcribe', formData);
-              if (res.text && res.text.trim()) {
-                finalText = res.text.trim();
-              }
-            } catch (err: any) {
-              console.error('Local transcription error:', err);
-            }
+    // If live text is not yet available, transcribe the accumulated PCM samples
+    if (!finalText && pcmChunksRef.current.length > 0 && audioContextRef.current) {
+      try {
+        const totalSamples = pcmChunksRef.current.reduce((acc, c) => acc + c.length, 0);
+        const sampleRate = audioContextRef.current.sampleRate || 44100;
+        if (totalSamples > sampleRate * 0.4) {
+          const merged = new Float32Array(totalSamples);
+          let offset = 0;
+          for (const chunk of pcmChunksRef.current) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+          }
+          const downsampled = downsampleTo16k(merged, sampleRate);
+          const wavBlob = encodeWav(downsampled, 16000);
+          const formData = new FormData();
+          formData.append('file', wavBlob, 'final_speech.wav');
+          const res = await api.post<{ text: string }>('/api/v1/voice/transcribe', formData);
+          if (res?.text && res.text.trim()) {
+            finalText = res.text.trim();
           }
         }
-
-        audioChunksRef.current = [];
-        mediaRecorderRef.current = null;
-
-        if (sendImmediately && finalText) {
-          handleSendText(finalText);
-        } else if (finalText) {
-          setInputTurn(finalText);
-        }
-      };
-
-      try {
-        recorder.stop();
-      } catch {
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-          mediaStreamRef.current = null;
-        }
-        if (sendImmediately && textFromSpeechApi) {
-          handleSendText(textFromSpeechApi);
-        }
+      } catch (err) {
+        console.error('Final speech transcribe error:', err);
       }
-    } else {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      }
-      if (sendImmediately && textFromSpeechApi) {
-        handleSendText(textFromSpeechApi);
-      }
+    }
+
+    pcmChunksRef.current = [];
+    audioContextRef.current = null;
+
+    if (sendImmediately && finalText) {
+      setInputTurn('');
+      handleSendText(finalText);
     }
   };
 
-  // Browser Voice Input with Simultaneous Speak & Transcribe and Whisper Streaming
+  // Browser Voice Input with Simultaneous Live Real-Time Transcription
   const toggleVoiceMode = async () => {
     if (isVoiceActive) {
       // Click mic again to cut mic -> immediate send turn
@@ -280,38 +337,63 @@ function FileClaimContent() {
 
     if (typeof window === 'undefined') return;
 
-    // 1. Request microphone access and start MediaRecorder for continuous chunk capture
+    let stream: MediaStream | null = null;
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
-        audioChunksRef.current = [];
+        pcmChunksRef.current = [];
+        hasSpokenRef.current = false;
 
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : MediaRecorder.isTypeSupported('audio/mp4')
-          ? 'audio/mp4'
-          : '';
-        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-        recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) {
-            audioChunksRef.current.push(e.data);
-          }
-        };
-        recorder.start(250);
-        mediaRecorderRef.current = recorder;
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtxClass) {
+          const ctx = new AudioCtxClass();
+          audioContextRef.current = ctx;
+
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 64;
+
+          const source = ctx.createMediaStreamSource(stream);
+          source.connect(analyser);
+
+          // Audio buffer processor for live raw PCM capture
+          const processor = ctx.createScriptProcessor(4096, 1, 1);
+          scriptProcessorRef.current = processor;
+          processor.onaudioprocess = (e) => {
+            if (!isVoiceActiveRef.current) return;
+            const input = e.inputBuffer.getChannelData(0);
+            pcmChunksRef.current.push(new Float32Array(input));
+          };
+          source.connect(processor);
+          processor.connect(ctx.destination);
+
+          // Volume animation loop
+          const freqData = new Uint8Array(analyser.frequencyBinCount);
+          const checkVolume = () => {
+            if (!isVoiceActiveRef.current) return;
+            analyser.getByteFrequencyData(freqData);
+            let sum = 0;
+            for (let i = 0; i < freqData.length; i++) sum += freqData[i];
+            const normalized = Math.min(1, (sum / freqData.length) / 45);
+            setAudioLevel(normalized);
+            animFrameRef.current = requestAnimationFrame(checkVolume);
+          };
+          checkVolume();
+        }
       }
     } catch (err: any) {
       showToast('Could not access microphone. Please grant browser microphone permissions.', 'error');
       return;
     }
 
+    isVoiceActiveRef.current = true;
     setIsVoiceActive(true);
     setLiveTranscript('');
     liveTranscriptRef.current = '';
+    setInputTurn('');
     startSilenceTimer();
 
-    // 2. Start Web Speech Recognition with immediate interim results
+    // 2. Web Speech Recognition for instant client-side speech
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
@@ -321,17 +403,24 @@ function FileClaimContent() {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
+        recognition.maxAlternatives = 1;
 
         recognition.onresult = (event: any) => {
-          let interimText = '';
+          let finalTranscript = '';
+          let interimTranscript = '';
           for (let i = 0; i < event.results.length; ++i) {
-            interimText += event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript + ' ';
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
           }
-          if (interimText.trim()) {
-            setLiveTranscript(interimText);
-            liveTranscriptRef.current = interimText;
-            setInputTurn(interimText);
-            startSilenceTimer(); // Reset 2-min silence timer on vocal activity
+          const combined = (finalTranscript + interimTranscript).trim();
+          if (combined) {
+            setLiveTranscript(combined);
+            liveTranscriptRef.current = combined;
+            hasSpokenRef.current = true;
+            startSilenceTimer();
           }
         };
 
@@ -340,22 +429,68 @@ function FileClaimContent() {
         };
 
         recognition.onend = () => {
-          // If mic is still active and recognition stopped, try restarting if supported
-          if (isVoiceActive && recognitionRef.current) {
+          if (isVoiceActiveRef.current && recognitionRef.current) {
             try {
               recognitionRef.current.start();
-            } catch {
-              // Ignore restart error if already listening
-            }
+            } catch {}
           }
         };
 
         recognition.start();
         recognitionRef.current = recognition;
       } catch (err: any) {
-        console.debug('SpeechRecognition start failed, relying on Whisper:', err);
+        console.debug('SpeechRecognition start error:', err);
       }
     }
+
+    // 3. Robust Live Streaming Whisper Poller via PCM WAV
+    whisperIntervalRef.current = setInterval(async () => {
+      if (!isVoiceActiveRef.current || isTranscribingRef.current) return;
+      if (!audioContextRef.current || pcmChunksRef.current.length === 0) return;
+
+      const totalSamples = pcmChunksRef.current.reduce((acc, c) => acc + c.length, 0);
+      const sampleRate = audioContextRef.current.sampleRate || 44100;
+      // Need at least 0.75 seconds of audio to transcribe meaningfully
+      if (totalSamples < sampleRate * 0.75) return;
+
+      // Merge all PCM chunks into one Float32Array
+      const merged = new Float32Array(totalSamples);
+      let offset = 0;
+      for (const chunk of pcmChunksRef.current) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Check vocal energy
+      let sumSq = 0;
+      for (let i = 0; i < merged.length; i++) {
+        sumSq += merged[i] * merged[i];
+      }
+      const rms = Math.sqrt(sumSq / merged.length);
+      // Only transcribe if speech energy is present or has already spoken
+      if (rms < 0.008 && !hasSpokenRef.current) return;
+
+      const downsampled = downsampleTo16k(merged, sampleRate);
+      const wavBlob = encodeWav(downsampled, 16000);
+
+      isTranscribingRef.current = true;
+      try {
+        const formData = new FormData();
+        formData.append('file', wavBlob, 'live_speech.wav');
+        const res = await api.post<{ text: string }>('/api/v1/voice/transcribe', formData);
+        if (isVoiceActiveRef.current && res?.text && res.text.trim()) {
+          const trimmed = res.text.trim();
+          setLiveTranscript(trimmed);
+          liveTranscriptRef.current = trimmed;
+          hasSpokenRef.current = true;
+          startSilenceTimer();
+        }
+      } catch (err) {
+        console.debug('Whisper live poll note:', err);
+      } finally {
+        isTranscribingRef.current = false;
+      }
+    }, 1200);
   };
 
   // Send turn (text or voice) to backend
@@ -522,8 +657,8 @@ function FileClaimContent() {
   return (
     <AppShell
       breadcrumbs={['Claimant', 'Intake', ticketId ? `#${ticketId}` : 'New Claim']}
-      activeTitle="Conversational Claim Intake"
       hideRightDrawer
+      noScroll
     >
       {/* Top Bar Policy Selector */}
       <div
@@ -537,6 +672,7 @@ function FileClaimContent() {
           borderRadius: 12,
           border: '1px solid #E5E7EB',
           gap: 12,
+          flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
@@ -544,30 +680,31 @@ function FileClaimContent() {
           <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>
             Filing Against Policy:
           </span>
-          <select
-            className="snow-select"
-            style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #D1D5DB', fontSize: 13, minWidth: 260 }}
-            value={selectedPolicyNumber}
-            onChange={async (e) => {
-              const newVal = e.target.value;
-              setSelectedPolicyNumber(newVal);
-              if (ticketId && (!claimData?.status || ['draft', 'verified', 'pending_confirmation'].includes(claimData.status))) {
-                try {
-                  const patched = await api.patch<any>(`/api/v1/claims/${ticketId}`, { policy_id: newVal || null });
-                  if (patched) setClaimData(patched);
-                } catch {
-                  // non-fatal
+          <div style={{ minWidth: 280, maxWidth: 520, flex: 1 }}>
+            <Select
+              size="sm"
+              value={selectedPolicyNumber}
+              onChange={async (newVal) => {
+                setSelectedPolicyNumber(newVal);
+                if (ticketId && (!claimData?.status || ['draft', 'verified', 'pending_confirmation'].includes(claimData.status))) {
+                  try {
+                    const patched = await api.patch<any>(`/api/v1/claims/${ticketId}`, { policy_id: newVal || null });
+                    if (patched) setClaimData(patched);
+                  } catch {
+                    // non-fatal
+                  }
                 }
-              }
-            }}
-          >
-            <option value="">-- No Specific Policy (General Inquiry / Auto-Resolve) --</option>
-            {userPolicies.map((p) => (
-              <option key={p.policy_number} value={p.policy_number}>
-                {p.policy_number} — {p.policy_type?.toUpperCase()} (Limit: ${Number(p.coverage_amount || 0).toLocaleString()})
-              </option>
-            ))}
-          </select>
+              }}
+              options={[
+                { value: '', label: '-- No Specific Policy (General Inquiry / Auto-Resolve) --' },
+                ...userPolicies.map((p) => ({
+                  value: p.policy_number,
+                  label: `${p.policy_number} — ${p.policy_type?.toUpperCase()} (Limit: $${Number(p.coverage_amount || 0).toLocaleString()})`,
+                })),
+              ]}
+              style={{ marginBottom: 0 }}
+            />
+          </div>
         </div>
         {ticketId && (
           <div className="snow-caption" style={{ color: '#6B7280' }}>
@@ -582,8 +719,9 @@ function FileClaimContent() {
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1.2fr)',
           gap: 16,
-          height: 'calc(100vh - 220px)',
-          minHeight: 520,
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
         }}
       >
         {/* Left Column: Chat Messages & Input */}
@@ -592,20 +730,24 @@ function FileClaimContent() {
             display: 'flex',
             flexDirection: 'column',
             height: '100%',
+            minHeight: 0,
             minWidth: 0,
+            overflow: 'hidden',
           }}
         >
           {/* Messages Scroll Area */}
           <div
-            className="snow-card"
+            ref={messagesContainerRef}
+            className="snow-card snow-scrollbar"
             style={{
               flex: 1,
+              minHeight: 0,
               overflowY: 'auto',
-              padding: 24,
+              padding: '20px 24px',
               display: 'flex',
               flexDirection: 'column',
               gap: 16,
-              marginBottom: 14,
+              marginBottom: 12,
               borderRadius: 16,
             }}
           >
@@ -690,31 +832,32 @@ function FileClaimContent() {
             <div
               className="snow-chat-bubble-user"
               style={{
-                opacity: 0.95,
-                border: '1.5px dashed #007AFF',
+                opacity: 0.98,
+                border: '1.5px solid #007AFF',
                 backgroundColor: '#F0F7FF',
                 color: '#1C1C1C',
                 position: 'relative',
+                boxShadow: '0 4px 14px rgba(0, 122, 255, 0.12)',
               }}
             >
-              <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                {liveTranscript || 'Listening to microphone... Speak your claim details'}
-              </div>
-              <div
-                className="snow-flex snow-items-center snow-gap-2"
-                style={{ marginTop: 6, fontSize: 11, color: '#007AFF', fontWeight: 500 }}
-              >
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    backgroundColor: '#007AFF',
-                    animation: 'snowPulseRing 1.2s infinite',
-                  }}
-                />
-                <span>{liveTranscript ? 'Transcribing live in real time...' : 'Microphone open — speak now...'}</span>
-              </div>
+              {liveTranscript ? (
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, fontSize: 14, fontWeight: 500, color: '#0F172A' }}>
+                  {liveTranscript}
+                  <span className="snow-live-cursor" />
+                </div>
+              ) : (
+                <div className="snow-flex snow-items-center snow-gap-2" style={{ padding: '2px 0' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height: 16 }}>
+                    <span className="snow-soundwave-bar" />
+                    <span className="snow-soundwave-bar" />
+                    <span className="snow-soundwave-bar" />
+                  </div>
+                  <span style={{ fontSize: 13, color: '#007AFF', fontWeight: 500 }}>
+                    Listening...
+                  </span>
+                  <span className="snow-live-cursor" />
+                </div>
+              )}
             </div>
           )}
 
@@ -757,6 +900,7 @@ function FileClaimContent() {
             gap: 10,
             boxShadow: '0 4px 18px rgba(0,0,0,0.06)',
             backgroundColor: '#FFFFFF',
+            flexShrink: 0,
           }}
         >
           {/* Reset Chat Button */}
@@ -818,7 +962,7 @@ function FileClaimContent() {
             }}
             placeholder={
               isVoiceActive
-                ? 'Listening & transcribing simultaneously... Speak or click mic to send'
+                ? 'Listening & transcribing in real time... Speak now or click mic to send'
                 : 'Type your message or click the mic to speak...'
             }
             value={inputTurn}
@@ -891,7 +1035,7 @@ function FileClaimContent() {
 
       {/* Right Column: Live Claim Dossier Panel */}
       <div
-        className="snow-card"
+        className="snow-card snow-scrollbar"
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -901,6 +1045,8 @@ function FileClaimContent() {
           overflowY: 'auto',
           backgroundColor: '#FFFFFF',
           minWidth: 0,
+          height: '100%',
+          minHeight: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #F3F4F6', paddingBottom: 10 }}>

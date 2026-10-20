@@ -22,6 +22,7 @@ import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
+import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { Claim, ClaimStatus } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -332,25 +333,22 @@ export default function AdjusterQueuePage() {
                         </div>
                         <div className="snow-flex snow-justify-between snow-items-center">
                           <span className="snow-micro" style={{ color: '#A1A1AA' }}>{claim.created_at || claim.event_date || '—'}</span>
-                          <select
-                            className="snow-caption"
-                            style={{
-                              background: '#F4F5F7',
-                              border: 'none',
-                              borderRadius: 4,
-                              padding: '2px 4px',
-                              cursor: 'pointer',
-                            }}
-                            value={claim.status}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => handleTransitionStatus(claim.ticket_id, e.target.value as ClaimStatus)}
-                          >
-                            <option value="submitted">Submitted</option>
-                            <option value="under_review">In Review</option>
-                            <option value="pending_evidence">Pending</option>
-                            <option value="approved">Approved</option>
-                            <option value="rejected">Rejected</option>
-                          </select>
+                          <div style={{ width: 130 }} onClick={(e) => e.stopPropagation()}>
+                            <Select
+                              size="sm"
+                              value={claim.status}
+                              onChange={(val) => handleTransitionStatus(claim.ticket_id, val as ClaimStatus)}
+                              options={[
+                                { value: 'submitted', label: 'Submitted' },
+                                { value: 'under_review', label: 'In Review' },
+                                { value: 'pending_evidence', label: 'Pending' },
+                                { value: 'approved', label: 'Approved' },
+                                { value: 'rejected', label: 'Rejected' },
+                              ]}
+                              style={{ marginBottom: 0 }}
+                              triggerStyle={{ height: 28, padding: '2px 8px', fontSize: 12, backgroundColor: '#F4F5F7', border: '1px solid #E5E7EB' }}
+                            />
+                          </div>
                         </div>
                       </div>
                     ))

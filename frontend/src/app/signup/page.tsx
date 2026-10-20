@@ -95,13 +95,7 @@ export default function SignUpPage() {
           />
         </Link>
 
-        <nav className="snow-flex snow-items-center snow-gap-6 snow-caption" style={{ color: '#71717A' }}>
-          <span style={{ cursor: 'pointer' }}>Product</span>
-          <span style={{ cursor: 'pointer' }}>Solutions</span>
-          <span style={{ cursor: 'pointer' }}>Resources</span>
-          <span style={{ cursor: 'pointer' }}>Download</span>
-          <span style={{ cursor: 'pointer' }}>Pricing</span>
-        </nav>
+
 
         <div className="snow-flex snow-items-center snow-gap-2">
           <Link href="/signup">
@@ -178,8 +172,8 @@ export default function SignUpPage() {
                           ? strength >= 3
                             ? '#10B981'
                             : strength === 2
-                            ? '#F59E0B'
-                            : '#EF4444'
+                              ? '#F59E0B'
+                              : '#EF4444'
                           : '#EBECEF',
                       transition: 'background-color 0.2s ease',
                     }}

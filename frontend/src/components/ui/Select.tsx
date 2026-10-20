@@ -20,6 +20,8 @@ export interface SelectProps {
   id?: string;
   className?: string;
   style?: React.CSSProperties;
+  triggerStyle?: React.CSSProperties;
+  size?: 'sm' | 'md';
 }
 
 export const Select: React.FC<SelectProps> = ({
@@ -34,6 +36,8 @@ export const Select: React.FC<SelectProps> = ({
   id: propId,
   className = '',
   style,
+  triggerStyle,
+  size = 'md',
 }) => {
   const generatedId = useId();
   const id = propId || generatedId;
@@ -109,7 +113,7 @@ export const Select: React.FC<SelectProps> = ({
     <div
       ref={containerRef}
       className={`snow-form-group ${className}`}
-      style={{ position: 'relative', width: '100%', marginBottom: 16, ...style }}
+      style={{ position: 'relative', width: '100%', marginBottom: label ? 16 : 0, ...style }}
     >
       {label && (
         <label
@@ -139,22 +143,23 @@ export const Select: React.FC<SelectProps> = ({
         className="snow-flex snow-items-center snow-justify-between"
         style={{
           width: '100%',
-          height: 40,
-          padding: '8px 14px',
+          height: size === 'sm' ? 32 : 40,
+          padding: size === 'sm' ? '4px 10px' : '8px 14px',
           backgroundColor: disabled ? '#F4F4F5' : '#FFFFFF',
           border: error ? '1px solid #EF4444' : isOpen ? '1px solid #1C1C1C' : '1px solid #E4E4E7',
-          borderRadius: 10,
+          borderRadius: size === 'sm' ? 8 : 10,
           cursor: disabled ? 'not-allowed' : 'pointer',
           outline: 'none',
           boxShadow: isOpen ? '0 0 0 2px rgba(28,28,28,0.08)' : 'none',
           transition: 'all 0.15s ease',
           textAlign: 'left',
+          ...triggerStyle,
         }}
       >
         <span
           className="snow-body"
           style={{
-            fontSize: 14,
+            fontSize: size === 'sm' ? 13 : 14,
             fontWeight: selectedOption ? 500 : 400,
             color: selectedOption ? '#1C1C1C' : '#A1A1AA',
             whiteSpace: 'nowrap',
@@ -165,7 +170,7 @@ export const Select: React.FC<SelectProps> = ({
           {selectedOption ? selectedOption.label : placeholder}
         </span>
         <ChevronDown
-          size={16}
+          size={size === 'sm' ? 14 : 16}
           style={{
             color: '#71717A',
             transition: 'transform 0.2s ease',
