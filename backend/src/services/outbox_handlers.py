@@ -16,6 +16,19 @@ from src.utils.logger import app_logger
 logger = app_logger
 
 
+def _resolve_smtp_host() -> str:
+    host = settings.SMTP_HOST or "localhost"
+    is_mailpit = getattr(settings, "EMAIL_BACKEND", "mailpit").lower() == "mailpit"
+    if is_mailpit and host in ("localhost", "127.0.0.1"):
+        import socket
+        try:
+            socket.gethostbyname("mailpit")
+            return "mailpit"
+        except (socket.error, OSError):
+            pass
+    return host
+
+
 def _send_transactional_email(event: OutboxEvent) -> None:
     """Deliver a queued email and raise on delivery failure so the outbox retries."""
     payload = dict(event.payload_json or {})
@@ -40,14 +53,15 @@ def _send_transactional_email(event: OutboxEvent) -> None:
     msg["To"] = to_email
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
     password = settings.SMTP_PASSWORD or ""
+    smtp_host = _resolve_smtp_host()
 
     if settings.SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+        with smtplib.SMTP_SSL(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
             if settings.SMTP_USERNAME and password:
                 server.login(settings.SMTP_USERNAME, password)
             refused = server.sendmail(from_email, [to_email], msg.as_string())
     else:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+        with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
             if settings.SMTP_USE_TLS:
                 server.starttls()
             if settings.SMTP_USERNAME and password:
@@ -81,13 +95,14 @@ def _send_email(to_email: str, subject: str, body: str, event_id: str) -> None:
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
     msg["X-IntelliClaim-Event-ID"] = event_id
     password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
+    smtp_host = _resolve_smtp_host()
     if settings.SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+        with smtplib.SMTP_SSL(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
             if settings.SMTP_USERNAME and password:
                 server.login(settings.SMTP_USERNAME, password)
             refused = server.sendmail(from_email, [to_email], msg.as_string())
     else:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
+        with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
             if settings.SMTP_USE_TLS:
                 server.starttls()
             if settings.SMTP_USERNAME and password:

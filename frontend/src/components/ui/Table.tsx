@@ -143,7 +143,7 @@ export function Table<T extends Record<string, any>>({
     <div className="snow-flex-col" style={{ width: '100%', gap: 16 }}>
       {/* Table Action Bar (hidden when hideToolbar is true) */}
       {!hideToolbar && (
-        <div className="snow-flex snow-justify-between snow-items-center">
+        <div className="snow-table-toolbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div className="snow-flex snow-items-center snow-gap-2">
             {onAdd && (
               <Button size="sm" variant="secondary" icon={<Plus size={14} />} onClick={onAdd}>
@@ -159,7 +159,7 @@ export function Table<T extends Record<string, any>>({
             />
           </div>
 
-          <div style={{ position: 'relative', width: 240 }}>
+          <div style={{ position: 'relative', width: 240, maxWidth: '100%', flex: '1 1 200px' }}>
             <Search
               size={14}
               style={{ position: 'absolute', left: 10, top: 11, color: '#A1A1AA' }}

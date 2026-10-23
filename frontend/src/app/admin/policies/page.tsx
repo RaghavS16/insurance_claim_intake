@@ -12,6 +12,7 @@ import { Select } from '@/components/ui/Select';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { BadgePill, BadgeDot } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
+import { FileUpload } from '@/components/ui/FileUpload';
 import { Policy } from '@/lib/types';
 import { api } from '@/lib/api';
 
@@ -276,12 +277,12 @@ export default function AdminPoliciesPage() {
     {
       key: 'coverage_amount',
       header: 'Coverage Limit',
-      render: (p) => `$${Number(p.coverage_amount || 0).toLocaleString()}`,
+      render: (p) => `₹${Number(p.coverage_amount || 0).toLocaleString('en-IN')}`,
     },
     {
       key: 'deductible',
       header: 'Deductible',
-      render: (p) => `$${Number(p.deductible || 0).toLocaleString()}`,
+      render: (p) => `₹${Number(p.deductible || 0).toLocaleString('en-IN')}`,
     },
     {
       key: 'effective_date',
@@ -302,12 +303,12 @@ export default function AdminPoliciesPage() {
   return (
     <AppShell breadcrumbs={['Admin', 'Policies']} activeTitle="Policy Underwriting Registry">
       {/* Action Header */}
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-        <p className="snow-caption" style={{ color: '#71717A' }}>
+      <div className="snow-action-bar">
+        <p className="snow-caption" style={{ color: '#71717A', margin: 0 }}>
           Master registry of underwritten policies. Supports single manual entry and bulk CSV/XLSX imports.
         </p>
 
-        <div className="snow-flex snow-gap-2">
+        <div className="snow-action-buttons">
           <Button
             size="sm"
             variant="secondary"
@@ -494,22 +495,13 @@ export default function AdminPoliciesPage() {
       >
         <form onSubmit={handleImportCSV}>
           <div className="snow-form-group">
-            <label className="snow-label">Select .csv or .xlsx Spreadsheet</label>
-            <input
-              type="file"
+            <FileUpload
+              label="Select .csv or .xlsx Spreadsheet"
               accept=".csv,.xlsx"
-              className="snow-input"
-              style={{ paddingTop: 8 }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  setImportFile(e.target.files[0]);
-                }
-              }}
-              required
+              file={importFile}
+              onFileSelect={(f: File | null) => setImportFile(f)}
+              hint="Download the standard CSV template for required columns and format validation."
             />
-            <span className="snow-caption" style={{ color: '#71717A', marginTop: 4, display: 'block' }}>
-              Download the standard CSV template for required columns and format validation.
-            </span>
           </div>
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>

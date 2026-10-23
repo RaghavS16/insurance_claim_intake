@@ -204,31 +204,23 @@ def resolve_bearer_user(
     return user
 
 
-def get_claim_or_404(db: Session, ticket_id: str) -> Claim:
-    """Fetch a Claim by ticket_id and raise HTTP 404 if not found.
-
-    Replaces the repeated pattern::
-
-        claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
-        if not claim:
-            raise HTTPException(status_code=404, detail="Claim not found.")
-    """
-    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id).first()
+def get_claim_or_404(db: Session, ticket_id: str, tenant_id: Optional[str] = None) -> Claim:
+    """Fetch a Claim by ticket_id and optional tenant_id, raising HTTP 404 if not found."""
+    query = db.query(Claim).filter(Claim.ticket_id == ticket_id)
+    if tenant_id:
+        query = query.filter(Claim.tenant_id == tenant_id)
+    claim = query.first()
     if not claim:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found.")
     return claim
 
 
-def get_adjuster_or_404(db: Session, adjuster_id: str) -> Adjuster:
-    """Fetch an Adjuster by id and raise HTTP 404 if not found.
-
-    Replaces the repeated pattern::
-
-        adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
-        if not adjuster:
-            raise HTTPException(status_code=404, detail="Adjuster not found.")
-    """
-    adjuster = db.query(Adjuster).filter(Adjuster.id == adjuster_id).first()
+def get_adjuster_or_404(db: Session, adjuster_id: str, tenant_id: Optional[str] = None) -> Adjuster:
+    """Fetch an Adjuster by id and optional tenant_id, raising HTTP 404 if not found."""
+    query = db.query(Adjuster).filter(Adjuster.id == adjuster_id)
+    if tenant_id:
+        query = query.filter(Adjuster.tenant_id == tenant_id)
+    adjuster = query.first()
     if not adjuster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjuster not found.")
     return adjuster

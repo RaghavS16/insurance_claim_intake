@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { usePolling } from '@/lib/use-polling';
+import { api } from '@/lib/api';
 import { Button } from './Button';
 import { Tooltip } from './Tooltip';
 
@@ -60,7 +61,6 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const { data: notificationsData, setData: setNotificationsData } = usePolling<any[]>(
     async () => {
-      const { api } = await import('@/lib/api');
       const res = await api.get<any>('/api/v1/notifications');
       return Array.isArray(res?.items) ? res.items : [];
     },
@@ -104,6 +104,12 @@ export const AppShell: React.FC<AppShellProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const isUnauthorized = Boolean(
+    user &&
+    ((role === 'CLAIMANT' && (pathname.startsWith('/adjuster') || pathname.startsWith('/admin'))) ||
+     (role === 'ADJUSTER' && pathname.startsWith('/admin')))
+  );
+
   useEffect(() => {
     if (isLoading) return;
     if (!user) {
@@ -121,7 +127,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     }
   }, [user, role, isLoading, pathname, router]);
 
-  if (isLoading || !user) {
+  if (isLoading || !user || isUnauthorized) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F9FB' }}>
         <div className="snow-caption" style={{ color: '#71717A' }}>Authenticating session...</div>
@@ -475,9 +481,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                           cursor: 'pointer',
                           fontWeight: 500,
                         }}
-                        onClick={() =>
-                          setNotifications((prev: any[]) => prev.map((n: any) => ({ ...n, unread: false })))
-                        }
+                        onClick={async () => {
+                          setNotifications((prev: any[]) => prev.map((n: any) => ({ ...n, unread: false })));
+                          try {
+                            await api.post('/api/v1/notifications/mark-read');
+                          } catch (err) {
+                            console.error('Failed to persist mark-read notification state', err);
+                          }
+                        }}
                       >
                         Mark all read
                       </button>
@@ -521,7 +532,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                       <button
                         type="button"
                         style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: 12, cursor: 'pointer' }}
-                        onClick={() => setNotifications([])}
+                        onClick={async () => {
+                          setNotifications([]);
+                          try {
+                            await api.post('/api/v1/notifications/clear');
+                          } catch (err) {
+                            console.error('Failed to persist clear notification state', err);
+                          }
+                        }}
                       >
                         Clear notifications
                       </button>

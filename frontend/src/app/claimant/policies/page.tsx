@@ -87,12 +87,12 @@ export default function ClaimantPoliciesPage() {
     {
       key: 'coverage_amount',
       header: 'Coverage Limit',
-      render: (p) => (p.coverage_amount ? `$${Number(p.coverage_amount).toLocaleString()}` : '—'),
+      render: (p) => (p.coverage_amount ? `₹${Number(p.coverage_amount).toLocaleString('en-IN')}` : '—'),
     },
     {
       key: 'deductible',
       header: 'Deductible',
-      render: (p) => (p.deductible ? `$${Number(p.deductible).toLocaleString()}` : '—'),
+      render: (p) => (p.deductible ? `₹${Number(p.deductible).toLocaleString('en-IN')}` : '—'),
     },
     {
       key: 'expiry_date',

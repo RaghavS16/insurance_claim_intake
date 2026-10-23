@@ -31,13 +31,17 @@ export interface Policy {
 export type ClaimStatus = 
   | 'draft' 
   | 'submitted' 
+  | 'pending_adjuster'
+  | 'assigned'
   | 'under_review' 
   | 'pending_evidence' 
   | 'approved' 
+  | 'partially_approved'
   | 'rejected' 
   | 'escalated'
   | 'evaluated'
   | 'verified'
+  | 'closed'
   | 'discarded';
 
 export interface ConversationTurn {
@@ -53,6 +57,7 @@ export interface ConversationTurn {
 export interface Claim {
   id: string;
   ticket_id: string;
+  title?: string | null;
   claimant_id?: string | null;
   customer_id?: string | null;
   policy_id?: string | null;

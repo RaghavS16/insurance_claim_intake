@@ -22,10 +22,11 @@ export default function TrackClaimsPage() {
       .then((data) => {
         const raw = Array.isArray(data) ? data : data?.items || [];
         // Only filed / submitted claims (exclude drafts / unsubmitted chat sessions)
+        const submittedStatuses = ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'escalated', 'closed'];
         const submittedOnly = raw.filter(
           (c: Claim) =>
             c.status &&
-            !['draft', 'pending_confirmation', 'discarded', 'not_started'].includes(c.status.toLowerCase())
+            submittedStatuses.includes(c.status.toLowerCase())
         );
         setClaims(submittedOnly);
       })
@@ -72,7 +73,7 @@ export default function TrackClaimsPage() {
     {
       key: 'estimated_claim_amount',
       header: 'Estimated Loss',
-      render: (c) => (c.estimated_claim_amount ? `$${Number(c.estimated_claim_amount).toLocaleString()}` : '—'),
+      render: (c) => (c.estimated_claim_amount ? `₹${Number(c.estimated_claim_amount).toLocaleString('en-IN')}` : '—'),
     },
     {
       key: 'status',

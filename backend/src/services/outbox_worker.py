@@ -10,26 +10,28 @@ from src.services.outbox import mark_processed, mark_retry
 from src.services.observability import record_outbox
 
 async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
-    db=SessionLocal()
+    db = SessionLocal()
     try:
-        rows=db.execute(
+        stmt = (
             select(OutboxEvent)
-            .where(OutboxEvent.status=="pending", OutboxEvent.next_attempt_at <= datetime.now(timezone.utc))
+            .where(OutboxEvent.status == "pending", OutboxEvent.next_attempt_at <= datetime.now(timezone.utc))
             .order_by(OutboxEvent.created_at)
             .limit(limit)
-            .with_for_update(skip_locked=True)
-        ).scalars().all()
-        processed=0
+        )
+        if db.bind and db.bind.dialect.name == "postgresql":
+            stmt = stmt.with_for_update(skip_locked=True)
+        rows = db.execute(stmt).scalars().all()
+        processed = 0
         for row in rows:
-            handler=handlers.get(row.event_type)
+            handler = handlers.get(row.event_type)
             if handler is None:
-                row.status="dead_letter"
+                row.status = "dead_letter"
                 record_outbox(outcome="dead_letter")
-                row.last_error="No handler registered for event type"
-                row.processed_at=datetime.now(timezone.utc)
+                row.last_error = "No handler registered for event type"
+                row.processed_at = datetime.now(timezone.utc)
                 continue
             try:
-                result=handler(row)
+                result = handler(row)
                 if asyncio.iscoroutine(result):
                     await result
                 mark_processed(row)
@@ -46,11 +48,14 @@ async def dispatch_once(handlers: dict[str, object], limit: int = 25) -> int:
     finally:
         db.close()
 
-def _touch_heartbeat(path: str = "/tmp/outbox_worker_heartbeat") -> None:
+def _touch_heartbeat(path: str | None = None) -> None:
     try:
+        import os
+        import tempfile
         import time
         from pathlib import Path
-        p = Path(path)
+        heartbeat_path = path or os.path.join(tempfile.gettempdir(), "outbox_worker_heartbeat")
+        p = Path(heartbeat_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(str(time.time()), encoding="utf-8")
     except Exception:

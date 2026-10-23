@@ -146,7 +146,7 @@ export default function AdjusterQueuePage() {
     {
       key: 'estimated_claim_amount',
       header: 'Loss Amount',
-      render: (c) => (c.estimated_claim_amount ? `$${c.estimated_claim_amount.toLocaleString()}` : '—'),
+      render: (c) => (c.estimated_claim_amount ? `₹${Number(c.estimated_claim_amount).toLocaleString('en-IN')}` : '—'),
     },
     {
       key: 'created_at',
@@ -272,7 +272,12 @@ export default function AdjusterQueuePage() {
           }}
         >
           {kanbanColumns.map((col) => {
-            const colClaims = claims.filter((c) => c.status === col.id);
+            const colClaims = claims.filter((c) => {
+              if (col.id === 'submitted') {
+                return c.status === 'submitted' || c.status === 'pending_adjuster' || c.status === 'assigned';
+              }
+              return c.status === col.id;
+            });
 
             return (
               <div
@@ -325,7 +330,7 @@ export default function AdjusterQueuePage() {
                         <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 6 }}>
                           <span className="snow-table-id" style={{ fontSize: 12 }}>#{claim.ticket_id}</span>
                           <span className="snow-caption" style={{ fontWeight: 600 }}>
-                            {claim.estimated_claim_amount ? `$${claim.estimated_claim_amount}` : ''}
+                            {claim.estimated_claim_amount ? `₹${Number(claim.estimated_claim_amount).toLocaleString('en-IN')}` : ''}
                           </span>
                         </div>
                         <div className="snow-caption" style={{ color: '#71717A', marginBottom: 8 }}>

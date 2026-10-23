@@ -74,7 +74,7 @@ export function printAdjudicationCertificate(cert: any) {
       </div>
       <div>
         <div class="field-label">Coverage Bound / Deductible</div>
-        <div class="field-value">Limit: $${Number(cert.coverage_amount || 0).toLocaleString()} • Deductible: $${Number(cert.deductible || 0).toLocaleString()}</div>
+        <div class="field-value">Limit: ₹${Number(cert.coverage_amount || 0).toLocaleString('en-IN')} • Deductible: ₹${Number(cert.deductible || 0).toLocaleString('en-IN')}</div>
       </div>
     </div>
   </div>
@@ -143,7 +143,7 @@ export function printAdjudicationCertificate(cert: any) {
     <div class="decision-box">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
         <span style="font-weight: 700; color: #166534; font-size: 14px;">DECISION: ${String(cert.decision.status).toUpperCase()}</span>
-        ${cert.decision.approved_amount ? `<span style="font-weight: 800; color: #15803D; font-size: 15px;">Settlement: $${Number(cert.decision.approved_amount).toLocaleString()}</span>` : ''}
+        ${cert.decision.approved_amount ? `<span style="font-weight: 800; color: #15803D; font-size: 15px;">Settlement: ₹${Number(cert.decision.approved_amount).toLocaleString('en-IN')}</span>` : ''}
       </div>
       <div style="color: #374151; font-size: 12px;">${cert.decision.rationale}</div>
     </div>` : '<div style="color: #6B7280; font-style: italic;">Claim pending final adjudication decision.</div>'}

@@ -272,11 +272,18 @@ async def transcribe_audio_file(
     current_user: User = Depends(get_current_user),
 ):
     """Direct audio transcription via local faster-whisper model."""
-    import tempfile
-    import os
+    ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".ogg", ".m4a", ".flac"}
+    raw_ext = os.path.splitext(file.filename or "")[1].lower()
+    if raw_ext and raw_ext not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format. Allowed: {sorted(ALLOWED_AUDIO_EXTENSIONS)}")
+    suffix = raw_ext or ".webm"
 
-    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
     content = await read_limited(file, settings.MAX_UPLOAD_SIZE_BYTES)
+    from src.utils.clamav import scan_bytes
+    clean, _ = await asyncio.to_thread(scan_bytes, content)
+    if not clean:
+        raise HTTPException(status_code=422, detail="Audio file failed security scanning.")
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp_path = tmp.name
         tmp.write(content)

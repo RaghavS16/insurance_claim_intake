@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox, ShieldCheck, CheckCircle2, TrendingUp, DollarSign, Layers } from 'lucide-react';
+import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox, ShieldCheck, CheckCircle2, TrendingUp, IndianRupee, Layers } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
@@ -103,7 +103,7 @@ export default function AdminClaimsOversightPage() {
     {
       key: 'estimated_claim_amount',
       header: 'Estimated Loss',
-      render: (c) => (c.estimated_claim_amount ? `$${Number(c.estimated_claim_amount).toLocaleString()}` : '—'),
+      render: (c) => (c.estimated_claim_amount ? `₹${Number(c.estimated_claim_amount).toLocaleString('en-IN')}` : '—'),
     },
     {
       key: 'assigned_adjuster',
@@ -203,11 +203,11 @@ export default function AdminClaimsOversightPage() {
             />
             <MetricCard
               title="Approved Settlement"
-              value={`$${Number(dashboardMetrics.settlement.approved_volume || 0).toLocaleString()}`}
+              value={`₹${Number(dashboardMetrics.settlement.approved_volume || 0).toLocaleString('en-IN')}`}
               trend={`${dashboardMetrics.settlement.approved_count || 0} claims settled`}
               trendDirection="up"
               tint="mint"
-              icon={<DollarSign size={20} />}
+              icon={<IndianRupee size={20} />}
             />
             <MetricCard
               title="Adjuster Workload"

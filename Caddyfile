@@ -1,6 +1,13 @@
 {$DOMAIN:localhost} {
     encode gzip zstd
 
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
     # Route API and WebSocket requests to backend
     handle /api/* {
         reverse_proxy backend:8000

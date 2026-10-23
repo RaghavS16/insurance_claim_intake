@@ -2,7 +2,7 @@
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, Request, status
 from src.config import settings
 from src.utils.logger import app_logger
@@ -80,6 +80,26 @@ def _build_limiter():
     return RedisSlidingWindowRateLimiter(settings.REDIS_URL) if settings.REDIS_URL else InMemorySlidingWindowRateLimiter()
 limiter=_build_limiter()
 
+def get_client_ip(request: Any) -> str:
+    """Extract real client IP considering reverse proxy headers safely."""
+    if not hasattr(request, "headers") or not hasattr(request.headers, "get"):
+        return "unknown"
+    try:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if isinstance(forwarded, str) and forwarded:
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                return parts[0]
+        real_ip = request.headers.get("X-Real-IP")
+        if isinstance(real_ip, str) and real_ip.strip():
+            return real_ip.strip()
+    except Exception:
+        pass
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None)
+    return str(host) if isinstance(host, str) else "unknown"
+
+
 def _is_loopback(ip: str) -> bool:
     if not ip or ip == "unknown":
         return False
@@ -92,7 +112,9 @@ def _is_loopback(ip: str) -> bool:
         return False
 
 def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seconds:int=60,allow_test_bypass:bool=True)->None:
-    ip=request.client.host if request.client else "unknown"
+    if request is None or not hasattr(request, "headers") or not hasattr(request.headers, "get"):
+        return
+    ip=get_client_ip(request)
     if allow_test_bypass:
         if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
             if not request.headers.get("X-Test-Enforce-Rate-Limit"):
@@ -104,13 +126,14 @@ def enforce_rate_limit(request:Request,action:str,max_requests:int=5,window_seco
     # token is present, use a stable token fingerprint; pre-auth routes fall back
     # to the source IP. Authenticated route handlers also set tenant/user context
     # on request.state, which is incorporated when available.
-    auth_header = request.headers.get("Authorization", "") or ""
+    raw_auth = request.headers.get("Authorization", "")
+    auth_header = str(raw_auth) if isinstance(raw_auth, str) else ""
     token_fp = ""
     if auth_header and auth_header.lower().startswith("bearer "):
         import hashlib
         token_fp=hashlib.sha256(auth_header[7:].strip().encode("utf-8")).hexdigest()[:24]
-    user_id=str(getattr(request.state, "authenticated_user_id", "") or "")
-    tenant_id=str(getattr(request.state, "authenticated_tenant_id", "") or "")
+    user_id=str(getattr(getattr(request, "state", None), "authenticated_user_id", "") or "")
+    tenant_id=str(getattr(getattr(request, "state", None), "authenticated_tenant_id", "") or "")
     identity="|".join(x for x in (tenant_id,user_id,token_fp,ip) if x) or ip
     allowed,remaining,retry=limiter.is_allowed(f"{action}:{identity}",max_requests,window_seconds)
     if not allowed:

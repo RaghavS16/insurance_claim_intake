@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Volume2,
   VolumeX,
-  RotateCcw,
   ShieldCheck,
   Upload,
 } from 'lucide-react';
@@ -19,6 +18,7 @@ import { AppShell } from '@/components/ui/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import { Modal } from '@/components/ui/Modal';
+import { FileUpload } from '@/components/ui/FileUpload';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
 
@@ -114,6 +114,7 @@ function FileClaimContent() {
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [isThinking, setIsThinking] = useState(false);
   const [speechSynthesisEnabled, setSpeechSynthesisEnabled] = useState(true);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   // User's linked policies
   const [userPolicies, setUserPolicies] = useState<any[]>([]);
@@ -124,8 +125,8 @@ function FileClaimContent() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
 
-  // Discard / Reset Modal
-  const [discardModalOpen, setDiscardModalOpen] = useState(false);
+  // Mobile view tab toggle: 'chat' | 'dossier'
+  const [mobileTab, setMobileTab] = useState<'chat' | 'dossier'>('chat');
 
   // Confirm / Submit Claim Modal
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -222,17 +223,43 @@ function FileClaimContent() {
     };
   }, []);
 
-  // Text-to-Speech Speak back from AI
-  const speakText = (text: string) => {
+  const stopSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingMessageId(null);
+  };
+
+  // Text-to-Speech Speak back from AI with Indian English accent
+  const speakText = (text: string, messageId?: string) => {
     if (!speechSynthesisEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
+      if (window.speechSynthesis.speaking && messageId && speakingMessageId === messageId) {
+        stopSpeaking();
+        return;
+      }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-IN';
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const indianVoice = voices.find(
+        (v) => v.lang === 'en-IN' || v.lang.startsWith('en-IN') || v.name.toLowerCase().includes('india')
+      );
+      if (indianVoice) {
+        utterance.voice = indianVoice;
+      }
+
+      if (messageId) {
+        setSpeakingMessageId(messageId);
+        utterance.onend = () => setSpeakingMessageId(null);
+        utterance.onerror = () => setSpeakingMessageId(null);
+      }
       window.speechSynthesis.speak(utterance);
     } catch {
-      // Speech synthesis may be unsupported or blocked
+      setSpeakingMessageId(null);
     }
   };
 
@@ -268,18 +295,24 @@ function FileClaimContent() {
     if (scriptProcessorRef.current) {
       try {
         scriptProcessorRef.current.disconnect();
-      } catch {}
+      } catch (e) {
+        console.debug('ScriptProcessor disconnect notice:', e);
+      }
       scriptProcessorRef.current = null;
     }
     if (audioContextRef.current) {
       try {
         audioContextRef.current.close();
-      } catch {}
+      } catch (e) {
+        console.debug('AudioContext close notice:', e);
+      }
     }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch {}
+      } catch (e) {
+        console.debug('Recognition stop notice:', e);
+      }
       recognitionRef.current = null;
     }
     if (mediaStreamRef.current) {
@@ -323,7 +356,7 @@ function FileClaimContent() {
 
     if (sendImmediately && finalText) {
       setInputTurn('');
-      handleSendText(finalText);
+      handleSendText(finalText, { fromVoice: true });
     }
   };
 
@@ -402,7 +435,7 @@ function FileClaimContent() {
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = 'en-IN';
         recognition.maxAlternatives = 1;
 
         recognition.onresult = (event: any) => {
@@ -432,7 +465,9 @@ function FileClaimContent() {
           if (isVoiceActiveRef.current && recognitionRef.current) {
             try {
               recognitionRef.current.start();
-            } catch {}
+            } catch (e) {
+              console.debug('Recognition restart notice:', e);
+            }
           }
         };
 
@@ -448,10 +483,24 @@ function FileClaimContent() {
       if (!isVoiceActiveRef.current || isTranscribingRef.current) return;
       if (!audioContextRef.current || pcmChunksRef.current.length === 0) return;
 
-      const totalSamples = pcmChunksRef.current.reduce((acc, c) => acc + c.length, 0);
+      let totalSamples = pcmChunksRef.current.reduce((acc, c) => acc + c.length, 0);
       const sampleRate = audioContextRef.current.sampleRate || 44100;
       // Need at least 0.75 seconds of audio to transcribe meaningfully
       if (totalSamples < sampleRate * 0.75) return;
+
+      // Bound buffer to the most recent 15 seconds to prevent unbounded memory growth
+      const maxSamples = sampleRate * 15;
+      if (totalSamples > maxSamples) {
+        let keptSamples = 0;
+        const keptChunks: Float32Array[] = [];
+        for (let i = pcmChunksRef.current.length - 1; i >= 0; i--) {
+          keptChunks.unshift(pcmChunksRef.current[i]);
+          keptSamples += pcmChunksRef.current[i].length;
+          if (keptSamples >= maxSamples) break;
+        }
+        pcmChunksRef.current = keptChunks;
+        totalSamples = keptSamples;
+      }
 
       // Merge all PCM chunks into one Float32Array
       const merged = new Float32Array(totalSamples);
@@ -494,7 +543,7 @@ function FileClaimContent() {
   };
 
   // Send turn (text or voice) to backend
-  const handleSendText = async (textToSend?: string) => {
+  const handleSendText = async (textToSend?: string, options?: { fromVoice?: boolean }) => {
     const text = (textToSend || inputTurn).trim();
     if (!text) return;
 
@@ -547,7 +596,9 @@ function FileClaimContent() {
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
-      speakText(replyText);
+      if (options?.fromVoice) {
+        speakText(replyText, assistantMsg.id);
+      }
     } catch (err: any) {
       showToast(err.message || 'Failed to process message turn.', 'error');
     } finally {
@@ -555,33 +606,6 @@ function FileClaimContent() {
     }
   };
 
-  // Reset Chat Conversation
-  const handleResetChat = async () => {
-    try {
-      if (ticketId) {
-        try {
-          await api.delete(`/api/v1/claims/${ticketId}`);
-        } catch {
-          // Ignore deletion error when resetting session
-        }
-      }
-      setTicketId('');
-      setClaimData(null);
-      setMessages([
-        {
-          id: `welcome-${Date.now()}`,
-          speaker: 'assistant',
-          text: "Hello! I am your IntelliClaim AI Assistant. How can I assist you with your claim today? You can type your request or click the microphone to speak.",
-          time: 'Just now',
-        },
-      ]);
-      setDiscardModalOpen(false);
-      window.history.replaceState(null, '', '/claimant/file-claim?fresh=true');
-      showToast('Conversation reset. Ready for a fresh intake.', 'info');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to reset claim session.', 'error');
-    }
-  };
 
   // Upload Evidence File
   const handleUploadEvidence = async (e: React.FormEvent) => {
@@ -660,27 +684,47 @@ function FileClaimContent() {
       hideRightDrawer
       noScroll
     >
+      {/* Mobile Tab Switcher */}
+      <div className="snow-mobile-intake-tabs">
+        <button
+          type="button"
+          className={`snow-mobile-intake-tab ${mobileTab === 'chat' ? 'active' : ''}`}
+          onClick={() => setMobileTab('chat')}
+        >
+          💬 AI Chat & Voice
+        </button>
+        <button
+          type="button"
+          className={`snow-mobile-intake-tab ${mobileTab === 'dossier' ? 'active' : ''}`}
+          onClick={() => setMobileTab('dossier')}
+        >
+          📋 Live Claim Dossier
+        </button>
+      </div>
+
       {/* Top Bar Policy Selector */}
       <div
+        className="snow-policy-bar-responsive"
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           marginBottom: 12,
-          padding: '10px 16px',
+          padding: '10px 14px',
           backgroundColor: '#FFFFFF',
           borderRadius: 12,
           border: '1px solid #E5E7EB',
-          gap: 12,
+          gap: 10,
+          flexWrap: 'wrap',
           flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
-          <ShieldCheck size={18} color="#007AFF" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 240px', minWidth: 0 }}>
+          <ShieldCheck size={18} color="#007AFF" style={{ flexShrink: 0 }} />
           <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>
             Filing Against Policy:
           </span>
-          <div style={{ minWidth: 280, maxWidth: 520, flex: 1 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <Select
               size="sm"
               value={selectedPolicyNumber}
@@ -699,7 +743,7 @@ function FileClaimContent() {
                 { value: '', label: '-- No Specific Policy (General Inquiry / Auto-Resolve) --' },
                 ...userPolicies.map((p) => ({
                   value: p.policy_number,
-                  label: `${p.policy_number} — ${p.policy_type?.toUpperCase()} (Limit: $${Number(p.coverage_amount || 0).toLocaleString()})`,
+                  label: `${p.policy_number} — ${p.policy_type?.toUpperCase()} (Limit: ₹${Number(p.coverage_amount || 0).toLocaleString('en-IN')})`,
                 })),
               ]}
               style={{ marginBottom: 0 }}
@@ -707,7 +751,7 @@ function FileClaimContent() {
           </div>
         </div>
         {ticketId && (
-          <div className="snow-caption" style={{ color: '#6B7280' }}>
+          <div className="snow-caption" style={{ color: '#6B7280', flexShrink: 0 }}>
             Claim Ticket: <strong style={{ color: '#111827' }}>#{ticketId}</strong>
           </div>
         )}
@@ -715,9 +759,8 @@ function FileClaimContent() {
 
       {/* 2-Column Responsive Layout: Chat + Live Claim Dossier */}
       <div
+        className={`snow-file-claim-grid ${mobileTab === 'chat' ? 'show-chat' : 'show-dossier'}`}
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1.2fr)',
           gap: 16,
           flex: 1,
           minHeight: 0,
@@ -726,6 +769,7 @@ function FileClaimContent() {
       >
         {/* Left Column: Chat Messages & Input */}
         <div
+          className={`snow-chat-col ${mobileTab === 'dossier' ? 'mobile-hidden' : ''}`}
           style={{
             display: 'flex',
             flexDirection: 'column',
@@ -808,19 +852,41 @@ function FileClaimContent() {
                   {m.speaker === 'assistant' && (
                     <button
                       type="button"
-                      onClick={() => speakText(m.text)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: '#71717A',
-                        padding: '2px 4px',
-                        display: 'flex',
-                        alignItems: 'center',
+                      onClick={() => {
+                        if (speakingMessageId === m.id) {
+                          stopSpeaking();
+                        } else {
+                          speakText(m.text, m.id);
+                        }
                       }}
-                      title="Speak message aloud"
+                      style={{
+                        background: speakingMessageId === m.id ? '#EFF6FF' : '#F4F5F7',
+                        border: speakingMessageId === m.id ? '1px solid #3B82F6' : '1px solid transparent',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        color: speakingMessageId === m.id ? '#2563EB' : '#4B5563',
+                        padding: '2px 8px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 11,
+                        fontWeight: 500,
+                        transition: 'all 0.15s ease',
+                      }}
+                      title={speakingMessageId === m.id ? 'Stop reading aloud' : 'Read aloud'}
+                      aria-label={speakingMessageId === m.id ? 'Stop reading aloud' : 'Read aloud'}
                     >
-                      <Volume2 size={13} />
+                      {speakingMessageId === m.id ? (
+                        <>
+                          <VolumeX size={12} color="#2563EB" />
+                          <span>Stop</span>
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 size={12} />
+                          <span>Read Aloud</span>
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
@@ -903,28 +969,6 @@ function FileClaimContent() {
             flexShrink: 0,
           }}
         >
-          {/* Reset Chat Button */}
-          <button
-            type="button"
-            onClick={() => setDiscardModalOpen(true)}
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: '50%',
-              border: 'none',
-              background: '#F4F5F7',
-              color: '#71717A',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-            title="Reset conversation"
-          >
-            <RotateCcw size={15} />
-          </button>
-
           {/* Attach Evidence */}
           <button
             type="button"
@@ -1035,7 +1079,7 @@ function FileClaimContent() {
 
       {/* Right Column: Live Claim Dossier Panel */}
       <div
-        className="snow-card snow-scrollbar"
+        className={`snow-dossier-col snow-card snow-scrollbar ${mobileTab === 'chat' ? 'mobile-hidden' : ''}`}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -1083,7 +1127,7 @@ function FileClaimContent() {
           <div>
             <span className="snow-caption" style={{ color: '#9CA3AF' }}>Est. Amount</span>
             <div className="snow-body" style={{ fontSize: 12, fontWeight: 600 }}>
-              {claimData?.estimated_claim_amount ? `$${Number(claimData.estimated_claim_amount).toLocaleString()}` : (claimData?.extracted_data?.estimated_claim_amount ? `$${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString()}` : '—')}
+              {claimData?.estimated_claim_amount ? `₹${Number(claimData.estimated_claim_amount).toLocaleString('en-IN')}` : (claimData?.extracted_data?.estimated_claim_amount ? `₹${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString('en-IN')}` : '—')}
             </div>
           </div>
         </div>
@@ -1139,23 +1183,15 @@ function FileClaimContent() {
         title="Upload Damage Evidence"
       >
         <form onSubmit={handleUploadEvidence}>
-          <p className="snow-caption" style={{ color: '#71717A', marginBottom: 16 }}>
-            Attach repair estimates, garage quotations, or accident photos to verify your claim.
-          </p>
-
-          <input
-            type="file"
-            accept="image/*,application/pdf"
-            onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-            style={{
-              width: '100%',
-              padding: '12px',
-              borderRadius: 10,
-              border: '1px dashed #D4D4D8',
-              backgroundColor: '#FAFAFA',
-              marginBottom: 20,
-            }}
-          />
+          <div style={{ marginBottom: 20 }}>
+            <FileUpload
+              label="Select Document or Image"
+              accept="image/*,application/pdf"
+              file={selectedFile}
+              onFileSelect={(f: File | null) => setSelectedFile(f)}
+              hint="Attach repair estimates, garage quotations, or accident photos to verify your claim."
+            />
+          </div>
 
           <div className="snow-flex snow-justify-between snow-gap-3">
             <Button type="button" variant="secondary" onClick={() => setEvidenceModalOpen(false)}>
@@ -1168,27 +1204,7 @@ function FileClaimContent() {
         </form>
       </Modal>
 
-      {/* Discard / Reset Modal */}
-      <Modal
-        isOpen={discardModalOpen}
-        onClose={() => setDiscardModalOpen(false)}
-        title="Reset Conversation?"
-      >
-        <div style={{ padding: '8px 0 16px' }}>
-          <p className="snow-body" style={{ color: '#52525B' }}>
-            Are you sure you want to reset this conversation? This will clear the current dialogue and start a fresh intake.
-          </p>
-        </div>
-
-        <div className="snow-flex snow-justify-between snow-gap-3">
-          <Button type="button" variant="secondary" onClick={() => setDiscardModalOpen(false)}>
-            Keep Conversation
-          </Button>
-          <Button type="button" variant="danger" onClick={handleResetChat}>
-            Reset Chat
-          </Button>
-        </div>
-      </Modal>
+      {/* Confirm / Submit Claim Modal */}
 
       {/* Confirm / Submit Claim Modal */}
       <Modal

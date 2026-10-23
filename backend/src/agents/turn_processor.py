@@ -340,12 +340,15 @@ async def process_claimant_turn(
             result["message"] = result["next_question"]
         elif readiness.get("ready"):
             try:
-                locked = db.execute(
+                claim_stmt = (
                     __import__("sqlalchemy").select(Claim).where(
                         Claim.id == claim.id,
                         Claim.tenant_id == claim.tenant_id,
-                    ).with_for_update()
-                ).scalar_one()
+                    )
+                )
+                if db.bind and db.bind.dialect.name == "postgresql":
+                    claim_stmt = claim_stmt.with_for_update()
+                locked = db.execute(claim_stmt).scalar_one()
                 existing_submission = db.query(ClaimSubmission).filter(
                     ClaimSubmission.claim_id == claim.id,
                     ClaimSubmission.tenant_id == locked.tenant_id,

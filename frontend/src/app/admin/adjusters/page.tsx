@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
+import { Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';
@@ -25,7 +25,6 @@ export default function AdminAdjustersPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Modals
-  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
@@ -44,6 +43,24 @@ export default function AdminAdjustersPage() {
   const [editSpec, setEditSpec] = useState('motor');
   const [editActive, setEditActive] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Reset Password State
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetResult, setResetResult] = useState<{ email: string; tempPass: string } | null>(null);
+
+  const handleResetPassword = async (adjusterId: string, name: string) => {
+    try {
+      const res = await api.post<any>(`/api/v1/admin/adjusters/${adjusterId}/reset-password`);
+      setResetResult({
+        email: res.email || name,
+        tempPass: res.temporary_password,
+      });
+      setResetModalOpen(true);
+      showToast(`Temporary password generated for ${name}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reset adjuster password.', 'error');
+    }
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -107,25 +124,6 @@ export default function AdminAdjustersPage() {
     }
   };
 
-  const handleCreateAdjuster = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const res = await api.post<Adjuster>('/api/v1/admin/adjusters', {
-        name: newName,
-        email: newEmail,
-        phone: newPhone,
-        specialization: newSpec,
-      });
-      showToast('Adjuster profile created successfully!', 'success');
-      setCreateModalOpen(false);
-      setNewName('');
-      setNewEmail('');
-      setNewPhone('');
-      fetchData();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create adjuster.', 'error');
-    }
-  };
 
   const handleInviteAdjuster = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,17 +224,27 @@ export default function AdminAdjustersPage() {
       key: 'actions',
       header: 'Actions',
       render: (a) => (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => {
-            setSelectedAdjuster(a);
-            setDeactivateModalOpen(true);
-          }}
-          icon={<Trash2 size={12} />}
-        >
-          Remove
-        </Button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => handleResetPassword(a.id, a.name)}
+            icon={<KeyRound size={12} />}
+          >
+            Reset
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setSelectedAdjuster(a);
+              setDeactivateModalOpen(true);
+            }}
+            icon={<Trash2 size={12} />}
+          >
+            Remove
+          </Button>
+        </div>
       ),
     },
   ];
@@ -252,11 +260,15 @@ export default function AdminAdjustersPage() {
     {
       key: 'status',
       header: 'Onboarding Status',
-      render: (inv) => (
-        <BadgePill variant={inv.accepted_at ? 'mint' : 'amber'}>
-          {inv.accepted_at ? 'Accepted' : 'Pending'}
-        </BadgePill>
-      ),
+      render: (inv) => {
+        const isAccepted = inv.status === 'accepted' || Boolean(inv.accepted_at);
+        const isExpired = inv.status === 'expired';
+        return (
+          <BadgePill variant={isAccepted ? 'mint' : isExpired ? 'rose' : 'amber'}>
+            {isAccepted ? 'Accepted' : isExpired ? 'Expired' : 'Pending'}
+          </BadgePill>
+        );
+      },
     },
     {
       key: 'actions',
@@ -277,8 +289,8 @@ export default function AdminAdjustersPage() {
   return (
     <AppShell breadcrumbs={['Admin', 'Adjusters']} activeTitle="Adjusters Roster & Workforce">
       {/* Action Header */}
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-        <div className="snow-flex snow-gap-2">
+      <div className="snow-action-bar">
+        <div className="snow-action-buttons">
           <Button
             size="sm"
             variant={activeTab === 'roster' ? 'primary' : 'secondary'}
@@ -295,7 +307,7 @@ export default function AdminAdjustersPage() {
           </Button>
         </div>
 
-        <div className="snow-flex snow-gap-2">
+        <div className="snow-action-buttons">
           <Button
             size="sm"
             variant="secondary"
@@ -303,14 +315,6 @@ export default function AdminAdjustersPage() {
             icon={<Download size={14} />}
           >
             Export CSV
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setCreateModalOpen(true)}
-            icon={<UserPlus size={14} />}
-          >
-            Direct Provision
           </Button>
           <Button
             size="sm"
@@ -384,60 +388,6 @@ export default function AdminAdjustersPage() {
         />
       )}
 
-      {/* Direct Provision Modal */}
-      <Modal
-        isOpen={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        title="Provision Adjuster Account"
-      >
-        <form onSubmit={handleCreateAdjuster}>
-          <Input
-            label="Full Name"
-            placeholder="John Doe"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            required
-          />
-          <Input
-            label="Corporate Email"
-            type="email"
-            placeholder="j.doe@company.com"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            required
-          />
-          <Input
-            label="Phone Number"
-            type="tel"
-            placeholder="+1 555-019-2834"
-            value={newPhone}
-            onChange={(e) => setNewPhone(e.target.value)}
-            required
-          />
-          <Select
-            label="Specialization"
-            value={newSpec}
-            onChange={(val) => setNewSpec(val)}
-            options={[
-              { value: 'motor', label: 'Motor / Auto' },
-              { value: 'home', label: 'Home / Property' },
-              { value: 'health', label: 'Health' },
-              { value: 'senior_health', label: 'Senior Health' },
-              { value: 'travel', label: 'Travel' },
-              { value: 'cyber', label: 'Cyber' },
-            ]}
-          />
-
-          <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
-            <Button type="button" variant="secondary" onClick={() => setCreateModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary">
-              Provision Adjuster
-            </Button>
-          </div>
-        </form>
-      </Modal>
 
       {/* Send Invite Modal */}
       <Modal
@@ -576,6 +526,26 @@ export default function AdminAdjustersPage() {
           </Button>
           <Button type="button" variant="primary" onClick={handleDeactivate}>
             Confirm Deactivation
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Reset Password Result Modal */}
+      <Modal
+        isOpen={resetModalOpen}
+        onClose={() => setResetModalOpen(false)}
+        title="Adjuster Temporary Credentials"
+      >
+        <p className="snow-body" style={{ marginBottom: 16 }}>
+          A new temporary password has been generated for <strong>{resetResult?.email}</strong>. Existing sessions have been revoked.
+        </p>
+        <div style={{ backgroundColor: '#F1F5F9', padding: 12, borderRadius: 6, marginBottom: 20 }}>
+          <div className="snow-caption" style={{ color: '#64748B', marginBottom: 4 }}>Temporary Password:</div>
+          <code style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', userSelect: 'all' }}>{resetResult?.tempPass}</code>
+        </div>
+        <div className="snow-flex snow-justify-end">
+          <Button type="button" variant="primary" onClick={() => setResetModalOpen(false)}>
+            Done
           </Button>
         </div>
       </Modal>

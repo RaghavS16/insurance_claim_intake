@@ -329,3 +329,20 @@ class WebAuthnChallenge(Base):
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
+
+class UserNotificationState(Base):
+    """Tracks read/cleared notification states permanently for users across sessions."""
+    __tablename__ = "user_notification_states"
+    __table_args__ = (
+        Index("ix_user_notif_lookup", "user_id", "tenant_id"),
+        UniqueConstraint("user_id", "notification_id", name="uq_user_notification_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    user_id: Mapped[str] = _UUID(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    notification_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_cleared: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+

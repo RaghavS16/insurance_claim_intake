@@ -90,14 +90,16 @@ def _auto_assign_pending(claims:list[Claim], db:Session):
         db.commit()
 
 def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
-    claim_tenant = str(getattr(c, "tenant_id", "") or "")
-    user_tenant = str(getattr(user, "tenant_id", "") or "")
-    if claim_tenant and user_tenant and claim_tenant != user_tenant:
+    claim_tenant = str(getattr(c, "tenant_id", "") or "").strip()
+    user_tenant = str(getattr(user, "tenant_id", "") or "").strip()
+    if not claim_tenant or not user_tenant or claim_tenant != user_tenant:
         return False
     if user.role == "ADMIN":
         return True
     assigned_adj_id = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
-    if assigned_adj_id and assigned_adj_id in {user.id}:
+    if assigned_adj_id and assigned_adj_id in {str(user.id)}:
+        return True
+    if not assigned_adj_id and getattr(c, "status", None) in {"submitted", "pending_adjuster", "assigned"}:
         return True
     if db is not None:
         adjuster = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == c.tenant_id).first()
@@ -199,6 +201,51 @@ def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
         "created_at": r.created_at.isoformat(),
     }
 
+def _get_adjuster_relevant_claims(db: Session, user: User, tenant_id: str, statuses: list[str] | None = None) -> tuple[list[Claim], set[str]]:
+    """
+    Returns (relevant_claims, assigned_claim_ids) for the given user (Adjuster or Admin).
+    Ensures strict type-safety across UUIDs/strings and consistency between Dashboard and Queue.
+    """
+    q = db.query(Claim).filter(Claim.tenant_id == tenant_id)
+    if statuses:
+        q = q.filter(Claim.status.in_(statuses))
+    all_claims = q.order_by(Claim.updated_at.desc()).all()
+
+    if user.role == "ADMIN":
+        assigned_ids = {str(c.id) for c in all_claims}
+        return all_claims, assigned_ids
+
+    adj_ids = {str(user.id)}
+    adjuster = db.query(Adjuster).filter(
+        Adjuster.user_id == user.id,
+        Adjuster.tenant_id == tenant_id,
+        Adjuster.is_active.is_(True),
+    ).first()
+    if adjuster:
+        adj_ids.add(str(adjuster.id))
+
+    assigned_claim_ids = {
+        str(row.claim_id)
+        for row in db.query(ClaimAssignment).filter(
+            ClaimAssignment.adjuster_id.in_(list(adj_ids)),
+            ClaimAssignment.tenant_id == tenant_id,
+            ClaimAssignment.is_active.is_(True),
+        ).all()
+    }
+
+    relevant_claims = []
+    for c in all_claims:
+        cid_str = str(c.id)
+        assigned_to = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
+        is_assigned_to_me = cid_str in assigned_claim_ids or (assigned_to and assigned_to in adj_ids)
+        if is_assigned_to_me:
+            assigned_claim_ids.add(cid_str)
+            relevant_claims.append(c)
+        elif not assigned_to and c.status in {"submitted", "pending_adjuster", "assigned"}:
+            relevant_claims.append(c)
+
+    return relevant_claims, assigned_claim_ids
+
 @router.get("/dashboard")
 def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
     """Return adjuster-facing operational metrics and recent assigned claims."""
@@ -219,39 +266,7 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
         User.status == "active",
     ).scalar() or 0
 
-    assigned_ids: set[str] = set()
-    if user.role == "ADJUSTER":
-        adjuster = db.query(Adjuster).filter(
-            Adjuster.user_id == user.id,
-            Adjuster.tenant_id == tenant_id,
-            Adjuster.is_active.is_(True),
-        ).first()
-        if not adjuster:
-            raise HTTPException(status_code=403, detail="Active adjuster profile not found.")
-        assigned_ids = {
-            str(row.claim_id)
-            for row in db.query(ClaimAssignment).filter(
-                ClaimAssignment.adjuster_id == adjuster.id,
-                ClaimAssignment.tenant_id == tenant_id,
-                ClaimAssignment.is_active.is_(True),
-            ).all()
-        }
-    else:
-        adjuster = None
-
-    assigned_query = db.query(Claim).filter(Claim.tenant_id == tenant_id)
-    if user.role == "ADJUSTER":
-        if not assigned_ids:
-            assigned_claims = []
-        else:
-            assigned_claims = assigned_query.filter(Claim.id.in_(assigned_ids)).order_by(Claim.updated_at.desc()).all()
-    else:
-        assigned_claims = assigned_query.filter(
-            Claim.status.in_({
-                "submitted", "pending_adjuster", "assigned", "under_review",
-                "pending_evidence", "escalated",
-            }),
-        ).order_by(Claim.updated_at.desc()).all()
+    assigned_claims, assigned_ids = _get_adjuster_relevant_claims(db, user, tenant_id)
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
@@ -301,28 +316,8 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
     if requested != "all" and requested not in valid_queue_statuses:
         raise HTTPException(status_code=400, detail="Invalid queue status.")
     statuses = valid_queue_statuses if requested == "all" else [requested]
-    q = db.query(Claim).filter(
-        Claim.tenant_id == user.tenant_id,
-        Claim.status.in_(statuses),
-    )
-    claims = q.order_by(Claim.updated_at.asc()).all()
-    if user.role == "ADJUSTER":
-        adjuster = db.query(Adjuster).filter(
-            Adjuster.user_id == user.id,
-            Adjuster.tenant_id == user.tenant_id,
-            Adjuster.is_active.is_(True),
-        ).first()
-        assigned_ids = set()
-        if adjuster:
-            assigned_ids = {
-                row.claim_id
-                for row in db.query(ClaimAssignment).filter(
-                    ClaimAssignment.adjuster_id == adjuster.id,
-                    ClaimAssignment.tenant_id == user.tenant_id,
-                    ClaimAssignment.is_active.is_(True),
-                ).all()
-            }
-        claims = [claim for claim in claims if claim.id in assigned_ids]
+    
+    claims, _ = _get_adjuster_relevant_claims(db, user, user.tenant_id, statuses)
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))

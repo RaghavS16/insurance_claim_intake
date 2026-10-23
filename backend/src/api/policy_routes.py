@@ -120,8 +120,6 @@ def link_policy(
         req_name = payload.policyholder_name.strip().lower()
         pol_name = policy.policyholder_name.strip().lower()
         name_match = (req_name == pol_name) or (req_name in pol_name) or (pol_name in req_name)
-    elif payload.policyholder_name and not policy.policyholder_name:
-        policy.policyholder_name = payload.policyholder_name.strip()  # type: ignore[assignment]
 
     if not (dob_match and phone_match and name_match):
         policy.link_attempts = int(getattr(policy, "link_attempts", 0) or 0) + 1  # type: ignore[assignment]
@@ -133,6 +131,8 @@ def link_policy(
         )
 
     # Success: Associate policy with user
+    if payload.policyholder_name and not policy.policyholder_name:
+        policy.policyholder_name = payload.policyholder_name.strip()  # type: ignore[assignment]
     policy.customer_id = current_user.id  # type: ignore[assignment]
     policy.linked_at = datetime.now(timezone.utc)  # type: ignore[assignment]
     policy.link_attempts = 0  # type: ignore[assignment]

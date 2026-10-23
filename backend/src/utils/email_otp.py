@@ -81,6 +81,14 @@ def _send_email_smtp(to_email: str, subject: str, body: str) -> bool:
         return False
 
     host = settings.SMTP_HOST
+    if is_mailpit and host in ("localhost", "127.0.0.1"):
+        import socket
+        try:
+            socket.gethostbyname("mailpit")
+            host = "mailpit"
+        except (socket.error, OSError):
+            pass
+
     port = 1025 if is_mailpit else (settings.SMTP_PORT or 587)
     use_tls = False if is_mailpit else bool(settings.SMTP_USE_TLS)
     use_ssl = False if is_mailpit else bool(settings.SMTP_USE_SSL)

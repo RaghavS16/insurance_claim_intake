@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db, engine, SessionLocal, dispose_engine
 from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP, RevokedToken
+from src.database.hardening_models import UserNotificationState
 from src.api.realtime_voice import router as voice_router
 from src.utils.logger import app_logger
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
@@ -150,6 +151,11 @@ def _init_db_schema():
                 Base.metadata.create_all(bind=conn, tables=[Base.metadata.tables["revoked_tokens"]], checkfirst=True)
                 conn.commit()
 
+            if "user_notification_states" not in tables:
+                logger.info("Database auto-migration: creating user_notification_states table")
+                Base.metadata.create_all(bind=conn, tables=[Base.metadata.tables["user_notification_states"]], checkfirst=True)
+                conn.commit()
+
             if "adjusters" in tables:
                 adjuster_cols = [c["name"] for c in inspector.get_columns("adjusters")]
                 if "phone" not in adjuster_cols:
@@ -254,7 +260,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "If-None-Match", "X-Correlation-ID"],
 )
 
 
@@ -263,10 +269,26 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Return API-safe JSON for request validation errors."""
+    """Return API-safe JSON for request validation errors with field details."""
+    details = []
+    try:
+        for err in exc.errors():
+            loc = err.get("loc", ())
+            field_parts = [str(l) for l in loc if l != "body"]
+            field_name = ".".join(field_parts) if field_parts else "body"
+            details.append({"field": field_name, "msg": str(err.get("msg", "Invalid value"))})
+    except Exception:
+        pass
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"error": {"code": "VALIDATION_ERROR", "message": "Invalid request payload."}, "request_id": getattr(request.state, "request_id", None)},
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Invalid request payload.",
+                "details": details,
+            },
+            "request_id": getattr(request.state, "request_id", None),
+        },
     )
 
 
@@ -409,7 +431,10 @@ app.include_router(
 )
 
 # Admin routes — inject get_current_user dependency
-app.include_router(admin_workflow_routes.router)
+app.include_router(
+    admin_workflow_routes.router,
+    dependencies=[Depends(get_current_user)],
+)
 app.include_router(
     admin_routes.router,
     dependencies=[Depends(get_current_user)],

@@ -25,10 +25,13 @@ const MONTH_NAMES = [
 
 const WEEKDAY_NAMES = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
+// Support years from 1930 up to 2050
+const YEARS = Array.from({ length: 121 }, (_, i) => 1930 + i);
+
 export const DatePicker: React.FC<DatePickerProps> = ({
   value,
   onChange,
-  placeholder = 'Select date',
+  placeholder = 'YYYY-MM-DD',
   label,
   error,
   disabled = false,
@@ -40,17 +43,20 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   popoverDirection = 'auto',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [typedValue, setTypedValue] = useState(value || '');
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const [popoverPlacement, setPopoverPlacement] = useState<{
     vertical: 'down' | 'up';
     horizontal: 'left' | 'right';
   }>({ vertical: 'down', horizontal: 'left' });
 
-  // Update placement to avoid overflowing offscreen or into the Windows taskbar
+  // Update placement to avoid overflowing offscreen
   const updatePlacement = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const popoverHeight = 320;
+    const popoverHeight = 330;
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
 
@@ -60,7 +66,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     } else if (popoverDirection === 'down') {
       vertical = 'down';
     } else {
-      // If there is not enough space below, and more space above, open upwards
       if (spaceBelow < popoverHeight && spaceAbove > spaceBelow) {
         vertical = 'up';
       } else {
@@ -68,7 +73,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       }
     }
 
-    const popoverWidth = 290;
+    const popoverWidth = 300;
     let horizontal: 'left' | 'right' = 'left';
     const modalEl = containerRef.current.closest('.snow-modal, [role="dialog"]');
     if (modalEl) {
@@ -105,6 +110,11 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     }
   }, [isOpen]);
 
+  // Keep typedValue synced with value prop
+  useEffect(() => {
+    setTypedValue(value || '');
+  }, [value]);
+
   // Parse initial view month/year
   const selectedDate = value ? new Date(value + 'T00:00:00') : null;
   const initialDate = selectedDate || new Date();
@@ -121,6 +131,51 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       }
     }
   }, [value]);
+
+  // Validate and commit manual typed date
+  const validateAndCommit = (rawStr: string) => {
+    const trimmed = rawStr.trim();
+    if (!trimmed) {
+      onChange?.('');
+      return;
+    }
+
+    // Try ISO format: YYYY-MM-DD or YYYY/MM/DD
+    const isoMatch = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (isoMatch) {
+      const y = parseInt(isoMatch[1], 10);
+      const m = parseInt(isoMatch[2], 10);
+      const d = parseInt(isoMatch[3], 10);
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        const formatted = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const testDate = new Date(`${formatted}T00:00:00`);
+        if (!isNaN(testDate.getTime())) {
+          onChange?.(formatted);
+          setViewYear(y);
+          setViewMonth(m - 1);
+          setTypedValue(formatted);
+          return;
+        }
+      }
+    }
+
+    // Try parsing flexible formats (e.g. MM/DD/YYYY)
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      const yyyy = parsed.getFullYear();
+      const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+      const dd = String(parsed.getDate()).padStart(2, '0');
+      const formatted = `${yyyy}-${mm}-${dd}`;
+      onChange?.(formatted);
+      setViewYear(yyyy);
+      setViewMonth(parsed.getMonth());
+      setTypedValue(formatted);
+      return;
+    }
+
+    // Invalid format: reset back to current value
+    setTypedValue(value || '');
+  };
 
   // Handle click outside to close popover
   useEffect(() => {
@@ -162,12 +217,14 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     const dd = String(day).padStart(2, '0');
     const dateStr = `${viewYear}-${mm}-${dd}`;
     onChange?.(dateStr);
+    setTypedValue(dateStr);
     setIsOpen(false);
   };
 
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
     onChange?.('');
+    setTypedValue('');
     setIsOpen(false);
   };
 
@@ -177,7 +234,9 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
-    onChange?.(`${yyyy}-${mm}-${dd}`);
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    onChange?.(dateStr);
+    setTypedValue(dateStr);
     setViewYear(yyyy);
     setViewMonth(today.getMonth());
     setIsOpen(false);
@@ -187,10 +246,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
   const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate();
-
-  const formattedDisplay = selectedDate && !isNaN(selectedDate.getTime())
-    ? selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : '';
 
   const today = new Date();
   const isCurrentMonthToday = today.getFullYear() === viewYear && today.getMonth() === viewMonth;
@@ -216,36 +271,73 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         </label>
       )}
 
-      {/* Input trigger */}
+      {/* Input trigger with editable text & calendar action */}
       <div
-        onClick={handleToggle}
         className="snow-flex snow-items-center snow-justify-between"
         style={{
           height: 40,
-          padding: '8px 14px',
+          padding: '4px 12px',
           backgroundColor: '#FFFFFF',
           border: error ? '1px solid #EF4444' : isOpen ? '1px solid #1C1C1C' : '1px solid #E4E4E7',
           borderRadius: 10,
-          cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.6 : 1,
           transition: 'all 0.15s ease',
           boxShadow: isOpen ? '0 0 0 2px rgba(28,28,28,0.08)' : 'none',
         }}
       >
-        <div className="snow-flex snow-items-center snow-gap-2" style={{ overflow: 'hidden' }}>
-          <CalendarIcon size={16} style={{ color: isOpen ? '#1C1C1C' : '#71717A', flexShrink: 0 }} />
-          <span
-            className="snow-body"
+        <div className="snow-flex snow-items-center snow-gap-2" style={{ flex: 1, overflow: 'hidden' }}>
+          <button
+            type="button"
+            onClick={handleToggle}
+            aria-label="Toggle calendar"
+            disabled={disabled}
             style={{
-              color: formattedDisplay ? '#1C1C1C' : '#A1A1AA',
-              fontSize: 14,
-              whiteSpace: 'nowrap',
-              textOverflow: 'ellipsis',
-              overflow: 'hidden',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
             }}
           >
-            {formattedDisplay || placeholder}
-          </span>
+            <CalendarIcon size={16} style={{ color: isOpen ? '#1C1C1C' : '#71717A', flexShrink: 0 }} />
+          </button>
+          <input
+            ref={inputRef}
+            type="text"
+            value={typedValue}
+            placeholder={placeholder}
+            disabled={disabled}
+            onChange={(e) => {
+              setTypedValue(e.target.value);
+              if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value.trim())) {
+                validateAndCommit(e.target.value.trim());
+              }
+            }}
+            onFocus={() => {
+              if (!isOpen) {
+                updatePlacement();
+                setIsOpen(true);
+              }
+            }}
+            onBlur={() => validateAndCommit(typedValue)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                validateAndCommit(typedValue);
+                setIsOpen(false);
+              }
+            }}
+            style={{
+              width: '100%',
+              border: 'none',
+              outline: 'none',
+              backgroundColor: 'transparent',
+              fontSize: 14,
+              color: '#1C1C1C',
+              fontFamily: 'inherit',
+            }}
+          />
         </div>
 
         {value && !disabled && (
@@ -255,11 +347,12 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             style={{
               background: 'none',
               border: 'none',
-              padding: 2,
+              padding: 4,
               cursor: 'pointer',
               color: '#A1A1AA',
               display: 'flex',
               alignItems: 'center',
+              marginLeft: 4,
             }}
           >
             <X size={14} />
@@ -269,7 +362,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
 
       {error && <span className="snow-form-error">{error}</span>}
 
-      {/* Expanded Popover Calendar */}
+      {/* Expanded Popover Calendar with Month & Year dropdown jump selectors */}
       {isOpen && (
         <div
           className="snow-datepicker-popover"
@@ -282,7 +375,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               ? { right: 0, left: 'auto' }
               : { left: 0, right: 'auto' }),
             zIndex: 1100,
-            width: 290,
+            width: 300,
             backgroundColor: '#FFFFFF',
             border: '1px solid #EBECEF',
             borderRadius: 16,
@@ -292,7 +385,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             animation: 'snowFadeIn 0.15s ease-out',
           }}
         >
-          {/* Header Month / Year & Nav */}
+          {/* Header Month / Year Dropdowns & Nav */}
           <div className="snow-flex snow-items-center snow-justify-between" style={{ marginBottom: 12 }}>
             <button
               type="button"
@@ -314,9 +407,52 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               <ChevronLeft size={16} />
             </button>
 
-            <span className="snow-body" style={{ fontWeight: 600, fontSize: 14 }}>
-              {MONTH_NAMES[viewMonth]} {viewYear}
-            </span>
+            {/* Jump selectors for Month and Year */}
+            <div className="snow-flex snow-items-center snow-gap-1">
+              <select
+                value={viewMonth}
+                onChange={(e) => setViewMonth(Number(e.target.value))}
+                style={{
+                  padding: '3px 6px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  border: '1px solid #E4E4E7',
+                  backgroundColor: '#FFFFFF',
+                  color: '#1C1C1C',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                {MONTH_NAMES.map((name, idx) => (
+                  <option key={name} value={idx}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={viewYear}
+                onChange={(e) => setViewYear(Number(e.target.value))}
+                style={{
+                  padding: '3px 6px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  border: '1px solid #E4E4E7',
+                  backgroundColor: '#FFFFFF',
+                  color: '#1C1C1C',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                {YEARS.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <button
               type="button"

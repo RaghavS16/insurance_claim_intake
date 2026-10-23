@@ -25,8 +25,8 @@ router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
 def _normalize_doc_type(doc_type: str | None) -> str:
     dt = (doc_type or "policy_wording").strip().lower()
-    if dt == "statutory":
-        return "regulation"
+    if dt in {"statutory", "policy_regulatory", "regulation", "irdai_regulation"}:
+        return "policy_regulatory"
     return dt
 
 class IngestRequest(BaseModel):

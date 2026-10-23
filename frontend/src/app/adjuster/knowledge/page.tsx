@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Card } from '@/components/ui/Card';
 import { BadgePill } from '@/components/ui/Badge';
+import { FileUpload } from '@/components/ui/FileUpload';
 import { useToast } from '@/components/ui/Toast';
 import { KnowledgeDocument } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -372,18 +373,23 @@ export default function KnowledgeBasePage() {
             value={docType}
             onChange={(val) => setDocType(val)}
             options={[
-              { value: 'policy_wording', label: 'Policy Master Wording' },
-              { value: 'endorsement', label: 'Endorsement / Addendum' },
-              { value: 'guideline', label: 'Adjudication Underwriting Guideline' },
-              { value: 'statutory', label: 'Statutory / Regulatory Code' },
+              { value: 'policy_wording', label: 'Policy Wording' },
+              { value: 'policy_regulatory', label: 'Policy Regulatory' },
             ]}
           />
 
-          <Input
+          <Select
             label="Line of Business"
             value={insType}
-            onChange={(e) => setInsType(e.target.value)}
-            required
+            onChange={(val) => setInsType(val)}
+            options={[
+              { value: 'motor', label: 'Motor' },
+              { value: 'home', label: 'Home / Property' },
+              { value: 'health', label: 'Health' },
+              { value: 'senior_health', label: 'Senior Health' },
+              { value: 'travel', label: 'Travel' },
+              { value: 'cyber', label: 'Cyber' },
+            ]}
           />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -401,20 +407,15 @@ export default function KnowledgeBasePage() {
             />
           </div>
 
-          <div className="snow-form-group">
-            <label className="snow-label">Select Document (.PDF, .TXT, .DOCX)</label>
-            <input
-              type="file"
-              className="snow-input"
-              style={{ paddingTop: 8 }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  setSelectedFile(e.target.files[0]);
-                }
-              }}
-              required
-            />
-          </div>
+          <FileUpload
+            label="Select Document (.PDF, .TXT, .DOCX)"
+            accept=".pdf,.txt,.docx"
+            value={selectedFile}
+            onChange={setSelectedFile}
+            buttonLabel="Choose Document File"
+            helperText="PDF, DOCX, or TXT up to 150MB"
+            required
+          />
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
             <Button type="button" variant="secondary" onClick={() => setUploadModalOpen(false)}>
@@ -438,20 +439,15 @@ export default function KnowledgeBasePage() {
             Upload an updated version of this policy document. Existing chunks will be re-parsed and re-indexed.
           </p>
 
-          <div className="snow-form-group">
-            <label className="snow-label">Select Replacement File (.PDF, .TXT, .DOCX)</label>
-            <input
-              type="file"
-              className="snow-input"
-              style={{ paddingTop: 8 }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  setReplaceFile(e.target.files[0]);
-                }
-              }}
-              required
-            />
-          </div>
+          <FileUpload
+            label="Select Replacement File (.PDF, .TXT, .DOCX)"
+            accept=".pdf,.txt,.docx"
+            value={replaceFile}
+            onChange={setReplaceFile}
+            buttonLabel="Choose Replacement File"
+            helperText="PDF, DOCX, or TXT up to 150MB"
+            required
+          />
 
           <div className="snow-flex snow-justify-between snow-gap-3" style={{ marginTop: 24 }}>
             <Button type="button" variant="secondary" onClick={() => setReplaceModalOpen(false)}>

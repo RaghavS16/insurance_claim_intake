@@ -94,14 +94,18 @@ class ApiClient {
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
       let msg = `Request failed with status ${res.status}`;
-      if (typeof errorData.detail === 'string') {
+      if (Array.isArray(errorData.error?.details) && errorData.error.details.length > 0) {
+        msg = errorData.error.details.map((d: any) => `${d.field ? d.field + ': ' : ''}${d.msg || JSON.stringify(d)}`).join('; ');
+      } else if (Array.isArray(errorData.details) && errorData.details.length > 0) {
+        msg = errorData.details.map((d: any) => `${d.field ? d.field + ': ' : ''}${d.msg || JSON.stringify(d)}`).join('; ');
+      } else if (typeof errorData.detail === 'string') {
         msg = errorData.detail;
       } else if (Array.isArray(errorData.detail)) {
         msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
-      } else if (errorData.message) {
-        msg = errorData.message;
       } else if (errorData.error?.message) {
         msg = errorData.error.message;
+      } else if (errorData.message) {
+        msg = errorData.message;
       }
       throw new Error(msg);
     }
@@ -131,34 +135,42 @@ class ApiClient {
     return this.request<T>(endpoint, { ...options, method: 'GET' });
   }
 
-  post<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
+  async post<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-    return this.request<T>(endpoint, {
+    const res = await this.request<T>(endpoint, {
       ...options,
       method: 'POST',
       body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
+    this.clearCache();
+    return res;
   }
 
-  put<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
+  async put<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-    return this.request<T>(endpoint, {
+    const res = await this.request<T>(endpoint, {
       ...options,
       method: 'PUT',
       body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
+    this.clearCache();
+    return res;
   }
 
-  patch<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
-    return this.request<T>(endpoint, {
+  async patch<T>(endpoint: string, body?: any, options?: RequestInit): Promise<T> {
+    const res = await this.request<T>(endpoint, {
       ...options,
       method: 'PATCH',
       body: body ? JSON.stringify(body) : undefined,
     });
+    this.clearCache();
+    return res;
   }
 
-  delete<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    return this.request<T>(endpoint, { ...options, method: 'DELETE' });
+  async delete<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const res = await this.request<T>(endpoint, { ...options, method: 'DELETE' });
+    this.clearCache();
+    return res;
   }
 
   async downloadFile(endpoint: string, filename: string): Promise<void> {
@@ -174,6 +186,7 @@ class ApiClient {
       const err = await res.json().catch(() => ({}));
       let msg = `Download failed with status ${res.status}`;
       if (typeof err.detail === 'string') msg = err.detail;
+      else if (err.error?.message) msg = err.error.message;
       else if (err.message) msg = err.message;
       throw new Error(msg);
     }

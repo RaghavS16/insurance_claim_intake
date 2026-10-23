@@ -292,7 +292,8 @@ def list_user_claims(request: Request, submitted: Optional[bool] = Query(None), 
     current_user = _resolve_user(request, db)
     q = db.query(Claim).filter(Claim.claimant_id == current_user.id, Claim.tenant_id == current_user.tenant_id, Claim.status != "discarded")
     if submitted or submitted_only:
-        q = q.filter(Claim.status.notin_(["draft", "pending_confirmation", "discarded"]))
+        submitted_statuses = ["submitted", "assigned", "under_review", "pending_evidence", "approved", "partially_approved", "rejected", "escalated", "closed"]
+        q = q.filter(Claim.status.in_(submitted_statuses))
     claims = (
         q.order_by(Claim.updated_at.desc())
         .offset(offset)

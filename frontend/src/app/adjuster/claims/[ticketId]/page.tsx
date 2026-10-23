@@ -296,9 +296,10 @@ export default function AdjusterClaimWorkspacePage({
       breadcrumbs={['Adjuster', 'Claims', ticketId]}
       activeTitle={`Claim Workspace #${ticketId}`}
       hideRightDrawer
+      noScroll
     >
       {/* Top Header Actions */}
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
+      <div className="snow-action-bar" style={{ flexShrink: 0, marginBottom: 14 }}>
         <div className="snow-flex snow-items-center snow-gap-3">
           <Link href="/adjuster/queue">
             <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
@@ -308,7 +309,7 @@ export default function AdjusterClaimWorkspacePage({
           <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
         </div>
 
-        <div className="snow-flex snow-gap-2">
+        <div className="snow-action-buttons">
           <Button
             size="sm"
             variant="secondary"
@@ -338,7 +339,8 @@ export default function AdjusterClaimWorkspacePage({
             borderRadius: 12,
             color: '#B91C1C',
             fontSize: 13,
-            marginBottom: 20,
+            marginBottom: 14,
+            flexShrink: 0,
           }}
         >
           <AlertTriangle size={16} />
@@ -362,15 +364,12 @@ export default function AdjusterClaimWorkspacePage({
           </p>
         </Card>
       ) : (
-        /* Main Split Layout: Adjudication Tabs on Left, AI Copilot on Right */
-        <div style={{ display: 'grid', gridTemplateColumns: copilotOpen ? '1fr 380px' : '1fr', gap: 24 }}>
+        /* Main Split Layout: Fixed Headers, Independent Scrollable Panels */
+        <div className={`snow-workspace-split ${copilotOpen ? '' : 'copilot-closed'}`}>
           {/* Adjudication Workspace Left Column */}
-          <div className="snow-flex-col snow-gap-4">
-            {/* Workspace Tabs */}
-            <div
-              className="snow-flex snow-gap-4"
-              style={{ borderBottom: '1px solid #EBECEF', paddingBottom: 4 }}
-            >
+          <div className="snow-workspace-main-panel">
+            {/* Workspace Tabs - FIXED */}
+            <div className="snow-workspace-tabs-bar">
               {[
                 { id: 'facts', label: 'Loss Package' },
                 { id: 'evidence', label: 'Evidence & Documents' },
@@ -390,6 +389,7 @@ export default function AdjusterClaimWorkspacePage({
                     fontWeight: activeTab === tab.id ? 600 : 500,
                     color: activeTab === tab.id ? '#1C1C1C' : '#71717A',
                     borderBottom: activeTab === tab.id ? '2px solid #1C1C1C' : 'none',
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {tab.label}
@@ -397,8 +397,10 @@ export default function AdjusterClaimWorkspacePage({
               ))}
             </div>
 
-            {/* Loss Package Tab */}
-            {activeTab === 'facts' && (
+            {/* Scrollable Tab Content Container - Only this scrolls */}
+            <div className="snow-workspace-content-scroll snow-scrollbar">
+              {/* Loss Package Tab */}
+              {activeTab === 'facts' && (
               <div className="snow-flex-col snow-gap-4">
                 {/* AI Copilot Claims Synopsis Card */}
                 <Card
@@ -436,7 +438,7 @@ export default function AdjusterClaimWorkspacePage({
                         <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
                           <span className="snow-caption" style={{ color: '#6B7280' }}>Recommended Payout</span>
                           <div className="snow-body" style={{ fontWeight: 700, color: '#111827' }}>
-                            {copilotSynopsis.recommended_payout_amount != null ? `$${Number(copilotSynopsis.recommended_payout_amount).toLocaleString()}` : '—'}
+                            {copilotSynopsis.recommended_payout_amount != null ? `₹${Number(copilotSynopsis.recommended_payout_amount).toLocaleString('en-IN')}` : '—'}
                           </div>
                         </div>
                         <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
@@ -529,14 +531,14 @@ export default function AdjusterClaimWorkspacePage({
                     <div>
                       <span className="snow-caption" style={{ color: '#A1A1AA' }}>Estimated Loss</span>
                       <div className="snow-body" style={{ fontWeight: 600 }}>
-                        {claim.estimated_claim_amount ? `$${Number(claim.estimated_claim_amount).toLocaleString()}` : '—'}
+                        {claim.estimated_claim_amount ? `₹${Number(claim.estimated_claim_amount).toLocaleString('en-IN')}` : '—'}
                       </div>
                     </div>
                     <div>
                       <span className="snow-caption" style={{ color: '#A1A1AA' }}>Coverage Limit & Deductible</span>
                       <div className="snow-body">
-                        {policy?.coverage_amount ? `$${Number(policy.coverage_amount).toLocaleString()} max` : '—'}
-                        {policy?.deductible ? ` ($${Number(policy.deductible).toLocaleString()} ded.)` : ''}
+                        {policy?.coverage_amount ? `₹${Number(policy.coverage_amount).toLocaleString('en-IN')} max` : '—'}
+                        {policy?.deductible ? ` (₹${Number(policy.deductible).toLocaleString('en-IN')} ded.)` : ''}
                       </div>
                     </div>
                   </div>
@@ -813,25 +815,15 @@ export default function AdjusterClaimWorkspacePage({
                 </div>
               </Card>
             )}
+            </div>
           </div>
 
-          {/* AI Copilot Side Drawer */}
+          {/* AI Copilot Side Drawer - Fixed Header & Input, Independent Chat Scroll */}
           {copilotOpen && (
-            <aside
-              className="snow-card"
-              style={{
-                padding: 20,
-                borderRadius: 20,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                maxHeight: 'calc(100vh - 180px)',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.04)',
-              }}
-            >
-              {/* Copilot Header */}
-              <div>
-                <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+            <aside className="snow-workspace-copilot-panel snow-card">
+              {/* Copilot Header - FIXED */}
+              <div className="snow-workspace-copilot-header">
+                <div className="snow-flex snow-justify-between snow-items-center">
                   <div className="snow-flex snow-items-center snow-gap-2">
                     <div
                       style={{
@@ -845,66 +837,57 @@ export default function AdjusterClaimWorkspacePage({
                   </div>
                   <span className="snow-badge-pill purple">RAG Grounded</span>
                 </div>
-
-                {/* Chat Thread */}
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 14,
-                    overflowY: 'auto',
-                    maxHeight: 'calc(100vh - 380px)',
-                    paddingRight: 4,
-                  }}
-                >
-                  {copilotChats.length === 0 ? (
-                    <div className="snow-caption" style={{ color: '#71717A', fontStyle: 'italic', padding: 8 }}>
-                      Ask Copilot to analyze coverage limits, verify exclusions, or check policy clauses.
-                    </div>
-                  ) : (
-                    copilotChats.map((c) => (
-                      <div
-                        key={c.id}
-                        style={{
-                          backgroundColor: c.sender === 'adjuster' ? '#B4C6FC' : '#F5F5F7',
-                          color: '#1C1C1C',
-                          borderRadius: c.sender === 'adjuster' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                          padding: '12px 14px',
-                          fontSize: 13,
-                          lineHeight: 1.5,
-                          alignSelf: c.sender === 'adjuster' ? 'flex-end' : 'flex-start',
-                          maxWidth: '92%',
-                        }}
-                      >
-                        <div>{c.text}</div>
-                        {c.citations && c.citations.length > 0 && (
-                          <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #EBECEF' }}>
-                            <div className="snow-micro" style={{ fontWeight: 600, color: '#71717A', marginBottom: 2 }}>
-                              POLICY CITATIONS:
-                            </div>
-                            {c.citations.map((cite, idx) => {
-                              const label = typeof cite === 'string' ? cite : ((cite as any)?.citation_label || (cite as any)?.source_name || (cite as any)?.claim || (cite as any)?.source_id || JSON.stringify(cite));
-                              return (
-                                <div key={idx} className="snow-micro" style={{ color: '#007AFF' }}>
-                                  • {label}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                  {copilotLoading && (
-                    <div className="snow-caption" style={{ color: '#71717A', fontStyle: 'italic' }}>
-                      Copilot is querying policy knowledge base...
-                    </div>
-                  )}
-                </div>
               </div>
 
-              {/* Quick Action Chips & Input Bar */}
-              <div style={{ marginTop: 16 }}>
+              {/* Chat Thread - ONLY THIS SCROLLS IN COPILOT */}
+              <div className="snow-workspace-copilot-chat snow-scrollbar">
+                {copilotChats.length === 0 ? (
+                  <div className="snow-caption" style={{ color: '#71717A', fontStyle: 'italic', padding: 8 }}>
+                    Ask Copilot to analyze coverage limits, verify exclusions, or check policy clauses.
+                  </div>
+                ) : (
+                  copilotChats.map((c) => (
+                    <div
+                      key={c.id}
+                      style={{
+                        backgroundColor: c.sender === 'adjuster' ? '#B4C6FC' : '#F5F5F7',
+                        color: '#1C1C1C',
+                        borderRadius: c.sender === 'adjuster' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        padding: '12px 14px',
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                        alignSelf: c.sender === 'adjuster' ? 'flex-end' : 'flex-start',
+                        maxWidth: '92%',
+                      }}
+                    >
+                      <div>{c.text}</div>
+                      {c.citations && c.citations.length > 0 && (
+                        <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #EBECEF' }}>
+                          <div className="snow-micro" style={{ fontWeight: 600, color: '#71717A', marginBottom: 2 }}>
+                            POLICY CITATIONS:
+                          </div>
+                          {c.citations.map((cite, idx) => {
+                            const label = typeof cite === 'string' ? cite : ((cite as any)?.citation_label || (cite as any)?.source_name || (cite as any)?.claim || (cite as any)?.source_id || JSON.stringify(cite));
+                            return (
+                              <div key={idx} className="snow-micro" style={{ color: '#007AFF' }}>
+                                • {label}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+                {copilotLoading && (
+                  <div className="snow-caption" style={{ color: '#71717A', fontStyle: 'italic' }}>
+                    Copilot is querying policy knowledge base...
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Action Chips & Input Bar - FIXED AT BOTTOM */}
+              <div className="snow-workspace-copilot-footer">
                 <div className="snow-flex snow-gap-1" style={{ marginBottom: 10, overflowX: 'auto' }}>
                   <Button
                     size="sm"

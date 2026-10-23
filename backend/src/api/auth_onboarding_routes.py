@@ -13,6 +13,7 @@ from src.database.models import Adjuster, User
 from src.database.session import get_db
 from src.utils.auth import create_access_token, get_password_hash
 from src.utils.validators import validate_password_strength
+from src.utils.rate_limiter import enforce_rate_limit
 
 router = APIRouter(prefix="/api/v1/auth/onboarding", tags=["Authentication"])
 
@@ -29,7 +30,13 @@ def _find_invite(db: Session, raw_token: str):
     ).first()
 
 @router.get("/adjuster/{token}")
-def preview_adjuster_invitation(token: str, db: Session = Depends(get_db)):
+def preview_adjuster_invitation(token: str, request: Request = None, db: Session = Depends(get_db)):
+    if request is not None and not hasattr(request, "client"):
+        # Unit test passed db as second positional argument
+        db = request  # type: ignore[assignment]
+        request = None
+    if request is not None:
+        enforce_rate_limit(request, action="preview_adjuster_invite", max_requests=20, window_seconds=60)
     invite = _find_invite(db, token)
     if not invite:
         raise HTTPException(status_code=404, detail="Invitation is invalid or expired.")
@@ -40,6 +47,7 @@ def preview_adjuster_invitation(token: str, db: Session = Depends(get_db)):
 
 @router.post("/adjuster/accept")
 def accept_adjuster_invitation(payload: AdjusterInvitationAccept, request: Request, response: Response, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, action="accept_adjuster_invite", max_requests=10, window_seconds=60)
     invite = _find_invite(db, payload.token)
     if not invite:
         raise HTTPException(status_code=400, detail="Invitation is invalid or expired.")

@@ -144,7 +144,7 @@ def _auth_response(user: User, refresh_token: str | None = None, *, amr: list[st
     return {
         "access_token": create_access_token(data={"sub": user.id, "tenant_id": user.tenant_id or "", "role": user.role, "sv": sv, "mfa": mfa_authenticated, "amr": amr or []}),
         "token_type": "bearer",
-        "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "phone": user.phone, "role": user.role},
+        "user": {"id": user.id, "full_name": user.full_name, "email": user.email, "phone": getattr(user, "phone", None), "role": user.role},
     }
 
 
@@ -635,6 +635,18 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
     ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
     # Revoke the reset token so it cannot be used again
     revoke_token(payload.reset_token)
+    try:
+        token_jti = token_payload.get("jti") or payload.reset_token
+        exp_ts = token_payload.get("exp")
+        exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+        db.add(RevokedToken(
+            token_jti=token_jti,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            expires_at=exp_dt,
+        ))
+    except Exception:
+        pass
 
     try:
         db.commit()
@@ -704,7 +716,7 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
             db.commit()
 
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
+    if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
         try:
             import jwt as _jwt

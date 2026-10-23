@@ -53,13 +53,13 @@ export default function AdjusterPolicyDirectoryPage() {
     { key: 'policy_type', header: 'Policy Form' },
     {
       key: 'coverage_amount',
-      header: 'Limit ($)',
-      render: (p) => `$${Number(p.coverage_amount || 0).toLocaleString()}`,
+      header: 'Limit (₹)',
+      render: (p) => `₹${Number(p.coverage_amount || 0).toLocaleString('en-IN')}`,
     },
     {
       key: 'deductible',
       header: 'Deductible',
-      render: (p) => `$${Number(p.deductible || 0).toLocaleString()}`,
+      render: (p) => `₹${Number(p.deductible || 0).toLocaleString('en-IN')}`,
     },
     {
       key: 'expiry_date',

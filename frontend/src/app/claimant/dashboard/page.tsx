@@ -233,7 +233,7 @@ export default function ClaimantDashboardPage() {
         />
         <MetricCard
           title="Approved Payouts"
-          value={loading ? '—' : `$${totalSettlements.toLocaleString()}`}
+          value={loading ? '—' : `₹${totalSettlements.toLocaleString('en-IN')}`}
           trend={`${approvedClaims.length} approved`}
           trendDirection="up"
           tint="mint"

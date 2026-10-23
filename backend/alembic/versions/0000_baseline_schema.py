@@ -45,12 +45,13 @@ def upgrade() -> None:
             "ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)"
         ))
 
-    op.create_table(
-        "schema_baseline",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("revision", sa.String(32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-    )
+    if "schema_baseline" not in tables:
+        op.create_table(
+            "schema_baseline",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("revision", sa.String(32), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        )
     bind.execute(sa.text(
         "INSERT INTO schema_baseline (id, revision) VALUES (1, '0000') "
         "ON CONFLICT (id) DO NOTHING"
@@ -58,6 +59,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("schema_baseline")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "schema_baseline" in inspector.get_table_names():
+        op.drop_table("schema_baseline")
     from src.database.models import Base
-    Base.metadata.drop_all(bind=op.get_bind())
+    Base.metadata.drop_all(bind=bind)

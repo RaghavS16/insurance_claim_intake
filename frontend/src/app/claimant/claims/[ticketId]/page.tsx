@@ -20,6 +20,7 @@ import { AppShell } from '@/components/ui/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { FileUpload } from '@/components/ui/FileUpload';
 import { Input } from '@/components/ui/Input';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
@@ -263,7 +264,7 @@ export default function ClaimDetailsPage({
               <div>
                 <span className="snow-caption" style={{ color: '#A1A1AA' }}>Estimated Damage</span>
                 <div className="snow-body" style={{ fontWeight: 600 }}>
-                  {claim.estimated_claim_amount ? `$${Number(claim.estimated_claim_amount).toLocaleString()}` : '—'}
+                  {claim.estimated_claim_amount ? `₹${Number(claim.estimated_claim_amount).toLocaleString('en-IN')}` : '—'}
                 </div>
               </div>
               <div>
@@ -392,13 +393,13 @@ export default function ClaimDetailsPage({
               <div>
                 <span className="snow-caption" style={{ color: '#A1A1AA' }}>Coverage Limit</span>
                 <div className="snow-body" style={{ fontWeight: 600 }}>
-                  {claim.coverage_amount ? `$${Number(claim.coverage_amount).toLocaleString()}` : '—'}
+                  {claim.coverage_amount ? `₹${Number(claim.coverage_amount).toLocaleString('en-IN')}` : '—'}
                 </div>
               </div>
               <div>
                 <span className="snow-caption" style={{ color: '#A1A1AA' }}>Applicable Deductible</span>
                 <div className="snow-body">
-                  {claim.deductible ? `$${Number(claim.deductible).toLocaleString()}` : '—'}
+                  {claim.deductible ? `₹${Number(claim.deductible).toLocaleString('en-IN')}` : '—'}
                 </div>
               </div>
               <div>
@@ -464,29 +465,13 @@ export default function ClaimDetailsPage({
             required
           />
 
-          <div
-            style={{
-              border: '2px dashed #D1D5DB',
-              borderRadius: 14,
-              padding: '24px 16px',
-              textAlign: 'center',
-              backgroundColor: '#FAFAFB',
-              marginBottom: 20,
-              cursor: 'pointer',
-            }}
-            onClick={() => document.getElementById('respond-file-input')?.click()}
-          >
-            <Upload size={28} color="#71717A" style={{ marginBottom: 6 }} />
-            <div className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-              {respondFile ? respondFile.name : 'Select requested PDF / Photo document'}
-            </div>
-            <input
-              id="respond-file-input"
-              type="file"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files?.[0]) setRespondFile(e.target.files[0]);
-              }}
+          <div style={{ marginBottom: 20 }}>
+            <FileUpload
+              label="Select requested PDF / Photo document"
+              accept="image/*,application/pdf"
+              file={respondFile}
+              onFileSelect={(f: File | null) => setRespondFile(f)}
+              hint="Attach the supporting document requested by your adjuster."
             />
           </div>
 

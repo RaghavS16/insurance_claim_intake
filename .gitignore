@@ -219,3 +219,6 @@ logs/
 testsprite_tests/tmp/
 testsprite_tests/tmp/config.json
 testsprite_tests/
+
+# Audit report
+audit-reports/

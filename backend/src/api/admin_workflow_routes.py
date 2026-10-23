@@ -210,13 +210,15 @@ def list_invitations(request: Request, db: Session = Depends(get_db)):
                 OutboxEvent.id == r.email_event_id,
                 OutboxEvent.tenant_id == admin.tenant_id,
             ).first()
-            exp = r.expires_at.replace(tzinfo=timezone.utc) if r.expires_at.tzinfo is None else r.expires_at
-            items.append({
-                "id": r.id,
-                "email": r.email,
-                "name": r.name,
-                "specialization": r.specialization,
-                "status": "accepted" if r.accepted_at else ("expired" if exp <= now else "invited"),
+        exp = r.expires_at.replace(tzinfo=timezone.utc) if r.expires_at.tzinfo is None else r.expires_at
+        items.append({
+            "id": r.id,
+            "email": r.email,
+            "name": r.name,
+            "specialization": r.specialization,
+            "status": "accepted" if r.accepted_at else ("expired" if exp <= now else "invited"),
+            "accepted_at": r.accepted_at.isoformat() if r.accepted_at else None,
+            "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
             "email_delivery_status": event.status if event else "not_queued",
             "email_delivery_attempts": int(event.attempts or 0) if event else 0,
             "expires_at": r.expires_at.isoformat(),
