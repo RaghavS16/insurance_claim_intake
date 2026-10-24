@@ -12,6 +12,7 @@ import { Select } from '@/components/ui/Select';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { BadgePill, BadgeDot } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
+import { useAuth } from '@/lib/auth-context';
 import { FileUpload } from '@/components/ui/FileUpload';
 import { Policy } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -27,6 +28,7 @@ const POLICY_FORM_OPTIONS = [
 
 export default function AdminPoliciesPage() {
   const { showToast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,8 +85,10 @@ export default function AdminPoliciesPage() {
   };
 
   useEffect(() => {
-    fetchPolicies();
-  }, []);
+    if (!authLoading && user) {
+      fetchPolicies();
+    }
+  }, [authLoading, user]);
 
   const handleOpenEdit = (p: Policy) => {
     setEditingPolicy(p);
@@ -397,7 +401,7 @@ export default function AdminPoliciesPage() {
         <form onSubmit={handleCreatePolicy}>
           <Input
             label="Policy Number"
-            placeholder="POL-AUTO-10023"
+            placeholder="POL-IND-2026-0099"
             value={polNumber}
             onChange={(e) => setPolNumber(e.target.value)}
             required
@@ -413,7 +417,7 @@ export default function AdminPoliciesPage() {
 
           <Input
             label="Policyholder Full Name"
-            placeholder="Johnathan Doe"
+            placeholder="e.g. Rajesh Sharma"
             value={holderName}
             onChange={(e) => setHolderName(e.target.value)}
             required
@@ -429,7 +433,7 @@ export default function AdminPoliciesPage() {
             <Input
               label="Contact Phone"
               type="tel"
-              placeholder="+1 555-123-4567"
+              placeholder="+91 98765 43210"
               value={holderPhone}
               onChange={(e) => setHolderPhone(e.target.value)}
               required
@@ -439,21 +443,21 @@ export default function AdminPoliciesPage() {
           <Input
             label="Policyholder Email"
             type="email"
-            placeholder="holder@example.com"
+            placeholder="rajesh.sharma@example.in"
             value={holderEmail}
             onChange={(e) => setHolderEmail(e.target.value)}
           />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Input
-              label="Coverage Limit ($)"
+              label="Coverage Limit (₹)"
               type="number"
               value={coverageAmt}
               onChange={(e) => setCoverageAmt(e.target.value)}
               required
             />
             <Input
-              label="Deductible ($)"
+              label="Deductible (₹)"
               type="number"
               value={deductibleAmt}
               onChange={(e) => setDeductibleAmt(e.target.value)}
@@ -524,7 +528,7 @@ export default function AdminPoliciesPage() {
         <form onSubmit={handleSaveEdit}>
           <Input
             label="Policyholder Full Name"
-            placeholder="Jane Doe"
+            placeholder="e.g. Priya Patel"
             value={editHolderName}
             onChange={(e) => setEditHolderName(e.target.value)}
             required
@@ -539,7 +543,7 @@ export default function AdminPoliciesPage() {
             <Input
               label="Contact Phone"
               type="tel"
-              placeholder="+1 555-0199"
+              placeholder="+91 98765 43210"
               value={editHolderPhone}
               onChange={(e) => setEditHolderPhone(e.target.value)}
             />
@@ -548,7 +552,7 @@ export default function AdminPoliciesPage() {
           <Input
             label="Policyholder Email"
             type="email"
-            placeholder="policyholder@example.com"
+            placeholder="priya.patel@example.in"
             value={editHolderEmail}
             onChange={(e) => setEditHolderEmail(e.target.value)}
           />
@@ -562,14 +566,14 @@ export default function AdminPoliciesPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Input
-              label="Coverage Limit ($)"
+              label="Coverage Limit (₹)"
               type="number"
               value={editCoverageAmt}
               onChange={(e) => setEditCoverageAmt(e.target.value)}
               required
             />
             <Input
-              label="Deductible ($)"
+              label="Deductible (₹)"
               type="number"
               value={editDeductibleAmt}
               onChange={(e) => setEditDeductibleAmt(e.target.value)}

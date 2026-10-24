@@ -121,7 +121,7 @@ export default function AdjusterDashboardPage() {
 
   return (
     <AppShell breadcrumbs={['Adjuster', 'Dashboard']} activeTitle="Adjuster Workspace">
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+      <div className="snow-action-bar" style={{ marginBottom: 16 }}>
         <div className="snow-body" style={{ fontWeight: 600, color: '#374151' }}>Real-Time Queue Metrics</div>
         <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
       </div>
@@ -169,8 +169,8 @@ export default function AdjusterDashboardPage() {
         />
       </div>
 
-      {/* Middle Row: Status Donut Chart & Prioritized Tasks Table */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 20, marginBottom: 24 }}>
+      {/* Middle Row: Status Donut Chart & Prioritized Tasks Table (Responsive Stacking) */}
+      <div className="snow-dashboard-middle-grid">
         <Card title="Adjudication Distribution">
           <DonutChart segments={donutSegments} size={150} strokeWidth={20} />
         </Card>

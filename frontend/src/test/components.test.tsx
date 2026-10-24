@@ -7,6 +7,8 @@ import { PinInput } from '@/components/ui/PinInput';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
+import { Checkbox } from '@/components/ui/Checkbox';
+import { DatePicker } from '@/components/ui/DatePicker';
 
 describe('IntelliClaim Component Library', () => {
   it('renders Button with primary variant and handles click', () => {
@@ -20,9 +22,9 @@ describe('IntelliClaim Component Library', () => {
   });
 
   it('renders Input with label and handles change', () => {
-    render(<Input label="Policyholder Name" placeholder="e.g. John Doe" />);
+    render(<Input label="Policyholder Name" placeholder="e.g. Rajesh Sharma" />);
     expect(screen.getByText('Policyholder Name')).toBeInTheDocument();
-    const input = screen.getByPlaceholderText('e.g. John Doe');
+    const input = screen.getByPlaceholderText('e.g. Rajesh Sharma');
     expect(input).toBeInTheDocument();
   });
 
@@ -69,5 +71,34 @@ describe('IntelliClaim Component Library', () => {
     expect(screen.getByText('Coverage Terms')).toBeInTheDocument();
     expect(screen.getByText('Section 4.2 Guidelines')).toBeInTheDocument();
     expect(screen.getByText('Card Content')).toBeInTheDocument();
+  });
+
+  it('renders Checkbox with custom design and handles toggle', () => {
+    const handleChange = vi.fn();
+    render(<Checkbox label="I Accept the Terms" onChange={handleChange} />);
+    const cb = screen.getByRole('checkbox');
+    expect(cb).toBeInTheDocument();
+    expect(screen.getByText('I Accept the Terms')).toBeInTheDocument();
+    fireEvent.click(cb);
+    expect(handleChange).toHaveBeenCalled();
+  });
+
+  it('renders DatePicker and opens custom month and year pickers', () => {
+    const handleChange = vi.fn();
+    render(<DatePicker label="Select Incident Date" value="2026-10-24" onChange={handleChange} />);
+    expect(screen.getByText('Select Incident Date')).toBeInTheDocument();
+    
+    // Open calendar via toggle button
+    const toggleBtn = screen.getByLabelText('Toggle calendar');
+    fireEvent.click(toggleBtn);
+
+    // Verify Month trigger button exists and can be clicked
+    const monthBtn = screen.getByLabelText('Select month');
+    expect(monthBtn).toBeInTheDocument();
+    expect(screen.getByText('October')).toBeInTheDocument();
+    fireEvent.click(monthBtn);
+    // Jan to Dec pills rendered
+    expect(screen.getByRole('button', { name: /^Jan$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Dec$/i })).toBeInTheDocument();
   });
 });

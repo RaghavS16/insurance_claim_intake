@@ -561,24 +561,41 @@ def get_admin_dashboard(
     claim_query = db.query(Claim).filter(Claim.tenant_id == tenant_id)
     total_claims = claim_query.count()
     claims_all = claim_query.all()
-    stage_counts: Dict[str, int] = {
-        "draft": 0,
+    raw_stage_counts: Dict[str, int] = {}
+    canonical_stage_counts: Dict[str, int] = {
         "submitted": 0,
         "under_review": 0,
+        "pending_evidence": 0,
         "approved": 0,
         "rejected": 0,
         "settled": 0,
     }
+    submitted_claims_count = 0
     for c in claims_all:
         st = (c.status or "draft").lower()
-        if st in stage_counts:
-            stage_counts[st] += 1
-        else:
-            stage_counts[st] = stage_counts.get(st, 0) + 1
+        raw_stage_counts[st] = raw_stage_counts.get(st, 0) + 1
+        if st in ["submitted", "verified", "evaluated", "pending_verification", "pending_adjuster"]:
+            canonical_stage_counts["submitted"] += 1
+            submitted_claims_count += 1
+        elif st in ["under_review", "assigned"]:
+            canonical_stage_counts["under_review"] += 1
+            submitted_claims_count += 1
+        elif st in ["pending_evidence"]:
+            canonical_stage_counts["pending_evidence"] += 1
+            submitted_claims_count += 1
+        elif st in ["approved", "partially_approved"]:
+            canonical_stage_counts["approved"] += 1
+            submitted_claims_count += 1
+        elif st in ["settled"]:
+            canonical_stage_counts["settled"] += 1
+            submitted_claims_count += 1
+        elif st in ["rejected", "closed", "escalated"]:
+            canonical_stage_counts["rejected"] += 1
+            submitted_claims_count += 1
 
     # 3. Settlement Volume
     approved_volume = 0.0
-    approved_count = stage_counts.get("approved", 0) + stage_counts.get("settled", 0)
+    approved_count = canonical_stage_counts.get("approved", 0) + canonical_stage_counts.get("settled", 0)
     try:
         from src.database.hardening_models import ClaimDecision
         decisions = db.query(ClaimDecision).filter(
@@ -614,7 +631,9 @@ def get_admin_dashboard(
         },
         "claims": {
             "total": total_claims,
-            "stages": stage_counts,
+            "submitted_total": submitted_claims_count,
+            "stages": canonical_stage_counts,
+            "raw_stages": raw_stage_counts,
         },
         "settlement": {
             "approved_volume": round(approved_volume, 2),
@@ -630,7 +649,8 @@ def get_admin_dashboard(
         "total_active_policies": active_policies,
         "linked_policies_count": linked_policies,
         "total_claims": total_claims,
-        "claims_by_stage": stage_counts,
+        "submitted_claims_total": submitted_claims_count,
+        "claims_by_stage": canonical_stage_counts,
         "approved_settlement_volume": round(approved_volume, 2),
         "active_adjusters": active_adjusters,
         "total_assigned_workload": total_claims_assigned,

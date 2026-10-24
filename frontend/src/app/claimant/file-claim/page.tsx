@@ -148,7 +148,7 @@ function FileClaimContent() {
           setSelectedPolicyNumber(list[0].policy_number);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // Handle Session Initialization (Fix 6: fresh chat vs past chat)
@@ -691,14 +691,14 @@ function FileClaimContent() {
           className={`snow-mobile-intake-tab ${mobileTab === 'chat' ? 'active' : ''}`}
           onClick={() => setMobileTab('chat')}
         >
-          💬 AI Chat & Voice
+          AI Chat & Voice
         </button>
         <button
           type="button"
           className={`snow-mobile-intake-tab ${mobileTab === 'dossier' ? 'active' : ''}`}
           onClick={() => setMobileTab('dossier')}
         >
-          📋 Live Claim Dossier
+          Live Claim Dossier
         </button>
       </div>
 
@@ -834,7 +834,7 @@ function FileClaimContent() {
                             fontWeight: 500,
                           }}
                         >
-                          📖 {label}
+                          {label}
                         </span>
                       );
                     })}
@@ -893,288 +893,288 @@ function FileClaimContent() {
               </div>
             ))}
 
-          {/* Real-Time Live Transcribing Speech Bubble (on user's right side) */}
-          {isVoiceActive && (
-            <div
-              className="snow-chat-bubble-user"
-              style={{
-                opacity: 0.98,
-                border: '1.5px solid #007AFF',
-                backgroundColor: '#F0F7FF',
-                color: '#1C1C1C',
-                position: 'relative',
-                boxShadow: '0 4px 14px rgba(0, 122, 255, 0.12)',
-              }}
-            >
-              {liveTranscript ? (
-                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, fontSize: 14, fontWeight: 500, color: '#0F172A' }}>
-                  {liveTranscript}
-                  <span className="snow-live-cursor" />
-                </div>
-              ) : (
-                <div className="snow-flex snow-items-center snow-gap-2" style={{ padding: '2px 0' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height: 16 }}>
-                    <span className="snow-soundwave-bar" />
-                    <span className="snow-soundwave-bar" />
-                    <span className="snow-soundwave-bar" />
+            {/* Real-Time Live Transcribing Speech Bubble (on user's right side) */}
+            {isVoiceActive && (
+              <div
+                className="snow-chat-bubble-user"
+                style={{
+                  opacity: 0.98,
+                  border: '1.5px solid #007AFF',
+                  backgroundColor: '#F0F7FF',
+                  color: '#1C1C1C',
+                  position: 'relative',
+                  boxShadow: '0 4px 14px rgba(0, 122, 255, 0.12)',
+                }}
+              >
+                {liveTranscript ? (
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, fontSize: 14, fontWeight: 500, color: '#0F172A' }}>
+                    {liveTranscript}
+                    <span className="snow-live-cursor" />
                   </div>
-                  <span style={{ fontSize: 13, color: '#007AFF', fontWeight: 500 }}>
-                    Listening...
-                  </span>
-                  <span className="snow-live-cursor" />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* FIX 3: AI Typing / Thinking Animation Bubble (on AI's left side) */}
-          {isThinking && (
-            <div
-              className="snow-chat-bubble-assistant"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '12px 18px',
-                width: 'fit-content',
-                backgroundColor: '#F4F5F7',
-                borderRadius: 16,
-              }}
-            >
-              <span style={{ fontSize: 13, color: '#71717A', fontWeight: 500 }}>
-                IntelliClaim AI is thinking
-              </span>
-              <div className="snow-flex snow-items-center snow-gap-1">
-                <span className="snow-typing-dot" />
-                <span className="snow-typing-dot" style={{ animationDelay: '0.2s' }} />
-                <span className="snow-typing-dot" style={{ animationDelay: '0.4s' }} />
+                ) : (
+                  <div className="snow-flex snow-items-center snow-gap-2" style={{ padding: '2px 0' }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height: 16 }}>
+                      <span className="snow-soundwave-bar" />
+                      <span className="snow-soundwave-bar" />
+                      <span className="snow-soundwave-bar" />
+                    </div>
+                    <span style={{ fontSize: 13, color: '#007AFF', fontWeight: 500 }}>
+                      Listening...
+                    </span>
+                    <span className="snow-live-cursor" />
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
 
-          <div ref={messagesEndRef} />
+            {/* FIX 3: AI Typing / Thinking Animation Bubble (on AI's left side) */}
+            {isThinking && (
+              <div
+                className="snow-chat-bubble-assistant"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '12px 18px',
+                  width: 'fit-content',
+                  backgroundColor: '#F4F5F7',
+                  borderRadius: 16,
+                }}
+              >
+                <span style={{ fontSize: 13, color: '#71717A', fontWeight: 500 }}>
+                  IntelliClaim AI is thinking
+                </span>
+                <div className="snow-flex snow-items-center snow-gap-1">
+                  <span className="snow-typing-dot" />
+                  <span className="snow-typing-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="snow-typing-dot" style={{ animationDelay: '0.4s' }} />
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input Bar */}
+          <div
+            className="snow-card"
+            style={{
+              padding: '8px 12px',
+              borderRadius: 24,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              boxShadow: '0 4px 18px rgba(0,0,0,0.06)',
+              backgroundColor: '#FFFFFF',
+              flexShrink: 0,
+            }}
+          >
+            {/* Attach Evidence */}
+            <button
+              type="button"
+              onClick={() => setEvidenceModalOpen(true)}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                border: 'none',
+                background: '#F4F5F7',
+                color: '#71717A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+              title="Attach Evidence Photo/Receipt"
+            >
+              <Paperclip size={17} />
+            </button>
+
+            {/* Text Input */}
+            <input
+              type="text"
+              className="snow-input"
+              style={{
+                border: 'none',
+                boxShadow: 'none',
+                fontSize: 14,
+                padding: '0 8px',
+                height: 38,
+                flex: 1,
+                minWidth: 0,
+              }}
+              placeholder={
+                isVoiceActive
+                  ? 'Listening & transcribing in real time... Speak now or click mic to send'
+                  : 'Type your message or click the mic to speak...'
+              }
+              value={inputTurn}
+              onChange={(e) => setInputTurn(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSendText();
+              }}
+            />
+
+            {/* Microphone Button with Real-Time Listening State */}
+            <button
+              type="button"
+              onClick={toggleVoiceMode}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                border: 'none',
+                background: isVoiceActive ? '#EF4444' : '#1C1C1C',
+                color: '#FFFFFF',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                flexShrink: 0,
+                animation: isVoiceActive ? 'snowPulseRing 1.4s infinite' : 'none',
+              }}
+              title={isVoiceActive ? 'Click to cut microphone & send message immediately' : 'Click to speak & transcribe live'}
+            >
+              {isVoiceActive ? <MicOff size={18} /> : <Mic size={18} />}
+            </button>
+
+            {/* Send Button */}
+            <Button
+              pill
+              size="sm"
+              variant="primary"
+              onClick={() => handleSendText()}
+              disabled={!inputTurn.trim()}
+              icon={<Send size={14} />}
+            >
+              Send
+            </Button>
+
+            {/* Submit Claim / Track Submitted Claim Button */}
+            {ticketId && (
+              claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  pill
+                  onClick={() => router.push(`/claimant/claims/${ticketId}`)}
+                >
+                  Track Claim & Requests
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  pill
+                  onClick={() => setConfirmModalOpen(true)}
+                >
+                  Submit Claim
+                </Button>
+              )
+            )}
+          </div>
         </div>
 
-        {/* Input Bar */}
+        {/* Right Column: Live Claim Dossier Panel */}
         <div
-          className="snow-card"
+          className={`snow-dossier-col snow-card snow-scrollbar ${mobileTab === 'chat' ? 'mobile-hidden' : ''}`}
           style={{
-            padding: '8px 12px',
-            borderRadius: 24,
             display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            boxShadow: '0 4px 18px rgba(0,0,0,0.06)',
+            flexDirection: 'column',
+            gap: 14,
+            padding: 18,
+            borderRadius: 16,
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
-            flexShrink: 0,
+            minWidth: 0,
+            height: '100%',
+            minHeight: 0,
           }}
         >
-          {/* Attach Evidence */}
-          <button
-            type="button"
-            onClick={() => setEvidenceModalOpen(true)}
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: '50%',
-              border: 'none',
-              background: '#F4F5F7',
-              color: '#71717A',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-            title="Attach Evidence Photo/Receipt"
-          >
-            <Paperclip size={17} />
-          </button>
-
-          {/* Text Input */}
-          <input
-            type="text"
-            className="snow-input"
-            style={{
-              border: 'none',
-              boxShadow: 'none',
-              fontSize: 14,
-              padding: '0 8px',
-              height: 38,
-              flex: 1,
-              minWidth: 0,
-            }}
-            placeholder={
-              isVoiceActive
-                ? 'Listening & transcribing in real time... Speak now or click mic to send'
-                : 'Type your message or click the mic to speak...'
-            }
-            value={inputTurn}
-            onChange={(e) => setInputTurn(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleSendText();
-            }}
-          />
-
-          {/* Microphone Button with Real-Time Listening State */}
-          <button
-            type="button"
-            onClick={toggleVoiceMode}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: '50%',
-              border: 'none',
-              background: isVoiceActive ? '#EF4444' : '#1C1C1C',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              flexShrink: 0,
-              animation: isVoiceActive ? 'snowPulseRing 1.4s infinite' : 'none',
-            }}
-            title={isVoiceActive ? 'Click to cut microphone & send message immediately' : 'Click to speak & transcribe live'}
-          >
-            {isVoiceActive ? <MicOff size={18} /> : <Mic size={18} />}
-          </button>
-
-          {/* Send Button */}
-          <Button
-            pill
-            size="sm"
-            variant="primary"
-            onClick={() => handleSendText()}
-            disabled={!inputTurn.trim()}
-            icon={<Send size={14} />}
-          >
-            Send
-          </Button>
-
-          {/* Submit Claim / Track Submitted Claim Button */}
-          {ticketId && (
-            claimData?.status && ['submitted', 'assigned', 'under_review', 'pending_evidence', 'approved', 'partially_approved', 'rejected', 'closed'].includes(claimData.status) ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                pill
-                onClick={() => router.push(`/claimant/claims/${ticketId}`)}
-              >
-                Track Claim & Requests
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="secondary"
-                pill
-                onClick={() => setConfirmModalOpen(true)}
-              >
-                Submit Claim
-              </Button>
-            )
-          )}
-        </div>
-      </div>
-
-      {/* Right Column: Live Claim Dossier Panel */}
-      <div
-        className={`snow-dossier-col snow-card snow-scrollbar ${mobileTab === 'chat' ? 'mobile-hidden' : ''}`}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-          padding: 18,
-          borderRadius: 16,
-          overflowY: 'auto',
-          backgroundColor: '#FFFFFF',
-          minWidth: 0,
-          height: '100%',
-          minHeight: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #F3F4F6', paddingBottom: 10 }}>
-          <div className="snow-body" style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>
-            Live Claim Dossier
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #F3F4F6', paddingBottom: 10 }}>
+            <div className="snow-body" style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>
+              Live Claim Dossier
+            </div>
+            {claimData?.status && (
+              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, backgroundColor: '#E0F2FE', color: '#0369A1' }}>
+                {claimData.status.toUpperCase()}
+              </span>
+            )}
           </div>
-          {claimData?.status && (
-            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, backgroundColor: '#E0F2FE', color: '#0369A1' }}>
-              {claimData.status.toUpperCase()}
+
+          {/* Canonical Summary */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <span className="snow-caption" style={{ color: '#9CA3AF' }}>Policy</span>
+              <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+                {claimData?.policy_number || claimData?.extracted_data?.policy_id || selectedPolicyNumber || 'Pending'}
+              </div>
+            </div>
+            <div>
+              <span className="snow-caption" style={{ color: '#9CA3AF' }}>Coverage Type</span>
+              <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
+                {claimData?.insurance_type || claimData?.extracted_data?.insurance_type || 'Resolving...'}
+              </div>
+            </div>
+            <div>
+              <span className="snow-caption" style={{ color: '#9CA3AF' }}>Incident Date</span>
+              <div className="snow-body" style={{ fontSize: 12 }}>
+                {claimData?.event_date || claimData?.extracted_data?.event_date || 'Awaiting'}
+              </div>
+            </div>
+            <div>
+              <span className="snow-caption" style={{ color: '#9CA3AF' }}>Est. Amount</span>
+              <div className="snow-body" style={{ fontSize: 12, fontWeight: 600 }}>
+                {claimData?.estimated_claim_amount ? `₹${Number(claimData.estimated_claim_amount).toLocaleString('en-IN')}` : (claimData?.extracted_data?.estimated_claim_amount ? `₹${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString('en-IN')}` : '—')}
+              </div>
+            </div>
+          </div>
+
+          {/* Dynamic RAG Requirements & Questionnaire Fields */}
+          <div style={{ marginTop: 6 }}>
+            <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+              Loss Specifics & Verification Answers
             </span>
-          )}
-        </div>
-
-        {/* Canonical Summary */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <div>
-            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Policy</span>
-            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
-              {claimData?.policy_number || claimData?.extracted_data?.policy_id || selectedPolicyNumber || 'Pending'}
-            </div>
-          </div>
-          <div>
-            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Coverage Type</span>
-            <div className="snow-body" style={{ fontWeight: 600, fontSize: 12 }}>
-              {claimData?.insurance_type || claimData?.extracted_data?.insurance_type || 'Resolving...'}
-            </div>
-          </div>
-          <div>
-            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Incident Date</span>
-            <div className="snow-body" style={{ fontSize: 12 }}>
-              {claimData?.event_date || claimData?.extracted_data?.event_date || 'Awaiting'}
-            </div>
-          </div>
-          <div>
-            <span className="snow-caption" style={{ color: '#9CA3AF' }}>Est. Amount</span>
-            <div className="snow-body" style={{ fontSize: 12, fontWeight: 600 }}>
-              {claimData?.estimated_claim_amount ? `₹${Number(claimData.estimated_claim_amount).toLocaleString('en-IN')}` : (claimData?.extracted_data?.estimated_claim_amount ? `₹${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString('en-IN')}` : '—')}
-            </div>
-          </div>
-        </div>
-
-        {/* Dynamic RAG Requirements & Questionnaire Fields */}
-        <div style={{ marginTop: 6 }}>
-          <span className="snow-caption" style={{ fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
-            Loss Specifics & Verification Answers
-          </span>
-          {(() => {
-            const ext = claimData?.extracted_data || {};
-            const entries = Object.entries(ext).filter(([k]) => !['policy_id', 'insurance_type', 'event_date', 'event_location', 'event_description', 'estimated_claim_amount'].includes(k));
-            if (entries.length === 0) {
+            {(() => {
+              const ext = claimData?.extracted_data || {};
+              const entries = Object.entries(ext).filter(([k]) => !['policy_id', 'insurance_type', 'event_date', 'event_location', 'event_description', 'estimated_claim_amount'].includes(k));
+              if (entries.length === 0) {
+                return (
+                  <div style={{ padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8, color: '#6B7280', fontSize: 12, textAlign: 'center' }}>
+                    Answer the AI assistant's questions to populate loss specifics.
+                  </div>
+                );
+              }
               return (
-                <div style={{ padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8, color: '#6B7280', fontSize: 12, textAlign: 'center' }}>
-                  Answer the AI assistant's questions to populate loss specifics.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {entries.map(([k, v]) => (
+                    <div key={k} style={{ padding: '6px 10px', backgroundColor: '#F9FAFB', borderRadius: 6, border: '1px solid #F3F4F6' }}>
+                      <span className="snow-micro" style={{ color: '#6B7280', textTransform: 'capitalize' }}>
+                        {k.replace(/_/g, ' ')}
+                      </span>
+                      <div className="snow-caption" style={{ fontWeight: 600, color: '#1F2937' }}>
+                        {typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—')}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               );
-            }
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {entries.map(([k, v]) => (
-                  <div key={k} style={{ padding: '6px 10px', backgroundColor: '#F9FAFB', borderRadius: 6, border: '1px solid #F3F4F6' }}>
-                    <span className="snow-micro" style={{ color: '#6B7280', textTransform: 'capitalize' }}>
-                      {k.replace(/_/g, ' ')}
-                    </span>
-                    <div className="snow-caption" style={{ fontWeight: 600, color: '#1F2937' }}>
-                      {typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—')}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
-        </div>
-
-        {/* Policy Details */}
-        {(claimData?.coverage_amount || claimData?.deductible) && (
-          <div style={{ padding: 10, backgroundColor: '#F0FDF4', borderRadius: 8, border: '1px solid #DCFCE7' }}>
-            <div className="snow-micro" style={{ color: '#166534', fontWeight: 600 }}>Underwriting Bounds</div>
-            <div className="snow-caption" style={{ color: '#15803D', marginTop: 2 }}>
-              Limit: ${Number(claimData.coverage_amount || 0).toLocaleString()} • Deductible: ${Number(claimData.deductible || 0).toLocaleString()}
-            </div>
+            })()}
           </div>
-        )}
+
+          {/* Policy Details */}
+          {(claimData?.coverage_amount || claimData?.deductible) && (
+            <div style={{ padding: 10, backgroundColor: '#F0FDF4', borderRadius: 8, border: '1px solid #DCFCE7' }}>
+              <div className="snow-micro" style={{ color: '#166534', fontWeight: 600 }}>Underwriting Bounds</div>
+              <div className="snow-caption" style={{ color: '#15803D', marginTop: 2 }}>
+                Limit: ₹{Number(claimData.coverage_amount || 0).toLocaleString()} • Deductible: ₹{Number(claimData.deductible || 0).toLocaleString()}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
 
       {/* Evidence Upload Modal */}
       <Modal

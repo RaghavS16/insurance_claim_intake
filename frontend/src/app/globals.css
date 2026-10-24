@@ -1402,26 +1402,102 @@ html, body {
   border-top: 1px solid #F4F4F5;
 }
 
+/* -------------------------------------------------------------
+ * Dashboard Middle Grid (Donut Chart + Priority Queue Table)
+ * ------------------------------------------------------------- */
+.snow-dashboard-middle-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
 @media (max-width: 1024px) {
-  .snow-workspace-split {
+  .snow-dashboard-middle-grid {
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    height: auto;
-  }
-  .snow-workspace-main-panel,
-  .snow-workspace-copilot-panel {
-    height: auto;
-    overflow: visible;
-  }
-  .snow-workspace-content-scroll {
-    overflow-y: visible;
-    height: auto;
-  }
-  .snow-workspace-copilot-chat {
-    max-height: 400px;
+    gap: 16px;
+    margin-bottom: 20px;
   }
 }
+
+/* -------------------------------------------------------------
+ * Claim Workspace Responsive Tab Switcher (Mobile & Tablet <= 1024px)
+ * ------------------------------------------------------------- */
+.snow-workspace-mobile-tabs {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .snow-workspace-mobile-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    background: #F4F5F7;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+    width: 100%;
+  }
+
+  .snow-workspace-mobile-tab-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: #71717A;
+    transition: all 0.15s ease;
+    text-align: center;
+  }
+
+  .snow-workspace-mobile-tab-btn.active {
+    background: #FFFFFF;
+    color: #111827;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  .snow-workspace-split {
+    display: flex !important;
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    height: 100% !important;
+    flex: 1 !important;
+  }
+
+  .snow-workspace-split .snow-workspace-main-panel.mobile-hidden,
+  .snow-workspace-split .snow-workspace-copilot-panel.mobile-hidden {
+    display: none !important;
+  }
+
+  .snow-workspace-split .snow-workspace-main-panel,
+  .snow-workspace-split .snow-workspace-copilot-panel {
+    width: 100% !important;
+    height: 100% !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+  }
+
+  .snow-workspace-copilot-chat {
+    max-height: none !important;
+  }
+}
+
+/* -------------------------------------------------------------
+ * Custom Checkbox Enhancements
+ * ------------------------------------------------------------- */
+.snow-checkbox-wrapper:hover .snow-checkbox-box:not(.checked) {
+  border-color: #007AFF;
+}
+
+.snow-checkbox-input:focus-visible + .snow-checkbox-box {
+  outline: 2px solid #007AFF;
+  outline-offset: 2px;
+}
+
 
 
 

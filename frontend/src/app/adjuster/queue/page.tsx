@@ -185,8 +185,8 @@ export default function AdjusterQueuePage() {
   return (
     <AppShell breadcrumbs={['Adjuster', 'Claims Queue']} activeTitle="Claims Adjudication Queue">
       {/* Action Header */}
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
-        <div className="snow-flex snow-gap-2">
+      <div className="snow-action-bar" style={{ marginBottom: 20 }}>
+        <div className="snow-action-buttons">
           <Button
             size="sm"
             variant={viewMode === 'table' ? 'primary' : 'secondary'}
@@ -203,19 +203,19 @@ export default function AdjusterQueuePage() {
           >
             Kanban Board
           </Button>
-          <div style={{ marginLeft: 8, display: 'flex', alignItems: 'center' }}>
-            <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
-          </div>
+          <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
         </div>
 
-        <Button
-          variant="primary"
-          pill
-          onClick={handleNextClaim}
-          icon={<CheckCircle2 size={16} />}
-        >
-          Open Next Priority Claim
-        </Button>
+        <div className="snow-action-buttons">
+          <Button
+            variant="primary"
+            pill
+            onClick={handleNextClaim}
+            icon={<CheckCircle2 size={16} />}
+          >
+            Open Next Priority Claim
+          </Button>
+        </div>
       </div>
 
       {error && (

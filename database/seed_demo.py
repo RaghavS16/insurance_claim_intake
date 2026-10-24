@@ -27,6 +27,11 @@ USERS = [
     ("00000000-0000-0000-0000-000000000102", "Asha Adjuster", "asha.adjuster@insurance.com", "ADJUSTER", "9876500002"),
     ("00000000-0000-0000-0000-000000000103", "Vikram Adjuster", "vikram.adjuster@insurance.com", "ADJUSTER", "9876500003"),
     ("00000000-0000-0000-0000-000000000104", "Riya Claimant", "riya.claimant@insurance.com", "CLAIMANT", "9876500004"),
+    ("00000000-0000-0000-0000-000000000105", "Meera Adjuster", "meera.adjuster@insurance.com", "ADJUSTER", "9876500005"),
+    ("00000000-0000-0000-0000-000000000106", "Rajesh Adjuster", "rajesh.adjuster@insurance.com", "ADJUSTER", "9876500006"),
+    ("00000000-0000-0000-0000-000000000107", "Priya Adjuster", "priya.adjuster@insurance.com", "ADJUSTER", "9876500007"),
+    ("00000000-0000-0000-0000-000000000108", "Arjun Adjuster", "arjun.adjuster@insurance.com", "ADJUSTER", "9876500008"),
+    ("00000000-0000-0000-0000-000000000109", "Dev Adjuster", "dev.adjuster@insurance.com", "ADJUSTER", "9876500009"),
 ]
 
 def seed_demo():
@@ -62,6 +67,11 @@ def seed_demo():
         adjusters=[
             ("00000000-0000-0000-0000-000000000102","Asha Adjuster","asha.adjuster@insurance.com","9876500002","motor"),
             ("00000000-0000-0000-0000-000000000103","Vikram Adjuster","vikram.adjuster@insurance.com","9876500003","health"),
+            ("00000000-0000-0000-0000-000000000105","Meera Adjuster","meera.adjuster@insurance.com","9876500005","senior_citizen_health"),
+            ("00000000-0000-0000-0000-000000000106","Rajesh Adjuster","rajesh.adjuster@insurance.com","9876500006","home"),
+            ("00000000-0000-0000-0000-000000000107","Priya Adjuster","priya.adjuster@insurance.com","9876500007","travel"),
+            ("00000000-0000-0000-0000-000000000108","Arjun Adjuster","arjun.adjuster@insurance.com","9876500008","cyber"),
+            ("00000000-0000-0000-0000-000000000109","Dev Adjuster","dev.adjuster@insurance.com","9876500009","all"),
         ]
         for uid,name,email,phone,spec in adjusters:
             row=db.query(Adjuster).filter(Adjuster.id==uid).first()
@@ -72,15 +82,19 @@ def seed_demo():
         policies=[
             ("POL-DEMO-MOTOR-001","motor",1500000,10000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
             ("POL-DEMO-HEALTH-001","health",800000,5000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
+            ("POL-DEMO-SENIOR-001","senior_citizen_health",500000,10000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1960,3,10),"9876500004","riya.claimant@insurance.com"),
+            ("POL-DEMO-HOME-001","home",5000000,25000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
+            ("POL-DEMO-TRAVEL-001","travel",2000000,2500,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
+            ("POL-DEMO-CYBER-001","cyber",1000000,5000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
         ]
         for number,ptype,coverage,deductible,eff,exp,name,dob,phone,email in policies:
             row=db.query(Policy).filter(Policy.policy_number==number).first()
-            linked_cid = claimant.id if number == "POL-DEMO-MOTOR-001" else None
-            linked_ts = datetime.now(timezone.utc) if number == "POL-DEMO-MOTOR-001" else None
+            linked_cid = claimant.id
+            linked_ts = datetime.now(timezone.utc)
             if not row:
                 row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=linked_cid,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=linked_ts,link_attempts=0)
                 db.add(row)
-            elif number == "POL-DEMO-MOTOR-001" and not row.customer_id:
+            elif not row.customer_id:
                 row.customer_id = claimant.id
                 row.linked_at = datetime.now(timezone.utc)
         # Published demo RAG sources make the sample environment immediately useful.
@@ -209,6 +223,34 @@ Clause 3.4: The claimant must furnish a copy of the hospital discharge summary a
                 except Exception as exc:
                     db.rollback()
                     print(f"Warning: demo knowledge source '{filename}' could not be indexed: {type(exc).__name__}: {exc}")
+
+        # Authoritative docrag/ source of truth ingestion (12 Indian IRDAI .docx across 6 lines)
+        from src.knowledge.store import ingest_document
+        docrag_dir = _repo_root / "database" / "docrag"
+        if not docrag_dir.exists() or not list(docrag_dir.glob("*.docx")):
+            docrag_dir = _repo_root / "docrag"
+
+        if docrag_dir.exists():
+            for docx_file in sorted(docrag_dir.glob("*.docx")):
+                fname = docx_file.name
+                existing_doc = db.query(KnowledgeDocument).filter(
+                    KnowledgeDocument.source_name == fname,
+                    KnowledgeDocument.tenant_id == TENANT_ID,
+                ).first()
+                if not existing_doc:
+                    try:
+                        content_bytes = docx_file.read_bytes()
+                        ingest_document(
+                            content=content_bytes,
+                            filename=fname,
+                            uploaded_by=users[("ADMIN", "admin@insurance.com")].id,
+                            tenant_id=TENANT_ID,
+                            publication_status="published",
+                            jurisdiction="India",
+                        )
+                        print(f"Successfully ingested authoritative docrag: {fname}")
+                    except Exception as exc:
+                        print(f"Warning: could not ingest '{fname}': {type(exc).__name__}: {exc}")
 
         motor_policy = db.query(Policy).filter(Policy.policy_number == "POL-DEMO-MOTOR-001", Policy.tenant_id == TENANT_ID).first()
         asha = db.query(Adjuster).filter(Adjuster.id == "00000000-0000-0000-0000-000000000102", Adjuster.tenant_id == TENANT_ID).first()

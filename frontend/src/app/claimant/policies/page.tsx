@@ -138,7 +138,7 @@ export default function ClaimantPoliciesPage() {
 
           <Input
             label="Policy Identification Number"
-            placeholder="e.g. MOT-5521"
+            placeholder="e.g. POL-IND-2026-0099"
             value={policyNumber}
             onChange={(e) => setPolicyNumber(e.target.value)}
             required
@@ -146,7 +146,7 @@ export default function ClaimantPoliciesPage() {
 
           <Input
             label="Policyholder Full Name"
-            placeholder="e.g. Jane Doe"
+            placeholder="e.g. Rajesh Sharma"
             value={policyholderName}
             onChange={(e) => setPolicyholderName(e.target.value)}
           />

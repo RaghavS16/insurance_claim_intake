@@ -419,10 +419,14 @@ def _response_planner(state: ClaimState) -> ClaimState:
     rag_answer = str(state.get("rag_answer") or "").strip()
     if rag_answer:
         reply = rag_answer
-        if _claim_intake_context_requested(state):
+        has_loss_facts = bool(data.get("event_date") or data.get("event_location") or data.get("estimated_claim_amount"))
+        if _claim_intake_context_requested(state) and (has_loss_facts or state.get("confirmed")):
             follow_up = _single_intake_follow_up(state)
             if follow_up and follow_up.lower() not in reply.lower():
                 reply = f"{reply}\n\n{follow_up}"
+        elif not has_loss_facts and not state.get("confirmed"):
+            if "file a claim" not in reply.lower() and "claim intake" not in reply.lower():
+                reply = f"{reply}\n\nIf you would like to start filing a claim, please share your policy number and tell me what happened."
         state["next_question_field"] = "question"
         state["next_question"] = reply
         state["message"] = reply

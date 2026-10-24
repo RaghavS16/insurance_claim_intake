@@ -14,7 +14,7 @@ from src.config import settings
 _IS_PG = settings.DATABASE_URL.startswith("postgresql")
 if _IS_PG:
     from sqlalchemy.dialects.postgresql import UUID as PgUUID, JSONB as PgJSONB
-    def _UUID(*args, **kw): return mapped_column(PgUUID(as_uuid=True), *args, **kw)
+    def _UUID(*args, **kw): return mapped_column(PgUUID(as_uuid=False), *args, **kw)
     def _JSONB(*args, **kw): return mapped_column(PgJSONB, *args, **kw)
 else:
     def _UUID(*args, **kw): return mapped_column(String(36), *args, **kw)

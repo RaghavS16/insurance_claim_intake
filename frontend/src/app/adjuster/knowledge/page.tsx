@@ -249,19 +249,21 @@ export default function KnowledgeBasePage() {
   return (
     <AppShell breadcrumbs={['Adjuster', 'Knowledge Base']} activeTitle="Policy & Regulatory Knowledge">
       {/* Action Header */}
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 24 }}>
-        <p className="snow-caption" style={{ color: '#71717A' }}>
+      <div className="snow-action-bar">
+        <p className="snow-caption" style={{ color: '#71717A', margin: 0 }}>
           Authoritative policy wordings, regulatory guides, and endorsements indexed for Copilot RAG grounding.
         </p>
 
-        <Button
-          variant="primary"
-          pill
-          onClick={() => setUploadModalOpen(true)}
-          icon={<Upload size={14} />}
-        >
-          Ingest Knowledge Document
-        </Button>
+        <div className="snow-action-buttons">
+          <Button
+            variant="primary"
+            pill
+            onClick={() => setUploadModalOpen(true)}
+            icon={<Upload size={14} />}
+          >
+            Ingest Knowledge Document
+          </Button>
+        </div>
       </div>
 
       {error && (

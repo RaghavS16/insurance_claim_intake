@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, X, ChevronDown } from 'lucide-react';
 
 export interface DatePickerProps {
   value?: string; // YYYY-MM-DD
@@ -44,6 +44,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [typedValue, setTypedValue] = useState(value || '');
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [yearPickerOpen, setYearPickerOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -182,6 +184,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
+        setMonthPickerOpen(false);
+        setYearPickerOpen(false);
       }
     };
     if (isOpen) {
@@ -407,51 +411,61 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               <ChevronLeft size={16} />
             </button>
 
-            {/* Jump selectors for Month and Year */}
+            {/* Custom Jump Selectors for Month and Year */}
             <div className="snow-flex snow-items-center snow-gap-1">
-              <select
-                value={viewMonth}
-                onChange={(e) => setViewMonth(Number(e.target.value))}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMonthPickerOpen((prev) => !prev);
+                  setYearPickerOpen(false);
+                }}
                 style={{
-                  padding: '3px 6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '4px 8px',
                   fontSize: 13,
                   fontWeight: 600,
-                  borderRadius: 6,
-                  border: '1px solid #E4E4E7',
-                  backgroundColor: '#FFFFFF',
-                  color: '#1C1C1C',
+                  borderRadius: 8,
+                  border: monthPickerOpen ? '1px solid #007AFF' : '1px solid #E4E4E7',
+                  backgroundColor: monthPickerOpen ? '#F0F7FF' : '#FFFFFF',
+                  color: monthPickerOpen ? '#007AFF' : '#1C1C1C',
                   cursor: 'pointer',
-                  outline: 'none',
+                  transition: 'all 0.15s ease',
                 }}
+                aria-label="Select month"
               >
-                {MONTH_NAMES.map((name, idx) => (
-                  <option key={name} value={idx}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                <span>{MONTH_NAMES[viewMonth]}</span>
+                <ChevronDown size={12} style={{ transform: monthPickerOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+              </button>
 
-              <select
-                value={viewYear}
-                onChange={(e) => setViewYear(Number(e.target.value))}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setYearPickerOpen((prev) => !prev);
+                  setMonthPickerOpen(false);
+                }}
                 style={{
-                  padding: '3px 6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '4px 8px',
                   fontSize: 13,
                   fontWeight: 600,
-                  borderRadius: 6,
-                  border: '1px solid #E4E4E7',
-                  backgroundColor: '#FFFFFF',
-                  color: '#1C1C1C',
+                  borderRadius: 8,
+                  border: yearPickerOpen ? '1px solid #007AFF' : '1px solid #E4E4E7',
+                  backgroundColor: yearPickerOpen ? '#F0F7FF' : '#FFFFFF',
+                  color: yearPickerOpen ? '#007AFF' : '#1C1C1C',
                   cursor: 'pointer',
-                  outline: 'none',
+                  transition: 'all 0.15s ease',
                 }}
+                aria-label="Select year"
               >
-                {YEARS.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
+                <span>{viewYear}</span>
+                <ChevronDown size={12} style={{ transform: yearPickerOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+              </button>
             </div>
 
             <button
@@ -475,94 +489,192 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             </button>
           </div>
 
-          {/* Weekday Row */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, 1fr)',
-              textAlign: 'center',
-              marginBottom: 8,
-            }}
-          >
-            {WEEKDAY_NAMES.map((wd) => (
-              <span key={wd} className="snow-caption" style={{ color: '#A1A1AA', fontSize: 11, fontWeight: 500 }}>
-                {wd}
-              </span>
-            ))}
-          </div>
+          {/* Body: Custom Month Grid / Custom Year Grid / Calendar Days Grid */}
+          {monthPickerOpen ? (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: 8,
+                padding: '8px 0',
+                minHeight: 216,
+                alignContent: 'center',
+              }}
+            >
+              {MONTH_NAMES.map((name, idx) => {
+                const isSelected = viewMonth === idx;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setViewMonth(idx);
+                      setMonthPickerOpen(false);
+                    }}
+                    style={{
+                      padding: '10px 6px',
+                      fontSize: 12,
+                      fontWeight: isSelected ? 700 : 500,
+                      borderRadius: 8,
+                      border: isSelected ? '1px solid #007AFF' : '1px solid #F4F5F7',
+                      backgroundColor: isSelected ? '#007AFF' : '#F9FAFB',
+                      color: isSelected ? '#FFFFFF' : '#374151',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                      textAlign: 'center',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = '#EFF6FF';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = '#F9FAFB';
+                    }}
+                  >
+                    {name.substring(0, 3)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : yearPickerOpen ? (
+            <div
+              className="snow-scrollbar"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: 6,
+                padding: '6px 4px',
+                maxHeight: 216,
+                overflowY: 'auto',
+              }}
+            >
+              {YEARS.map((y) => {
+                const isSelected = viewYear === y;
+                return (
+                  <button
+                    key={y}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setViewYear(y);
+                      setYearPickerOpen(false);
+                    }}
+                    style={{
+                      padding: '7px 4px',
+                      fontSize: 12,
+                      fontWeight: isSelected ? 700 : 500,
+                      borderRadius: 8,
+                      border: isSelected ? '1px solid #007AFF' : '1px solid transparent',
+                      backgroundColor: isSelected ? '#007AFF' : 'transparent',
+                      color: isSelected ? '#FFFFFF' : '#374151',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                      textAlign: 'center',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = '#EFF6FF';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    {y}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <>
+              {/* Weekday Row */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  textAlign: 'center',
+                  marginBottom: 8,
+                }}
+              >
+                {WEEKDAY_NAMES.map((wd) => (
+                  <span key={wd} className="snow-caption" style={{ color: '#A1A1AA', fontSize: 11, fontWeight: 500 }}>
+                    {wd}
+                  </span>
+                ))}
+              </div>
 
-          {/* Days Grid */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, 1fr)',
-              gap: '2px',
-              textAlign: 'center',
-            }}
-          >
-            {/* Previous month trailing days */}
-            {Array.from({ length: firstDayOfWeek }).map((_, i) => {
-              const day = prevMonthDays - firstDayOfWeek + i + 1;
-              return (
-                <div
-                  key={`prev-${i}`}
-                  style={{
-                    height: 32,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#D4D4D8',
-                    fontSize: 12,
-                  }}
-                >
-                  {day}
-                </div>
-              );
-            })}
+              {/* Days Grid */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  gap: '2px',
+                  textAlign: 'center',
+                }}
+              >
+                {/* Previous month trailing days */}
+                {Array.from({ length: firstDayOfWeek }).map((_, i) => {
+                  const day = prevMonthDays - firstDayOfWeek + i + 1;
+                  return (
+                    <div
+                      key={`prev-${i}`}
+                      style={{
+                        height: 32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#D4D4D8',
+                        fontSize: 12,
+                      }}
+                    >
+                      {day}
+                    </div>
+                  );
+                })}
 
-            {/* Current month days */}
-            {Array.from({ length: daysInMonth }).map((_, i) => {
-              const day = i + 1;
-              const isSelected =
-                selectedDate &&
-                selectedDate.getFullYear() === viewYear &&
-                selectedDate.getMonth() === viewMonth &&
-                selectedDate.getDate() === day;
-              const isToday = isCurrentMonthToday && today.getDate() === day;
+                {/* Current month days */}
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const day = i + 1;
+                  const isSelected =
+                    selectedDate &&
+                    selectedDate.getFullYear() === viewYear &&
+                    selectedDate.getMonth() === viewMonth &&
+                    selectedDate.getDate() === day;
+                  const isToday = isCurrentMonthToday && today.getDate() === day;
 
-              return (
-                <button
-                  type="button"
-                  key={`cur-${day}`}
-                  onClick={() => handleSelectDay(day)}
-                  style={{
-                    height: 32,
-                    width: 32,
-                    margin: '0 auto',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '50%',
-                    border: isToday && !isSelected ? '1px solid #1C1C1C' : 'none',
-                    backgroundColor: isSelected ? '#1C1C1C' : 'transparent',
-                    color: isSelected ? '#FFFFFF' : '#1C1C1C',
-                    fontSize: 13,
-                    fontWeight: isSelected || isToday ? 600 : 400,
-                    cursor: 'pointer',
-                    transition: 'all 0.12s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = '#F4F5F7';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  {day}
-                </button>
-              );
-            })}
-          </div>
+                  return (
+                    <button
+                      type="button"
+                      key={`cur-${day}`}
+                      onClick={() => handleSelectDay(day)}
+                      style={{
+                        height: 32,
+                        width: 32,
+                        margin: '0 auto',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '50%',
+                        border: isToday && !isSelected ? '1px solid #1C1C1C' : 'none',
+                        backgroundColor: isSelected ? '#1C1C1C' : 'transparent',
+                        color: isSelected ? '#FFFFFF' : '#1C1C1C',
+                        fontSize: 13,
+                        fontWeight: isSelected || isToday ? 600 : 400,
+                        cursor: 'pointer',
+                        transition: 'all 0.12s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) e.currentTarget.style.backgroundColor = '#F4F5F7';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                    >
+                      {day}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
 
           {/* Footer Controls */}
           <div

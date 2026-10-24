@@ -11,11 +11,13 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { BadgePill } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
+import { useAuth } from '@/lib/auth-context';
 import { Adjuster } from '@/lib/types';
 import { api } from '@/lib/api';
 
 export default function AdminAdjustersPage() {
   const { showToast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'roster' | 'invitations'>('roster');
 
@@ -83,8 +85,10 @@ export default function AdminAdjustersPage() {
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (!authLoading && user) {
+      fetchData();
+    }
+  }, [authLoading, user]);
 
   const handleOpenEdit = (adj: Adjuster) => {
     setEditingAdjuster(adj);
@@ -398,7 +402,7 @@ export default function AdminAdjustersPage() {
         <form onSubmit={handleInviteAdjuster}>
           <Input
             label="Adjuster Full Name"
-            placeholder="Jane Smith"
+            placeholder="e.g. Ananya Iyer"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             required
@@ -406,7 +410,7 @@ export default function AdminAdjustersPage() {
           <Input
             label="Candidate Email Address"
             type="email"
-            placeholder="candidate@company.com"
+            placeholder="ananya.iyer@intelliclaim.in"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
             required
@@ -414,7 +418,7 @@ export default function AdminAdjustersPage() {
           <Input
             label="Phone Number"
             type="tel"
-            placeholder="+1 555-404-9218"
+            placeholder="+91 98765 43210"
             value={newPhone}
             onChange={(e) => setNewPhone(e.target.value)}
             required
@@ -453,7 +457,7 @@ export default function AdminAdjustersPage() {
         <form onSubmit={handleSaveEdit}>
           <Input
             label="Full Name"
-            placeholder="John Doe"
+            placeholder="e.g. Vikram Malhotra"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             required
@@ -461,7 +465,7 @@ export default function AdminAdjustersPage() {
           <Input
             label="Corporate Email"
             type="email"
-            placeholder="john.doe@intelliclaim.com"
+            placeholder="vikram.malhotra@intelliclaim.in"
             value={editEmail}
             onChange={(e) => setEditEmail(e.target.value)}
             required
@@ -469,7 +473,7 @@ export default function AdminAdjustersPage() {
           <Input
             label="Direct Phone Number"
             type="tel"
-            placeholder="+1 (555) 019-2834"
+            placeholder="+91 98765 43210"
             value={editPhone}
             onChange={(e) => setEditPhone(e.target.value)}
             required

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { useToast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
 
@@ -176,17 +177,17 @@ function ResetPasswordContent() {
               </div>
             )}
 
-            <div className="snow-flex snow-items-center snow-gap-2" style={{ marginBottom: 20 }}>
-              <input
-                type="checkbox"
+            <div style={{ marginBottom: 20 }}>
+              <Checkbox
                 id="resetTerms"
                 checked={acceptedTerms}
                 onChange={(e) => setAcceptedTerms(e.target.checked)}
-                style={{ cursor: 'pointer' }}
+                label={
+                  <span className="snow-caption" style={{ color: '#71717A' }}>
+                    I Accept the <span style={{ color: '#007AFF' }}>Terms</span>
+                  </span>
+                }
               />
-              <label htmlFor="resetTerms" className="snow-caption" style={{ color: '#71717A', cursor: 'pointer' }}>
-                I Accept the <span style={{ color: '#007AFF' }}>Terms</span>
-              </label>
             </div>
 
             <Button

@@ -30,10 +30,11 @@ class LLMTransientError(RuntimeError):
 def is_transient_llm_error(exc: BaseException) -> bool:
     text = str(exc).lower()
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    if status in {408, 409, 429, 500, 502, 503, 504}:
+    if status in {402, 408, 409, 429, 500, 502, 503, 504}:
         return True
     return any(token in text for token in (
-        "429", "500", "502", "503", "504", "rate limit", "rate_limit",
+        "402", "429", "500", "502", "503", "504", "rate limit", "rate_limit",
+        "no remaining credits", "credit balance", "insufficient_quota",
         "unavailable", "temporarily unavailable", "timeout", "timed out",
         "deadline exceeded", "service busy", "high demand", "getaddrinfo failed",
         "name resolution", "connection error", "connection refused", "connecterror",
@@ -135,7 +136,7 @@ class _ResilientStructured(Generic[T]):
                     or isinstance(exc, (LLMTransientError, OSError))
                 )
             ):
-                logger.warning("Primary structured LLM failed; using governed local fallback.")
+                logger.warning("Primary structured LLM failed: %s; using governed local fallback.", exc)
                 record_ai_fallback(operation="structured")
                 fb = self.resilient_model.get_fallback()
                 return structured_output(fb, self.schema).invoke(prompt)
@@ -167,7 +168,7 @@ class ResilientChatModel:
                     or isinstance(exc, (LLMTransientError, OSError))
                 )
             ):
-                logger.warning("Primary LLM invocation failed; using governed local fallback.")
+                logger.warning("Primary LLM invocation failed: %s; using governed local fallback.", exc)
                 record_ai_fallback(operation="sync")
                 return self.get_fallback().invoke(prompt, *args, **kwargs)
             raise
@@ -187,7 +188,7 @@ class ResilientChatModel:
                     or isinstance(exc, (LLMTransientError, OSError))
                 )
             ):
-                logger.warning("Primary LLM ainvoke failed; using governed local fallback.")
+                logger.warning("Primary LLM ainvoke failed: %s; using governed local fallback.", exc)
                 record_ai_fallback(operation="async")
                 fb = self.get_fallback()
                 fb_ainvoke = getattr(fb, "ainvoke", None)
@@ -213,7 +214,7 @@ def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
     try:
         import ollama
 
-        client = ollama.Client(host=base_url)
+        client = ollama.Client(host=base_url, timeout=2.0)
         available = [getattr(m, "model", "") for m in client.list().models]
         for model in available:
             if model == requested_model or model.split(":")[0] == requested_model.split(":")[0]:
@@ -243,7 +244,7 @@ def _build_ollama(model_name: str | None = None) -> BaseChatModel:
         base_url=settings.OLLAMA_BASE_URL,
         model=resolved,
         temperature=0,
-        timeout=settings.LLM_TIMEOUT_SECONDS,
+        timeout=min(settings.LLM_TIMEOUT_SECONDS, 5.0),
     )
 
 
@@ -272,7 +273,7 @@ def _build_gemini(model_name: str | None = None) -> BaseChatModel:
 
 
 def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
-    """Build an OpenAI-compatible client through Hugging Face Inference Providers."""
+    """Build an OpenAI-compatible client through Hugging Face Inference Providers with Groq fallback."""
     token = (settings.HF_TOKEN or "").strip()
     if not token:
         raise RuntimeError("HF_TOKEN is required when using Hugging Face Inference Providers.")
@@ -287,7 +288,17 @@ def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatMo
         model=model, api_key=token, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
-    return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
+
+    def _fallback_chain() -> BaseChatModel:
+        if settings.GROQ_API_KEY:
+            try:
+                return _build_groq(model_name=model, timeout_seconds=timeout_seconds)
+            except Exception as e:
+                logger.warning("Groq emergency fallback initialization failed: %s", e)
+        return _build_ollama()
+
+    return cast(BaseChatModel, ResilientChatModel(primary, _fallback_chain))
+
 
 def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: float | None = None) -> BaseChatModel:
     base_url = (settings.CLOUD_LLM_BASE_URL or "").strip()
@@ -306,17 +317,20 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
     )
     return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
+
 def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
     """Optional emergency direct-Groq path; HF is the production default."""
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
+    clean_model = model_name.split(":")[0] if ":" in model_name else model_name
     assert_model_allowed(model_name)
     primary = ChatOpenAI(
-        model=model_name, api_key=settings.GROQ_API_KEY,
+        model=clean_model, api_key=settings.GROQ_API_KEY,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
     return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
+
 
 def get_fast_llm() -> BaseChatModel:
     """Return the low-latency model used for claimant turns."""

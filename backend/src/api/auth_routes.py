@@ -121,12 +121,17 @@ def _rotate_refresh_token(db: Session, raw: str) -> tuple[User, str]:
     expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
     if row.revoked_at or row.used_at or expires <= now:
         if row.used_at and not row.revoked_at:
-            db.query(RefreshToken).filter(
-                RefreshToken.family_id == row.family_id,
-                RefreshToken.tenant_id == row.tenant_id,
-                RefreshToken.revoked_at.is_(None),
-            ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
-            db.commit()
+            used_time = row.used_at if row.used_at.tzinfo else row.used_at.replace(tzinfo=timezone.utc)
+            # Only revoke token family if reused outside the 5-second network race window
+            if (now - used_time).total_seconds() >= 5:
+                db.query(RefreshToken).filter(
+                    RefreshToken.family_id == row.family_id,
+                    RefreshToken.tenant_id == row.tenant_id,
+                    RefreshToken.revoked_at.is_(None),
+                ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
+                db.commit()
+            else:
+                db.rollback()
         else:
             db.rollback()
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")

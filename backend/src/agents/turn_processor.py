@@ -76,13 +76,57 @@ async def process_claimant_turn(
     if user_text.startswith("[System Event] Uploaded evidence"):
         workflow_event = "evidence_verified"
 
+    # Pre-populate tenant, claimant, and inferred insurance line into prior_state before RAG retrieval
+    tenant_id_val = str(getattr(claim, "tenant_id", "") or "")
+    claimant_id_val = str(getattr(claim, "claimant_id", "") or "")
+    prior_state["tenant_id"] = tenant_id_val
+    prior_state["claimant_id"] = claimant_id_val
+
+    prior_extracted = dict(prior_state.get("extracted_data") or {})
+    if not prior_extracted.get("insurance_type"):
+        from src.knowledge.retriever import infer_insurance_type_from_query
+        inferred_type = infer_insurance_type_from_query(user_text) if user_text else None
+        if not inferred_type and getattr(claim, "insurance_type", None):
+            inferred_type = claim.insurance_type
+        if inferred_type:
+            prior_extracted["insurance_type"] = inferred_type
+            prior_state["insurance_type_hint"] = inferred_type
+    if not prior_extracted.get("policy_id") and getattr(claim, "policy_id", None):
+        prior_extracted["policy_id"] = claim.policy_id
+    prior_state["extracted_data"] = prior_extracted
+
+    # Zenlabs-style rolling conversation digest
+    conversation_digest = ""
+    try:
+        turns = (
+            db.query(ConversationTurn)
+            .filter(ConversationTurn.claim_id == claim.id)
+            .order_by(ConversationTurn.turn_number.asc())
+            .all()
+        )
+        if turns:
+            if len(turns) <= 12:
+                conversation_digest = "\n".join(f"{t.speaker.upper()}: {t.text}" for t in turns)
+            else:
+                older = turns[:-12]
+                recent = turns[-12:]
+                older_summary = "\n".join(
+                    f"[{t.speaker.upper()}]: {(t.text or '')[:400]}..." if len(t.text or "") > 400 else f"[{t.speaker.upper()}]: {t.text}"
+                    for t in older
+                )
+                recent_raw = "\n".join(f"{t.speaker.upper()}: {t.text}" for t in recent)
+                conversation_digest = f"--- Earlier Turns Digest ---\n{older_summary}\n--- Recent 12 Turns ---\n{recent_raw}"
+    except Exception:
+        conversation_digest = ""
+
     graph_input = {
         **prior_state,
-        "tenant_id": str(getattr(claim, "tenant_id", "") or ""),
-        "claimant_id": str(getattr(claim, "claimant_id", "") or ""),
+        "tenant_id": tenant_id_val,
+        "claimant_id": claimant_id_val,
         "claim_text": "" if workflow_event else user_text,
         "ticket_id": claim.ticket_id,
         "input_mode": input_mode,
+        "conversation_digest": conversation_digest,
         **({"_workflow_event": workflow_event} if workflow_event else {}),
     }
 

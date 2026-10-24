@@ -51,8 +51,12 @@ def _clean(text: str, limit: int = 1800) -> str:
 
 def _heuristic_intent(text: str) -> ChatIntent:
     low = _clean(text).lower()
+    is_info_query = bool(re.search(
+        r"\b(details?\s+require|explain\s+filing|how\s+to\s+apply|how\s+to\s+file|what\s+documents|waiting\s+period|settlement\s+timeline)\b",
+        low,
+    ))
     return ChatIntent(
-        is_question=_clean(text).endswith("?") or bool(QUESTION_RE.search(_clean(text))),
+        is_question=_clean(text).endswith("?") or bool(QUESTION_RE.search(_clean(text))) or is_info_query,
         is_claim_input=bool(re.search(
             r"\b(accident|claim|damage|hospital|medical|illness|stolen|fire|flood|injur|policy|loss|"
             r"repair|bill|invoice|incident|happened|occurred|treatment|surgery)\b", low
@@ -61,7 +65,7 @@ def _heuristic_intent(text: str) -> ChatIntent:
         wants_status=bool(re.search(r"\b(track|status|where is|update on)\b.*\b(claim|case)\b", low)),
         wants_policy_explanation=bool(re.search(
             r"\b(policy|coverage|covered|excluded|deductible|waiting period|procedure|documents|required)\b", low
-        )),
+        )) or is_info_query,
         wants_human=bool(re.search(r"\b(human|agent|adjuster|representative|person)\b", low)),
     )
 
@@ -89,6 +93,9 @@ def classify_turn(text: str, known_facts: Dict[str, Any] | None = None) -> ChatI
 def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
     facts = dict(state.get("extracted_data") or {})
     insurance_type = facts.get("insurance_type") or state.get("insurance_type_hint")
+    if not insurance_type and text:
+        from src.knowledge.retriever import infer_insurance_type_from_query
+        insurance_type = infer_insurance_type_from_query(text)
     incident_date = None
     if facts.get("event_date"):
         try:
@@ -202,53 +209,102 @@ def answer_claimant_question(
         f"Retrieved claim requirements: {json.dumps(requirements, ensure_ascii=False, default=str)}"
     )
 
-    try:
-        result = invoke_with_retry(
-            lambda: get_reasoning_llm().invoke(prompt),
-            operation_name="RAG grounded claimant response",
-            attempts=1,
-        )
-        content = getattr(result, "content", result)
-        if isinstance(content, list):
-            content = " ".join(
-                str(x.get("text")) if isinstance(x, dict) and x.get("text") else str(x)
-                for x in content
+    for model_getter in (get_reasoning_llm, get_fast_llm):
+        try:
+            result = invoke_with_retry(
+                lambda: model_getter().invoke(prompt),
+                operation_name="RAG grounded claimant response",
+                attempts=1,
             )
-        answer = _clean(str(content))
-        if answer and sources:
-            labels = []
-            for source in sources[:4]:
-                label = str(source.get("citation_label") or "").strip()
-                if not label:
-                    name = str(source.get("source_name") or "Source").strip()
-                    page = source.get("page_number")
-                    label = f"{name}, p.{page}" if page else name
-                if label and label not in labels:
-                    labels.append(label)
-            if labels and not any(label.lower() in answer.lower() for label in labels):
-                answer = f"{answer.rstrip()}\n\nSources: " + "; ".join(labels)
-            return answer
-    except Exception:
-        pass
+            content = getattr(result, "content", result)
+            if isinstance(content, list):
+                content = " ".join(
+                    str(x.get("text")) if isinstance(x, dict) and x.get("text") else str(x)
+                    for x in content
+                )
+            answer = _clean(str(content))
+            if answer and sources:
+                labels = []
+                for source in sources[:4]:
+                    label = str(source.get("citation_label") or "").strip()
+                    if not label:
+                        name = str(source.get("source_name") or "Source").strip()
+                        page = source.get("page_number")
+                        label = f"{name}, p.{page}" if page else name
+                    if label and label not in labels:
+                        labels.append(label)
+                if labels and not any(label.lower() in answer.lower() for label in labels):
+                    answer = f"{answer.rstrip()}\n\nSources: " + "; ".join(labels)
+                return answer
+        except Exception:
+            continue
 
-    if sources:
-        return _clean(
-            "Based on the indexed policy/guidance, " + str(sources[0].get("text") or ""),
-            1200,
+    return _synthesize_structured_answer_from_chunks(text, sources, requirements)
+
+
+def _synthesize_structured_answer_from_chunks(
+    question: str,
+    sources: list[dict[str, Any]],
+    requirements: list[dict[str, Any]] | None = None,
+) -> str:
+    """Deterministic section-grounded synthesizer used when LLM is offline or timed out."""
+    if not sources:
+        if requirements:
+            labels = [
+                str(r.get("label") or r.get("key") or "").strip()
+                for r in requirements[:5]
+                if r.get("label") or r.get("key")
+            ]
+            if labels:
+                return "Based on policy guidelines, the following claim details are required: " + ", ".join(labels) + "."
+        return (
+            "I can help with the claim and explain the filing process, but I don't have a relevant policy or procedure "
+            "document indexed for that question yet. Please link the applicable policy or provide the insurer guidance, "
+            "and I'll use it to answer."
         )
-    if requirements:
-        labels = [
-            str(r.get("label") or r.get("key") or "").strip()
-            for r in requirements[:5]
-            if r.get("label") or r.get("key")
-        ]
-        if labels:
-            return "For this claim, the indexed guidance indicates that we need " + ", ".join(labels) + "."
-    return (
-        "I can help with the claim and explain the filing process, but I don't have a relevant policy or procedure "
-        "document indexed for that question yet. Please link the applicable policy or provide the insurer guidance, "
-        "and I'll use it to answer."
-    )
+
+    low_q = question.lower()
+    top_source = sources[0]
+    txt = str(top_source.get("text") or "")
+    source_name = str(top_source.get("source_name") or "Policy Guidance")
+    citation = str(top_source.get("citation_label") or source_name)
+
+    # 1. New Policy Application
+    if any(w in low_q for w in ("apply", "application", "buy", "proposal", "kyc", "documents required to apply", "details require")):
+        bullets = []
+        for line in txt.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("•") or line_str.startswith("-") or "[table" in line_str.lower():
+                clean_bullet = line_str.lstrip("•- ").strip()
+                if clean_bullet and clean_bullet not in bullets:
+                    bullets.append(clean_bullet)
+        if bullets:
+            body = "To apply for this policy, the following documents and details are required per official guidelines:\n" + "\n".join(f"• {b}" for b in bullets[:6])
+        else:
+            clean_snippet = re.sub(r"\s+", " ", txt)[:380]
+            body = f"Based on {source_name}, here is the application guidance: {clean_snippet}"
+        return f"{body}\n\nSources: {citation}"
+
+    # 2. Claim Filing Process & Checklists
+    if any(w in low_q for w in ("file", "filing", "claim process", "how to claim", "documents required", "checklist", "timeline", "intimation")):
+        bullets = []
+        for line in txt.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("•") or line_str.startswith("-") or re.match(r"^\d+\.", line_str):
+                clean_bullet = line_str.lstrip("•- ").strip()
+                if clean_bullet and clean_bullet not in bullets:
+                    bullets.append(clean_bullet)
+        if bullets:
+            body = "Based on policy guidance, here is the procedure and required documents for filing a claim:\n" + "\n".join(f"• {b}" for b in bullets[:6])
+        else:
+            clean_snippet = re.sub(r"\s+", " ", txt)[:380]
+            body = f"Based on {source_name}, here is the claims filing guidance: {clean_snippet}"
+        return f"{body}\n\nSources: {citation}"
+
+    # 3. Exclusions, waiting periods, deductibles, general
+    clean_lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith("###") and not ln.strip().startswith("[Table")]
+    summary = " ".join(clean_lines[:4])[:450]
+    return f"Based on {source_name}: {summary}\n\nSources: {citation}"
 
 
 def build_claimant_response(

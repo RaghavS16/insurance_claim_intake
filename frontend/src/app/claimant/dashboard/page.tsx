@@ -201,9 +201,11 @@ export default function ClaimantDashboardPage() {
 
   return (
     <AppShell breadcrumbs={['Claimant', 'Overview']} activeTitle="Claims Overview">
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 16 }}>
+      <div className="snow-action-bar" style={{ marginBottom: 16 }}>
         <div className="snow-body" style={{ fontWeight: 600, color: '#374151' }}>Real-Time Activity</div>
-        <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+        <div className="snow-action-buttons">
+          <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
+        </div>
       </div>
 
       {/* Metric Cards Row */}
@@ -261,6 +263,8 @@ export default function ClaimantDashboardPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
           }}
         >
           <div>

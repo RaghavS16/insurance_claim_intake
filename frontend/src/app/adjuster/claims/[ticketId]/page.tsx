@@ -49,6 +49,7 @@ export default function AdjusterClaimWorkspacePage({
   const ticketId = resolvedParams.ticketId;
 
   const [activeTab, setActiveTab] = useState<'facts' | 'evidence' | 'exceptions' | 'notes' | 'audit'>('facts');
+  const [mobileTab, setMobileTab] = useState<'dossier' | 'copilot'>('dossier');
   const [auditEvents, setAuditEvents] = useState<any[]>([]);
 
   // Copilot State
@@ -313,6 +314,15 @@ export default function AdjusterClaimWorkspacePage({
           <Button
             size="sm"
             variant="secondary"
+            onClick={() => setCopilotOpen(!copilotOpen)}
+            icon={<Sparkles size={14} color="#7C3AED" />}
+          >
+            {copilotOpen ? 'Hide Copilot' : 'Show Copilot'}
+          </Button>
+
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={() => setRequestModalOpen(true)}
           >
             Request Evidence
@@ -364,10 +374,29 @@ export default function AdjusterClaimWorkspacePage({
           </p>
         </Card>
       ) : (
-        /* Main Split Layout: Fixed Headers, Independent Scrollable Panels */
-        <div className={`snow-workspace-split ${copilotOpen ? '' : 'copilot-closed'}`}>
-          {/* Adjudication Workspace Left Column */}
-          <div className="snow-workspace-main-panel">
+        <>
+          {/* Mobile & Tablet Segmented Tab Switcher (<= 1024px) */}
+          <div className="snow-workspace-mobile-tabs">
+            <button
+              type="button"
+              className={`snow-workspace-mobile-tab-btn ${mobileTab === 'dossier' ? 'active' : ''}`}
+              onClick={() => setMobileTab('dossier')}
+            >
+              📋 Adjudication Dossier
+            </button>
+            <button
+              type="button"
+              className={`snow-workspace-mobile-tab-btn ${mobileTab === 'copilot' ? 'active' : ''}`}
+              onClick={() => setMobileTab('copilot')}
+            >
+              🤖 Copilot Assistant
+            </button>
+          </div>
+
+          {/* Main Split Layout: Fixed Headers, Independent Scrollable Panels */}
+          <div className={`snow-workspace-split ${copilotOpen ? '' : 'copilot-closed'}`}>
+            {/* Adjudication Workspace Left Column */}
+            <div className={`snow-workspace-main-panel ${mobileTab === 'copilot' ? 'mobile-hidden' : ''}`}>
             {/* Workspace Tabs - FIXED */}
             <div className="snow-workspace-tabs-bar">
               {[
@@ -820,7 +849,7 @@ export default function AdjusterClaimWorkspacePage({
 
           {/* AI Copilot Side Drawer - Fixed Header & Input, Independent Chat Scroll */}
           {copilotOpen && (
-            <aside className="snow-workspace-copilot-panel snow-card">
+            <aside className={`snow-workspace-copilot-panel snow-card ${mobileTab === 'dossier' ? 'mobile-hidden' : ''}`}>
               {/* Copilot Header - FIXED */}
               <div className="snow-workspace-copilot-header">
                 <div className="snow-flex snow-justify-between snow-items-center">
@@ -946,7 +975,8 @@ export default function AdjusterClaimWorkspacePage({
               </div>
             </aside>
           )}
-        </div>
+          </div>
+        </>
       )}
 
       {/* Record Decision Modal */}

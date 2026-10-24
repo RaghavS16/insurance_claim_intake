@@ -7,9 +7,11 @@ import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { BadgeDot } from '@/components/ui/Badge';
+import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 
 export default function AdminAuditTrailPage() {
+  const { user, isLoading: authLoading } = useAuth();
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +32,10 @@ export default function AdminAuditTrailPage() {
   };
 
   useEffect(() => {
-    fetchEvents();
-  }, []);
+    if (!authLoading && user) {
+      fetchEvents();
+    }
+  }, [authLoading, user]);
 
   const getActionBadge = (action: string) => {
     const act = (action || '').toUpperCase();

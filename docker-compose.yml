@@ -181,6 +181,8 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-15}
+    volumes:
+      - ./backend/src:/app/src
     depends_on:
       postgres:
         condition: service_healthy

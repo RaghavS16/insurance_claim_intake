@@ -12,17 +12,50 @@ export const DonutChart: React.FC<{
   size?: number;
   strokeWidth?: number;
 }> = ({ segments, size = 160, strokeWidth = 24 }) => {
-  const total = segments.reduce((acc, s) => acc + s.value, 0) || 1;
+  const activeSegments = segments.filter((s) => s.value > 0);
+  const total = activeSegments.reduce((acc, s) => acc + s.value, 0);
   const radius = (size - strokeWidth) / 2;
   const center = size / 2;
   const circumference = 2 * Math.PI * radius;
 
+  if (activeSegments.length === 0 || total === 0) {
+    return (
+      <div className="snow-flex snow-items-center snow-gap-4" style={{ minHeight: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="transparent"
+            stroke="#E4E4E7"
+            strokeWidth={strokeWidth}
+            strokeDasharray="4 4"
+          />
+          <text
+            x={center}
+            y={center}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fontSize="12"
+            fill="#71717A"
+            fontWeight="500"
+          >
+            0 Claims
+          </text>
+        </svg>
+        <div className="snow-caption" style={{ color: '#71717A' }}>
+          No active claims recorded in this workflow stage.
+        </div>
+      </div>
+    );
+  }
+
   let currentOffset = 0;
 
   return (
-    <div className="snow-flex snow-items-center snow-gap-4">
+    <div className="snow-donut-chart-container" style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        {segments.map((seg, i) => {
+        {activeSegments.map((seg, i) => {
           const strokeDasharray = `${(seg.value / total) * circumference} ${circumference}`;
           const strokeDashoffset = -currentOffset;
           currentOffset += (seg.value / total) * circumference;
@@ -43,10 +76,21 @@ export const DonutChart: React.FC<{
             />
           );
         })}
+        <text
+          x={center}
+          y={center}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize="14"
+          fontWeight="600"
+          fill="#18181B"
+        >
+          {total}
+        </text>
       </svg>
 
       <div className="snow-flex-col snow-gap-2">
-        {segments.map((seg, i) => (
+        {activeSegments.map((seg, i) => (
           <div key={i} className="snow-flex snow-items-center snow-gap-2">
             <span
               style={{
@@ -59,7 +103,7 @@ export const DonutChart: React.FC<{
             />
             <span className="snow-caption" style={{ minWidth: 80 }}>{seg.label}</span>
             <span className="snow-caption" style={{ fontWeight: 600 }}>
-              {Math.round((seg.value / total) * 100)}%
+              {seg.value} ({Math.round((seg.value / total) * 100)}%)
             </span>
           </div>
         ))}
@@ -80,7 +124,7 @@ export const BarChart: React.FC<{
   height?: number;
   defaultColor?: string;
 }> = ({ data, height = 180, defaultColor = '#00D1FF' }) => {
-  const maxVal = Math.max(...data.map((d) => d.value), 10);
+  const maxVal = Math.max(...data.map((d) => d.value), 5);
 
   return (
     <div style={{ width: '100%', height, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
@@ -89,12 +133,12 @@ export const BarChart: React.FC<{
           display: 'flex',
           alignItems: 'flex-end',
           justifyContent: 'space-between',
-          height: height - 24,
+          height: height - 28,
           gap: 12,
         }}
       >
         {data.map((d, i) => {
-          const barHeight = (d.value / maxVal) * (height - 30);
+          const barHeight = (d.value / maxVal) * (height - 40);
           return (
             <div
               key={i}
@@ -107,12 +151,15 @@ export const BarChart: React.FC<{
                 justifyContent: 'flex-end',
               }}
             >
+              <span className="snow-micro" style={{ marginBottom: 4, fontWeight: 600, color: d.value > 0 ? '#18181B' : '#A1A1AA' }}>
+                {d.value}
+              </span>
               <div
                 style={{
                   width: '100%',
                   maxWidth: 24,
                   height: Math.max(barHeight, 4),
-                  backgroundColor: d.color || defaultColor,
+                  backgroundColor: d.value > 0 ? (d.color || defaultColor) : '#E4E4E7',
                   borderRadius: 6,
                   transition: 'height 0.3s ease',
                 }}
@@ -123,7 +170,7 @@ export const BarChart: React.FC<{
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
         {data.map((d, i) => (
-          <span key={i} className="snow-micro" style={{ flex: 1, textAlign: 'center' }}>
+          <span key={i} className="snow-micro" style={{ flex: 1, textAlign: 'center', fontWeight: 500 }}>
             {d.label}
           </span>
         ))}

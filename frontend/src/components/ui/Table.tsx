@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Plus, ArrowUpDown, Search, MoreHorizontal, Copy, Eye, Download, Check, Edit2 } from 'lucide-react';
 import { Button } from './Button';
 import { useToast } from './Toast';
+import { Checkbox } from './Checkbox';
 
 export interface Column<T> {
   key: string;
@@ -205,11 +206,9 @@ export function Table<T extends Record<string, any>>({
             <tr>
               {onSelectChange && (
                 <th style={{ width: 40, textAlign: 'center' }}>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={processedData.length > 0 && selectedIds.length === processedData.length}
                     onChange={toggleSelectAll}
-                    style={{ cursor: 'pointer' }}
                   />
                 </th>
               )}
@@ -248,11 +247,9 @@ export function Table<T extends Record<string, any>>({
                   >
                     {onSelectChange && (
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={isSelected}
                           onChange={(e) => toggleSelectRow(id, e as any)}
-                          style={{ cursor: 'pointer' }}
                         />
                       </td>
                     )}

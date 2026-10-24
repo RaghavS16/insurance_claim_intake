@@ -140,15 +140,49 @@ def _extract_text(content: bytes, filename: str) -> str:
     if ext in (".docx", ".doc"):
         try:
             import docx
+            from docx.oxml.text.paragraph import CT_P
+            from docx.oxml.table import CT_Tbl
+            from docx.table import Table
+            from docx.text.paragraph import Paragraph
+
             doc = docx.Document(io.BytesIO(content))
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                    if row_text:
-                        paragraphs.append(row_text)
-            full_text = "\n\n".join(paragraphs).strip()
-            logger.info("[Knowledge] Extracted %d paragraphs from DOCX '%s'.", len(paragraphs), filename)
+            blocks: list[str] = []
+            current_section = ""
+            for child in doc.element.body.iterchildren():
+                if isinstance(child, CT_P):
+                    para = Paragraph(child, doc)
+                    txt = (para.text or "").strip()
+                    if not txt:
+                        continue
+                    style_name = (para.style.name if para.style else "").lower()
+                    if "heading" in style_name or re.match(r"^(\d+(\.\d+)*\s+[A-Z]|Section\s+\d+)", txt, re.I):
+                        current_section = txt
+                        blocks.append("\n### " + txt + "\n")
+                    else:
+                        blocks.append(txt)
+                elif isinstance(child, CT_Tbl):
+                    tbl = Table(child, doc)
+                    rows_data: list[list[str]] = []
+                    for row in tbl.rows:
+                        cells = [re.sub(r"\s+", " ", (c.text or "").strip()) for c in row.cells]
+                        if any(cells):
+                            rows_data.append(cells)
+                    if not rows_data:
+                        continue
+                    header = rows_data[0]
+                    ref = current_section if current_section else "Policy Reference"
+                    table_lines = [f"[Table — {ref}]"]
+                    table_lines.append(" | ".join(header))
+                    for r in rows_data[1:]:
+                        paired = [
+                            f"{header[i]}: {r[i]}" if i < len(header) and header[i] else r[i]
+                            for i in range(len(r))
+                            if r[i]
+                        ]
+                        table_lines.append("• " + " — ".join(paired))
+                    blocks.append("\n".join(table_lines))
+            full_text = "\n\n".join(blocks).strip()
+            logger.info("[Knowledge] Extracted %d structured blocks from DOCX '%s'.", len(blocks), filename)
             return full_text
         except Exception as exc:
             logger.error("[Knowledge] DOCX read failed for '%s': %s", filename, exc)
@@ -235,6 +269,121 @@ def _structure_aware_pages(pages: list[str]) -> list[dict[str, Any]]:
         rows.extend(page_rows)
     return rows
 
+def extract_docx_requirement_manifest(
+    content: bytes,
+    filename: str,
+    insurance_type: str | None = None,
+    citation_base: str = "",
+) -> list[dict[str, Any]]:
+    """Extract canonical claim fields and mandatory evidence checklist from .docx tables."""
+    try:
+        import docx
+        doc = docx.Document(io.BytesIO(content))
+    except Exception as exc:
+        logger.warning("[Knowledge] Could not open DOCX for manifest extraction: %s", exc)
+        return []
+
+    manifest: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    citation_ref = citation_base or filename
+
+    def _canonical_field(fn: str) -> tuple[str, str, str, str]:
+        low = fn.lower()
+        if "policy number" in low or "policy id" in low:
+            return "policy_id", "policy_id", "Policy Number", "Please provide your policy number."
+        if "date" in low and any(w in low for w in ("accident", "loss", "admission", "discovery", "incident")):
+            return "event_date", "event_date", "Date of Incident", "When did the incident occur (date)?"
+        if any(w in low for w in ("place", "location", "address", "hospital name", "destination", "property")):
+            return "event_location", "event_location", "Incident Location / Hospital / Property", "Where did the loss or incident take place?"
+        if any(w in low for w in ("cause", "description", "damage", "diagnosis", "incident", "narrative", "nature of loss")):
+            return "event_description", "event_description", "Description of Incident", "Please briefly describe what happened and how the damage or loss occurred."
+        if any(w in low for w in ("estimate", "bill", "amount", "claimed", "loss amount")):
+            return "estimated_claim_amount", "estimated_claim_amount", "Estimated Claim Amount", "What is the estimated loss or claimed amount?"
+        k = re.sub(r"[^a-z0-9]+", "_", low).strip("_")
+        return k, k, fn, f"Could you provide {fn.lower()}?"
+
+    def _canonical_doc(dn: str) -> tuple[str, str]:
+        low = dn.lower()
+        if "claim form" in low: return "claim_form", "Please upload a signed Claim Form."
+        if "rc" in low or "registration certificate" in low: return "rc_copy", "Please upload the vehicle Registration Certificate (RC)."
+        if "driving licence" in low or "dl" in low: return "driving_licence", "Please upload the driver's Driving Licence."
+        if "repair estimate" in low or "estimate" in low: return "repair_estimate", "Please upload the repair estimate or quotation."
+        if "fir" in low or "police" in low: return "police_fir", "Please upload the Police FIR or General Diary entry copy."
+        if "discharge summary" in low: return "discharge_summary", "Please upload the hospital Discharge Summary."
+        if "hospital bill" in low or "itemised" in low or "final bill" in low: return "hospital_bill", "Please upload the itemised hospital bill."
+        if "receipt" in low or "payment receipt" in low: return "payment_receipt", "Please upload payment receipts."
+        if "photo" in low or "damage" in low: return "damage_photo", "Please upload photos showing the loss or damage."
+        if "pir" in low or "property irregularity" in low: return "pir_report", "Please upload the Property Irregularity Report (PIR) from the airline."
+        if "passport" in low: return "passport_copy", "Please upload your Passport copy with entry/exit stamps."
+        if "ncrp" in low or "1930" in low or "cybercrime" in low: return "ncrp_complaint", "Please upload the NCRP (cybercrime.gov.in / 1930) complaint copy."
+        if "bank statement" in low: return "bank_statement", "Please upload your bank statement showing the unauthorized transaction."
+        if "cheque" in low or "neft" in low: return "cancelled_cheque", "Please upload a cancelled cheque or bank NEFT details."
+        k = "doc_" + re.sub(r"[^a-z0-9]+", "_", low).strip("_")
+        return k, f"Please upload {dn.lower()}."
+
+    for t in doc.tables:
+        if not t.rows:
+            continue
+        header = [c.text.strip().lower() for c in t.rows[0].cells]
+        # 1. Intake Form Fields Table (under Section 6)
+        if any("intake field" in h for h in header):
+            for r in t.rows[1:]:
+                cells = [c.text.strip() for c in r.cells]
+                if not cells or not cells[0]:
+                    continue
+                fn = cells[0]
+                req_level = cells[1] if len(cells) > 1 else "Core"
+                cond_note = cells[2] if len(cells) > 2 else ""
+                key, role, label, hint = _canonical_field(fn)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                is_req = req_level.lower() in ("core", "mandatory", "all claims")
+                item = {
+                    "key": key,
+                    "label": label,
+                    "question_hint": hint,
+                    "required": is_req,
+                    "evidence_type": None,
+                    "canonical_role": role,
+                    "citation_label": f"{citation_ref} • Section 6 Claim Intake Form",
+                }
+                if cond_note and not is_req:
+                    item["condition"] = cond_note
+                manifest.append(item)
+
+        # 2. Mandatory Documents Checklist Table (under Section 6)
+        elif any("document / evidence" in h or "document" in h for h in header) and any("when needed" in h or "needed" in h for h in header):
+            for r in t.rows[1:]:
+                cells = [c.text.strip() for c in r.cells]
+                if not cells or not cells[0]:
+                    continue
+                dn = cells[0]
+                when_needed = cells[1] if len(cells) > 1 else "All claims"
+                note = cells[2] if len(cells) > 2 else ""
+                key, hint = _canonical_doc(dn)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                is_req = when_needed.lower() in ("all claims", "all", "mandatory", "core")
+                item = {
+                    "key": key,
+                    "label": dn,
+                    "question_hint": hint,
+                    "required": is_req,
+                    "evidence_type": "document",
+                    "canonical_role": key,
+                    "citation_label": f"{citation_ref} • Section 6 Mandatory Documents Checklist",
+                }
+                if when_needed and not is_req:
+                    item["condition"] = when_needed
+                if note:
+                    item["note"] = note
+                manifest.append(item)
+
+    return manifest
+
+
 def ingest_document(
     *,
     content: bytes,
@@ -248,6 +397,7 @@ def ingest_document(
     uploaded_by: str | None = None,
     tenant_id: str | None = None,
     jurisdiction: str | None = None,
+    publication_status: str | None = None,
 ) -> dict:
     size_mb = len(content) / (1024 * 1024)
     max_mb = settings.KNOWLEDGE_MAX_UPLOAD_BYTES // (1024 * 1024)
@@ -266,23 +416,50 @@ def ingest_document(
     
     logger.info("[Knowledge] Extracted %d characters from '%s'. Inferring metadata...", len(text), filename)
     meta = infer_metadata(text, filename, document_type)
+    resolved_doc_type = document_type or meta.document_type or "unknown"
     insurance_type = insurance_type or meta.insurance_type
     content_sha256 = hashlib.sha256(content).hexdigest()
+
+    pub_status = publication_status or (
+        "published"
+        if uploaded_by in ("system_seed", "admin")
+        or resolved_doc_type in ("policy_wording", "regulation")
+        or "wording" in filename.lower()
+        or "regulatory" in filename.lower()
+        else "pending_review"
+    )
+
+    docx_manifest: list[dict[str, Any]] = []
+    if filename.lower().endswith(".docx") and (
+        resolved_doc_type in ("policy_wording", "endorsement") or "wording" in filename.lower()
+    ):
+        docx_manifest = extract_docx_requirement_manifest(
+            content, filename, insurance_type=insurance_type, citation_base=filename
+        )
+        if docx_manifest:
+            logger.info("[Knowledge] Compiled %d requirement manifest fields from DOCX '%s'.", len(docx_manifest), filename)
     
     db = SessionLocal()
     try:
         existing = db.query(KnowledgeDocument).filter(KnowledgeDocument.content_sha256 == content_sha256, KnowledgeDocument.tenant_id == tenant_id).first()
         if existing:
             logger.info("[Knowledge] Document '%s' already indexed (SHA: %s).", filename, content_sha256[:8])
+            meta_updates: dict[str, Any] = {}
             if any(value not in (None, "") for value in (policy_number, effective_from, effective_to, policy_version)):
-                existing.metadata_json = {
-                    **(existing.metadata_json or {}),
+                meta_updates.update({
                     "policy_number": policy_number or (existing.metadata_json or {}).get("policy_number"),
                     "effective_from": effective_from or (existing.metadata_json or {}).get("effective_from"),
                     "effective_to": effective_to or (existing.metadata_json or {}).get("effective_to"),
                     "policy_version": policy_version or (existing.metadata_json or {}).get("policy_version"),
                     "uploaded_by": uploaded_by or (existing.metadata_json or {}).get("uploaded_by"),
-                }
+                })
+            if docx_manifest and not (existing.metadata_json or {}).get("requirement_manifest"):
+                meta_updates["requirement_manifest"] = docx_manifest
+                meta_updates["requirement_manifest_version"] = 1
+            if pub_status == "published":
+                meta_updates["publication_status"] = "published"
+            if meta_updates:
+                existing.metadata_json = {**(existing.metadata_json or {}), **meta_updates}
                 db.commit()
             if existing.source_uri and existing.source_uri.startswith("file://") and settings.S3_BUCKET:
                 try:
@@ -341,19 +518,26 @@ def ingest_document(
     )
     
     logger.info("[Knowledge] Persisting %d chunks into PostgreSQL pgvector...", len(chunks))
+    valid_uploaded_by = None
+    if uploaded_by:
+        try:
+            valid_uploaded_by = str(uuid.UUID(str(uploaded_by)))
+        except (ValueError, TypeError, AttributeError):
+            valid_uploaded_by = None
+
     db = SessionLocal()
     try:
         doc = KnowledgeDocument(
             id=str(uuid.uuid4()),
             source_name=filename,
             source_uri=s3["uri"],
-            document_type=document_type or meta.document_type or "unknown",
+            document_type=resolved_doc_type,
             insurance_type=insurance_type,
             content_sha256=content_sha256,
             tenant_id=tenant_id,
             jurisdiction=jurisdiction,
             document_version=policy_version,
-            uploaded_by=uploaded_by,
+            uploaded_by=valid_uploaded_by,
             metadata_json={
                 "title": meta.title,
                 "scope": meta.document_scope,
@@ -363,7 +547,8 @@ def ingest_document(
                 "policy_version": policy_version,
                 "jurisdiction": jurisdiction,
                 "uploaded_by": uploaded_by,
-                "publication_status": "pending_review",
+                "publication_status": pub_status,
+                **({"requirement_manifest": docx_manifest, "requirement_manifest_version": 1} if docx_manifest else {}),
             },
         )
         db.add(doc)

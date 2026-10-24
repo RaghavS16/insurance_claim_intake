@@ -13,12 +13,14 @@ import { BadgeDot } from '@/components/ui/Badge';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { DonutChart, BarChart } from '@/components/ui/Charts';
 import { useToast } from '@/components/ui/Toast';
+import { useAuth } from '@/lib/auth-context';
 import { Claim, Adjuster } from '@/lib/types';
 import { api } from '@/lib/api';
 
 export default function AdminClaimsOversightPage() {
   const router = useRouter();
   const { showToast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [adjusters, setAdjusters] = useState<Adjuster[]>([]);
@@ -62,8 +64,71 @@ export default function AdminClaimsOversightPage() {
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (!authLoading && user) {
+      fetchData();
+    }
+  }, [authLoading, user]);
+
+  const stageStats = React.useMemo(() => {
+    const backendStages = dashboardMetrics?.claims?.stages || {};
+
+    const tableCounts = {
+      submitted: 0,
+      under_review: 0,
+      pending_evidence: 0,
+      approved: 0,
+      rejected: 0,
+    };
+
+    claims.forEach((c) => {
+      const st = (c.status || '').toLowerCase();
+      if (['submitted', 'verified', 'evaluated', 'pending_verification', 'pending_adjuster'].includes(st)) {
+        tableCounts.submitted += 1;
+      } else if (['under_review', 'assigned'].includes(st)) {
+        tableCounts.under_review += 1;
+      } else if (['pending_evidence'].includes(st)) {
+        tableCounts.pending_evidence += 1;
+      } else if (['approved', 'settled', 'partially_approved'].includes(st)) {
+        tableCounts.approved += 1;
+      } else if (['rejected', 'closed', 'escalated'].includes(st)) {
+        tableCounts.rejected += 1;
+      }
+    });
+
+    const submittedCount =
+      backendStages.submitted !== undefined && backendStages.submitted > 0
+        ? backendStages.submitted
+        : tableCounts.submitted;
+
+    const reviewCount =
+      backendStages.under_review !== undefined && backendStages.under_review > 0
+        ? backendStages.under_review
+        : tableCounts.under_review;
+
+    const evidenceCount =
+      backendStages.pending_evidence !== undefined && backendStages.pending_evidence > 0
+        ? backendStages.pending_evidence
+        : tableCounts.pending_evidence;
+
+    const approvedCount =
+      ((backendStages.approved || 0) + (backendStages.settled || 0)) > 0
+        ? (backendStages.approved || 0) + (backendStages.settled || 0)
+        : tableCounts.approved;
+
+    const rejectedCount =
+      backendStages.rejected !== undefined && backendStages.rejected > 0
+        ? backendStages.rejected
+        : tableCounts.rejected;
+
+    return {
+      submitted: submittedCount,
+      under_review: reviewCount,
+      pending_evidence: evidenceCount,
+      approved: approvedCount,
+      rejected: rejectedCount,
+      total: submittedCount + reviewCount + evidenceCount + approvedCount + rejectedCount,
+    };
+  }, [dashboardMetrics, claims]);
 
   const handleReassign = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,8 +260,8 @@ export default function AdminClaimsOversightPage() {
             />
             <MetricCard
               title="Submitted Claims"
-              value={dashboardMetrics.claims.total}
-              trend={`${dashboardMetrics.claims.stages?.under_review || 0} in active review`}
+              value={stageStats.total > 0 ? stageStats.total : (claims.length || dashboardMetrics.claims?.total || 0)}
+              trend={`${stageStats.under_review} in active review`}
               trendDirection="up"
               tint="indigo"
               icon={<Layers size={20} />}
@@ -232,12 +297,12 @@ export default function AdminClaimsOversightPage() {
               </div>
               <DonutChart
                 segments={[
-                  { label: 'Submitted', value: dashboardMetrics.claims.stages?.submitted || 0, color: '#0EA5E9' },
-                  { label: 'Under Review', value: dashboardMetrics.claims.stages?.under_review || 0, color: '#6366F1' },
-                  { label: 'Approved', value: dashboardMetrics.claims.stages?.approved || 0, color: '#10B981' },
-                  { label: 'Settled', value: dashboardMetrics.claims.stages?.settled || 0, color: '#059669' },
-                  { label: 'Rejected', value: dashboardMetrics.claims.stages?.rejected || 0, color: '#EF4444' },
-                ].filter((s) => s.value > 0)}
+                  { label: 'Intake / Submitted', value: stageStats.submitted, color: '#0EA5E9' },
+                  { label: 'Under Review', value: stageStats.under_review, color: '#6366F1' },
+                  { label: 'Pending Evidence', value: stageStats.pending_evidence, color: '#F59E0B' },
+                  { label: 'Approved', value: stageStats.approved, color: '#10B981' },
+                  { label: 'Rejected', value: stageStats.rejected, color: '#EF4444' },
+                ]}
               />
             </Card>
 
@@ -247,10 +312,11 @@ export default function AdminClaimsOversightPage() {
               </div>
               <BarChart
                 data={[
-                  { label: 'Subm.', value: dashboardMetrics.claims.stages?.submitted || 0, color: '#0EA5E9' },
-                  { label: 'Review', value: dashboardMetrics.claims.stages?.under_review || 0, color: '#6366F1' },
-                  { label: 'Appr.', value: dashboardMetrics.claims.stages?.approved || 0, color: '#10B981' },
-                  { label: 'Rej.', value: dashboardMetrics.claims.stages?.rejected || 0, color: '#EF4444' },
+                  { label: 'Intake', value: stageStats.submitted, color: '#0EA5E9' },
+                  { label: 'Review', value: stageStats.under_review, color: '#6366F1' },
+                  { label: 'Evidence', value: stageStats.pending_evidence, color: '#F59E0B' },
+                  { label: 'Appr.', value: stageStats.approved, color: '#10B981' },
+                  { label: 'Rej.', value: stageStats.rejected, color: '#EF4444' },
                 ]}
               />
             </Card>

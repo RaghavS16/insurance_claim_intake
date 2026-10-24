@@ -6,6 +6,7 @@ import { AppShell } from '@/components/ui/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/ui/Toast';
@@ -226,41 +227,26 @@ export default function SettingsPage() {
         <div className="snow-flex-col snow-gap-6" style={{ maxWidth: 760 }}>
           <Card title="Email Preferences">
             <div className="snow-flex-col snow-gap-4">
-              <label className="snow-flex snow-items-center snow-gap-3" style={{ cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={claimUpdates}
-                  onChange={(e) => setClaimUpdates(e.target.checked)}
-                />
-                <div>
-                  <div className="snow-body" style={{ fontWeight: 600 }}>Claim Status Transitions</div>
-                  <div className="snow-caption">Instant notification when claim is reviewed, approved, or escalated.</div>
-                </div>
-              </label>
+              <Checkbox
+                checked={claimUpdates}
+                onChange={(e) => setClaimUpdates(e.target.checked)}
+                label="Claim Status Transitions"
+                description="Instant notification when claim is reviewed, approved, or escalated."
+              />
 
-              <label className="snow-flex snow-items-center snow-gap-3" style={{ cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={exceptionAlerts}
-                  onChange={(e) => setExceptionAlerts(e.target.checked)}
-                />
-                <div>
-                  <div className="snow-body" style={{ fontWeight: 600 }}>Adjudication Exception Inquiries</div>
-                  <div className="snow-caption">Receive notification when adjuster requests additional receipts or police reports.</div>
-                </div>
-              </label>
+              <Checkbox
+                checked={exceptionAlerts}
+                onChange={(e) => setExceptionAlerts(e.target.checked)}
+                label="Adjudication Exception Inquiries"
+                description="Receive notification when adjuster requests additional receipts or police reports."
+              />
 
-              <label className="snow-flex snow-items-center snow-gap-3" style={{ cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={payoutReceipts}
-                  onChange={(e) => setPayoutReceipts(e.target.checked)}
-                />
-                <div>
-                  <div className="snow-body" style={{ fontWeight: 600 }}>Payout & Settlement Dispatches</div>
-                  <div className="snow-caption">Delivery notices for approved claims payouts and direct deposit settlements.</div>
-                </div>
-              </label>
+              <Checkbox
+                checked={payoutReceipts}
+                onChange={(e) => setPayoutReceipts(e.target.checked)}
+                label="Payout & Settlement Dispatches"
+                description="Delivery notices for approved claims payouts and direct deposit settlements."
+              />
             </div>
 
             <Button

@@ -7,6 +7,8 @@ const API_BASE =
 
 // In-memory access token storage (never written to localStorage or cookies on client)
 let inMemoryAccessToken: string | null = null;
+let refreshPromise: Promise<string | null> | null = null;
+let initialAuthPromise: Promise<string | null> | null = null;
 
 class ApiClient {
   private etagCache = new Map<string, { etag: string; data: any }>();
@@ -19,6 +21,10 @@ class ApiClient {
     inMemoryAccessToken = access;
   }
 
+  public setInitialAuthPromise(promise: Promise<string | null> | null) {
+    initialAuthPromise = promise;
+  }
+
   public clearCache() {
     this.etagCache.clear();
   }
@@ -28,10 +34,52 @@ class ApiClient {
     this.clearCache();
   }
 
+  public async refreshToken(): Promise<string | null> {
+    if (refreshPromise) {
+      return refreshPromise;
+    }
+    refreshPromise = (async () => {
+      try {
+        const refreshRes = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          this.setToken(data.access_token);
+          return data.access_token as string;
+        } else {
+          this.clearTokens();
+          return null;
+        }
+      } catch {
+        this.clearTokens();
+        return null;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+    return refreshPromise;
+  }
 
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const isAuthEndpoint =
+      endpoint.includes('/auth/login') ||
+      endpoint.includes('/auth/refresh') ||
+      endpoint.includes('/auth/logout');
+
+    // If an initial session restoration is underway on page load, await it before making protected calls
+    if (!isAuthEndpoint && !this.getToken() && initialAuthPromise) {
+      try {
+        await initialAuthPromise;
+      } catch {
+        // Proceed even if initial auth check failed
+      }
+    }
+
     const url = `${API_BASE}${endpoint}`;
-    const token = this.getToken();
+    let token = this.getToken();
     const isGet = (options.method || 'GET').toUpperCase() === 'GET';
 
     const headers: Record<string, string> = {
@@ -58,36 +106,24 @@ class ApiClient {
       return cached.data as T;
     }
 
-    if (res.status === 401 && !endpoint.includes('/auth/login') && !endpoint.includes('/auth/refresh') && !endpoint.includes('/auth/logout')) {
-      try {
-        const refreshRes = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-        });
-        if (refreshRes.ok) {
-          const data = await refreshRes.json();
-          this.setToken(data.access_token);
-          headers['Authorization'] = `Bearer ${data.access_token}`;
-          const retryRes = await fetch(url, { ...options, headers, credentials: 'include' });
-          if (!retryRes.ok) {
-            const errorData = await retryRes.json().catch(() => ({}));
-            let msg = `Request failed with status ${retryRes.status}`;
-            if (typeof errorData.detail === 'string') {
-              msg = errorData.detail;
-            } else if (Array.isArray(errorData.detail)) {
-              msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
-            } else if (errorData.message) {
-              msg = errorData.message;
-            }
-            throw new Error(msg);
+    if (res.status === 401 && !isAuthEndpoint) {
+      const newToken = await this.refreshToken();
+      if (newToken) {
+        headers['Authorization'] = `Bearer ${newToken}`;
+        const retryRes = await fetch(url, { ...options, headers, credentials: 'include' });
+        if (!retryRes.ok) {
+          const errorData = await retryRes.json().catch(() => ({}));
+          let msg = `Request failed with status ${retryRes.status}`;
+          if (typeof errorData.detail === 'string') {
+            msg = errorData.detail;
+          } else if (Array.isArray(errorData.detail)) {
+            msg = errorData.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+          } else if (errorData.message) {
+            msg = errorData.message;
           }
-          return (await retryRes.json()) as T;
-        } else {
-          this.clearTokens();
+          throw new Error(msg);
         }
-      } catch {
-        this.clearTokens();
+        return (await retryRes.json()) as T;
       }
     }
 

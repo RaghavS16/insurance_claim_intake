@@ -19,7 +19,7 @@ DATABASE_URL = settings.DATABASE_URL
 
 # SQLite requires check_same_thread=False and does not support pooling configuration
 _is_sqlite = DATABASE_URL.startswith("sqlite")
-_connect_args = {"check_same_thread": False} if _is_sqlite else {}
+_connect_args = {"check_same_thread": False} if _is_sqlite else {"connect_timeout": 5}
 
 # Connection pool configuration for production PostgreSQL
 _pool_kwargs = {}

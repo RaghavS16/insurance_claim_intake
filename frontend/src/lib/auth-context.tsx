@@ -31,39 +31,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Restore session on load with a silent POST /api/v1/auth/refresh using HttpOnly cookie
-    api.request<{ access_token: string; user?: User }>('/api/v1/auth/refresh', {
-      method: 'POST',
-      credentials: 'include',
-    })
-      .then(async (data) => {
-        if (data && data.access_token) {
-          api.setToken(data.access_token);
-          if (data.user && data.user.id && data.user.role) {
-            setUser(data.user);
-            setRole(data.user.role);
-          } else {
+    const restorePromise = api
+      .refreshToken()
+      .then(async (token) => {
+        if (token) {
+          try {
             const me = await api.get<User>('/api/v1/auth/me');
             if (me && me.id && me.role) {
               setUser(me);
               setRole(me.role);
+              return token;
             }
+          } catch {
+            // me endpoint failed
           }
-        } else {
-          api.clearTokens();
-          clearApiCache();
-          setUser(null);
-          setRole(null);
         }
+        api.clearTokens();
+        clearApiCache();
+        setUser(null);
+        setRole(null);
+        return null;
       })
       .catch(() => {
         api.clearTokens();
         clearApiCache();
         setUser(null);
         setRole(null);
+        return null;
       })
       .finally(() => {
         setIsLoading(false);
+        api.setInitialAuthPromise(null);
       });
+
+    api.setInitialAuthPromise(restorePromise);
   }, []);
 
   const login = (access: string, newUser: User) => {

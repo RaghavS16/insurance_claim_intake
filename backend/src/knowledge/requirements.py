@@ -76,9 +76,6 @@ def get_requirements_from_context(
         llm = get_configured_llm()
 
     def _prompt_context(rows: list[dict]) -> list[dict]:
-        # Policy manifests are compiled document-wide. For the fallback semantic
-        # planner, keep a larger evidence window so later policy sections are not
-        # silently lost before requirement extraction.
         return [
             {
                 "source_name": row.get("source_name"),
@@ -86,9 +83,9 @@ def get_requirements_from_context(
                 "chunk_id": row.get("chunk_id") or row.get("id"),
                 "document_type": row.get("document_type"),
                 "score": row.get("rerank_score", row.get("score")),
-                "text": str(row.get("text") or "")[:5000],
+                "text": str(row.get("text") or "")[:1500],
             }
-            for row in rows[:12]
+            for row in rows[:5]
         ]
 
     policy_prompt_context = _prompt_context(policy_context)
