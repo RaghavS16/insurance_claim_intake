@@ -1,14 +1,7 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 import { ToastProvider } from '@/components/ui/Toast';
-
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: 'IntelliClaim — Voice-Driven AI Insurance Intake & Adjudication',
@@ -37,7 +30,7 @@ export default function RootLayout({
         <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
-      <body className={inter.className}>
+      <body>
         <AuthProvider>
           <ToastProvider>
             {children}

@@ -99,7 +99,7 @@ def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     assigned_adj_id = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
     if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
-    if not assigned_adj_id and getattr(c, "status", None) in {"submitted", "pending_adjuster", "assigned"}:
+    if not assigned_adj_id and getattr(c, "status", None) in {"submitted", "verified", "pending_adjuster", "assigned"}:
         return True
     if db is not None:
         adjuster = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == c.tenant_id).first()
@@ -174,19 +174,49 @@ def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[s
         exceptions = [{"id": row.id, "event_type": row.event_type, "severity": row.severity, "reason": row.reason, "blocking": row.blocking, "status": row.status}
                      for row in db.query(ClaimException).filter(ClaimException.claim_id == c.id, ClaimException.tenant_id == c.tenant_id, ClaimException.status == "open").all()]
         readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
+
+    policyholder = None
+    if c.policy_id and db is not None:
+        p = db.query(Policy).filter(Policy.id == c.policy_id).first()
+        if p and p.policyholder_name:
+            policyholder = p.policyholder_name
+    if not policyholder:
+        policyholder = (state.get("extracted_data") or {}).get("policyholder_name")
+    if not policyholder and db is not None:
+        pol_num = (state.get("extracted_data") or {}).get("policy_id")
+        if pol_num:
+            p = db.query(Policy).filter(Policy.policy_number == str(pol_num).strip().upper(), Policy.tenant_id == c.tenant_id).first()
+            if p and p.policyholder_name:
+                policyholder = p.policyholder_name
+    if not policyholder and c.customer_id and db is not None:
+        u = db.query(User).filter(User.id == c.customer_id).first()
+        if u and u.full_name:
+            policyholder = u.full_name
+
     return {
-        "ticket_id":c.ticket_id, "status":c.status, "insurance_type":c.insurance_type,
-        "event_date":c.event_date.isoformat() if c.event_date else None, "event_location":c.event_location,
-        "estimated_claim_amount":float(c.estimated_claim_amount) if c.estimated_claim_amount is not None else None,
-        "priority":state.get("priority","normal"), "assigned_adjuster_id":state.get("assigned_adjuster_id"),
-        "assigned_adjuster_name":adjuster.name if adjuster else state.get("assigned_adjuster_name"),
-        "claimant_confirmed":bool(state.get("confirmed")),
-        "final_submission_confirmed":bool(state.get("final_submission_confirmed")),
-        "policy_verified":bool((state.get("policy_verification") or {}).get("valid")),
-        "dynamic_requirements_complete":not bool(state.get("dynamic_missing")),
-        "facts": facts, "requirements": requirements, "evidence": evidence,
-        "open_exceptions": exceptions, "submission_readiness": readiness,
-        "updated_at":c.updated_at.isoformat() if c.updated_at else None,
+        "id": str(c.id),
+        "ticket_id": c.ticket_id,
+        "status": c.status,
+        "insurance_type": c.insurance_type,
+        "policyholder_name": policyholder or "Claimant",
+        "customer_id": policyholder or "Claimant",
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "event_date": c.event_date.isoformat() if c.event_date else None,
+        "event_location": c.event_location,
+        "estimated_claim_amount": float(c.estimated_claim_amount) if c.estimated_claim_amount is not None else None,
+        "priority": state.get("priority", "normal"),
+        "assigned_adjuster_id": state.get("assigned_adjuster_id"),
+        "assigned_adjuster_name": adjuster.name if adjuster else state.get("assigned_adjuster_name"),
+        "claimant_confirmed": bool(state.get("confirmed")),
+        "final_submission_confirmed": bool(state.get("final_submission_confirmed")),
+        "policy_verified": bool((state.get("policy_verification") or {}).get("valid")),
+        "dynamic_requirements_complete": not bool(state.get("dynamic_missing")),
+        "facts": facts,
+        "requirements": requirements,
+        "evidence": evidence,
+        "open_exceptions": exceptions,
+        "submission_readiness": readiness,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
 
 def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
@@ -241,7 +271,7 @@ def _get_adjuster_relevant_claims(db: Session, user: User, tenant_id: str, statu
         if is_assigned_to_me:
             assigned_claim_ids.add(cid_str)
             relevant_claims.append(c)
-        elif not assigned_to and c.status in {"submitted", "pending_adjuster", "assigned"}:
+        elif not assigned_to and c.status in {"submitted", "verified", "pending_adjuster", "assigned"}:
             relevant_claims.append(c)
 
     return relevant_claims, assigned_claim_ids
@@ -256,7 +286,7 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
     total_filed = db.query(func.count(Claim.id)).filter(
         Claim.tenant_id == tenant_id,
         Claim.status.in_({
-            "submitted", "pending_adjuster", "assigned", "under_review",
+            "submitted", "verified", "pending_adjuster", "assigned", "under_review",
             "pending_evidence", "approved", "partially_approved",
             "rejected", "escalated", "closed",
         }),
@@ -270,7 +300,7 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
-    active_statuses = {"submitted", "pending_adjuster", "assigned", "under_review", "pending_evidence", "escalated"}
+    active_statuses = {"submitted", "verified", "pending_adjuster", "assigned", "under_review", "pending_evidence", "escalated"}
     under_review = sum(1 for c in assigned_claims if c.status == "under_review")
     pending_evidence = sum(1 for c in assigned_claims if c.status == "pending_evidence")
     sla_breached = 0
@@ -309,8 +339,8 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
 def queue(status: str | None = None, user: User = Depends(_guard), db: Session = Depends(get_db)):
     """Return tenant-scoped claims with SLA/aging metadata."""
     valid_queue_statuses = [
-        "submitted","pending_adjuster","assigned","under_review",
-        "pending_evidence","approved","partially_approved","rejected","escalated","closed",
+        "submitted", "verified", "pending_adjuster", "assigned", "under_review",
+        "pending_evidence", "approved", "partially_approved", "rejected", "escalated", "closed",
     ]
     requested = status.lower() if status else "all"
     if requested != "all" and requested not in valid_queue_statuses:

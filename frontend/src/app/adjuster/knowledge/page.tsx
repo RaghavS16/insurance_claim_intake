@@ -350,16 +350,6 @@ export default function KnowledgeBasePage() {
           data={documents}
           keyField="id"
           searchPlaceholder="Filter knowledge base..."
-          renderRowActions={(doc) => (
-            <Button
-              size="sm"
-              variant="danger"
-              icon={<Trash2 size={13} />}
-              onClick={(e) => handleDeleteDocument(doc.id, e)}
-            >
-              Delete
-            </Button>
-          )}
         />
       )}
 

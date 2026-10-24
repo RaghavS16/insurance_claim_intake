@@ -107,7 +107,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const isUnauthorized = Boolean(
     user &&
     ((role === 'CLAIMANT' && (pathname.startsWith('/adjuster') || pathname.startsWith('/admin'))) ||
-     (role === 'ADJUSTER' && pathname.startsWith('/admin')))
+      (role === 'ADJUSTER' && pathname.startsWith('/admin')))
   );
 
   useEffect(() => {
@@ -168,21 +168,19 @@ export const AppShell: React.FC<AppShellProps> = ({
       <aside className={`snow-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         {/* Brand Logo Header */}
         <div style={{ marginBottom: 18, padding: sidebarCollapsed ? '4px 0' : '2px 4px' }}>
-          <Link href={role === 'CLAIMANT' ? '/claimant/dashboard' : role === 'ADJUSTER' ? '/adjuster/dashboard' : '/admin/claims'}>
-            {sidebarCollapsed ? (
-              <img
-                src="/secondary-logo.png"
-                alt="IntelliClaim"
-                style={{ width: 36, height: 36, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 8 }}
-              />
-            ) : (
-              <img
-                src="/primary-logo.png"
-                alt="IntelliClaim"
-                style={{ width: 175, height: 'auto', maxHeight: 56, objectFit: 'contain', display: 'block' }}
-              />
-            )}
-          </Link>
+          {sidebarCollapsed ? (
+            <img
+              src="/icon.png"
+              alt="IntelliClaim"
+              style={{ width: 36, height: 36, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 8 }}
+            />
+          ) : (
+            <img
+              src="/primary-logo.png"
+              alt="IntelliClaim"
+              style={{ width: 175, height: 'auto', maxHeight: 56, objectFit: 'contain', display: 'block' }}
+            />
+          )}
         </div>
 
         {/* User profile header */}

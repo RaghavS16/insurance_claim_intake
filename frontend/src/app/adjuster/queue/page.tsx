@@ -8,8 +8,6 @@ import {
   ArrowUpDown,
   Search,
   UserCheck,
-  Kanban,
-  List,
   CheckCircle2,
   Clock,
   AlertCircle,
@@ -31,8 +29,6 @@ import { usePolling, LiveIndicator } from '@/lib/use-polling';
 export default function AdjusterQueuePage() {
   const router = useRouter();
   const { showToast } = useToast();
-
-  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
 
   const {
     data: claimsData,
@@ -85,21 +81,6 @@ export default function AdjusterQueuePage() {
     }
   };
 
-  const handleTransitionStatus = async (ticketId: string, newStatus: ClaimStatus) => {
-    try {
-      await api.post(`/api/v1/adjuster/claims/${ticketId}/transition`, {
-        status: newStatus,
-        reason: 'Adjuster Kanban status change',
-      });
-      setClaims((prev: Claim[]) =>
-        prev.map((c: Claim) => (c.ticket_id === ticketId ? { ...c, status: newStatus } : c))
-      );
-      showToast(`Claim #${ticketId} moved to ${newStatus}`, 'success');
-    } catch (err: any) {
-      showToast(err.message || `Failed to update status for claim #${ticketId}`, 'error');
-    }
-  };
-
   const getStatusBadge = (status: ClaimStatus) => {
     switch (status) {
       case 'approved': return <BadgeDot status="complete" label="Approved" />;
@@ -107,6 +88,7 @@ export default function AdjusterQueuePage() {
       case 'pending_evidence': return <BadgeDot status="warning" label="Pending Evidence" />;
       case 'rejected': return <BadgeDot status="rejected" label="Rejected" />;
       case 'escalated': return <BadgeDot status="warning" label="Escalated" />;
+      case 'verified': return <BadgeDot status="progress" label="Verified" />;
       default: return <BadgeDot status="neutral" label="Submitted" />;
     }
   };
@@ -119,28 +101,31 @@ export default function AdjusterQueuePage() {
     },
     {
       key: 'customer_id',
-      header: 'Policyholder',
-      render: (c) => (
-        <div className="snow-flex snow-items-center snow-gap-2">
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: '50%',
-              backgroundColor: '#1C1C1C',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            {c.customer_id ? c.customer_id[0].toUpperCase() : 'P'}
+      header: 'Claimant / Customer',
+      render: (c: any) => {
+        const name = c.policyholder_name || c.customer_name || c.customer_id || 'Claimant';
+        return (
+          <div className="snow-flex snow-items-center snow-gap-2">
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: '50%',
+                backgroundColor: '#1C1C1C',
+                color: '#FFFFFF',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              {name[0].toUpperCase()}
+            </div>
+            <span style={{ fontWeight: 500 }}>{name}</span>
           </div>
-          <span style={{ fontWeight: 500 }}>{c.customer_id || 'Policyholder'}</span>
-        </div>
-      ),
+        );
+      },
     },
     { key: 'insurance_type', header: 'Policy Coverage' },
     {
@@ -174,35 +159,11 @@ export default function AdjusterQueuePage() {
     },
   ];
 
-  const kanbanColumns: { id: ClaimStatus; title: string; color: string }[] = [
-    { id: 'submitted', title: 'New Submitted', color: '#71717A' },
-    { id: 'under_review', title: 'Under Review', color: '#8B5CF6' },
-    { id: 'pending_evidence', title: 'Pending Evidence', color: '#F59E0B' },
-    { id: 'approved', title: 'Approved', color: '#10B981' },
-    { id: 'rejected', title: 'Rejected', color: '#EF4444' },
-  ];
-
   return (
     <AppShell breadcrumbs={['Adjuster', 'Claims Queue']} activeTitle="Claims Adjudication Queue">
       {/* Action Header */}
       <div className="snow-action-bar" style={{ marginBottom: 20 }}>
         <div className="snow-action-buttons">
-          <Button
-            size="sm"
-            variant={viewMode === 'table' ? 'primary' : 'secondary'}
-            onClick={() => setViewMode('table')}
-            icon={<List size={14} />}
-          >
-            Table View
-          </Button>
-          <Button
-            size="sm"
-            variant={viewMode === 'kanban' ? 'primary' : 'secondary'}
-            onClick={() => setViewMode('kanban')}
-            icon={<Kanban size={14} />}
-          >
-            Kanban Board
-          </Button>
           <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
         </div>
 
@@ -251,7 +212,7 @@ export default function AdjusterQueuePage() {
             There are currently no active claims requiring adjudication.
           </p>
         </Card>
-      ) : viewMode === 'table' ? (
+      ) : (
         <Table
           columns={columns}
           data={claims}
@@ -260,109 +221,6 @@ export default function AdjusterQueuePage() {
           onRowClick={(c) => router.push(`/adjuster/claims/${c.ticket_id}`)}
           searchPlaceholder="Filter queue..."
         />
-      ) : (
-        /* Kanban Board View */
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(5, 1fr)',
-            gap: 16,
-            overflowX: 'auto',
-            paddingBottom: 16,
-          }}
-        >
-          {kanbanColumns.map((col) => {
-            const colClaims = claims.filter((c) => {
-              if (col.id === 'submitted') {
-                return c.status === 'submitted' || c.status === 'pending_adjuster' || c.status === 'assigned';
-              }
-              return c.status === col.id;
-            });
-
-            return (
-              <div
-                key={col.id}
-                style={{
-                  backgroundColor: '#FAFAFB',
-                  border: '1px solid #EBECEF',
-                  borderRadius: 16,
-                  padding: 16,
-                  minWidth: 220,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 12,
-                }}
-              >
-                <div className="snow-flex snow-justify-between snow-items-center">
-                  <div className="snow-flex snow-items-center snow-gap-2">
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        backgroundColor: col.color,
-                      }}
-                    />
-                    <span className="snow-body" style={{ fontWeight: 600, fontSize: 13 }}>
-                      {col.title}
-                    </span>
-                  </div>
-                  <span className="snow-badge-pill neutral">{colClaims.length}</span>
-                </div>
-
-                <div className="snow-flex-col snow-gap-3" style={{ flex: 1 }}>
-                  {colClaims.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '24px 0', color: '#A1A1AA', fontSize: 12 }}>
-                      No claims
-                    </div>
-                  ) : (
-                    colClaims.map((claim) => (
-                      <div
-                        key={claim.ticket_id}
-                        className="snow-card"
-                        onClick={() => router.push(`/adjuster/claims/${claim.ticket_id}`)}
-                        style={{
-                          padding: 14,
-                          cursor: 'pointer',
-                          transition: 'transform 0.15s ease',
-                        }}
-                      >
-                        <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 6 }}>
-                          <span className="snow-table-id" style={{ fontSize: 12 }}>#{claim.ticket_id}</span>
-                          <span className="snow-caption" style={{ fontWeight: 600 }}>
-                            {claim.estimated_claim_amount ? `₹${Number(claim.estimated_claim_amount).toLocaleString('en-IN')}` : ''}
-                          </span>
-                        </div>
-                        <div className="snow-caption" style={{ color: '#71717A', marginBottom: 8 }}>
-                          {claim.insurance_type}
-                        </div>
-                        <div className="snow-flex snow-justify-between snow-items-center">
-                          <span className="snow-micro" style={{ color: '#A1A1AA' }}>{claim.created_at || claim.event_date || '—'}</span>
-                          <div style={{ width: 130 }} onClick={(e) => e.stopPropagation()}>
-                            <Select
-                              size="sm"
-                              value={claim.status}
-                              onChange={(val) => handleTransitionStatus(claim.ticket_id, val as ClaimStatus)}
-                              options={[
-                                { value: 'submitted', label: 'Submitted' },
-                                { value: 'under_review', label: 'In Review' },
-                                { value: 'pending_evidence', label: 'Pending' },
-                                { value: 'approved', label: 'Approved' },
-                                { value: 'rejected', label: 'Rejected' },
-                              ]}
-                              style={{ marginBottom: 0 }}
-                              triggerStyle={{ height: 28, padding: '2px 8px', fontSize: 12, backgroundColor: '#F4F5F7', border: '1px solid #E5E7EB' }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
       )}
     </AppShell>
   );
