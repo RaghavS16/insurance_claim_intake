@@ -9,6 +9,7 @@ import { BadgeDot, BadgePill } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { DatePicker } from '@/components/ui/DatePicker';
+import { Table } from '@/components/ui/Table';
 
 describe('IntelliClaim Component Library', () => {
   it('renders Button with primary variant and handles click', () => {
@@ -100,5 +101,36 @@ describe('IntelliClaim Component Library', () => {
     // Jan to Dec pills rendered
     expect(screen.getByRole('button', { name: /^Jan$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Dec$/i })).toBeInTheDocument();
+  });
+
+  it('renders Table and opens portaled row actions menu', () => {
+    const handleEdit = vi.fn();
+    const columns = [
+      { key: 'policy_number', header: 'Policy Number' },
+      { key: 'policy_type', header: 'Plan' },
+    ];
+    const data = [{ policy_number: 'POL-IND-2026-2026', policy_type: 'Motor' }];
+
+    render(
+      <Table
+        columns={columns}
+        data={data}
+        keyField="policy_number"
+        onEditRow={handleEdit}
+      />
+    );
+
+    expect(screen.getByText('POL-IND-2026-2026')).toBeInTheDocument();
+    const actionBtn = screen.getByRole('button', { name: /Row actions/i });
+    expect(actionBtn).toBeInTheDocument();
+
+    // Click action button to open popover
+    fireEvent.click(actionBtn);
+    expect(screen.getByText('Copy ID')).toBeInTheDocument();
+    expect(screen.getByText('Edit')).toBeInTheDocument();
+
+    // Click edit
+    fireEvent.click(screen.getByText('Edit'));
+    expect(handleEdit).toHaveBeenCalledWith(data[0]);
   });
 });

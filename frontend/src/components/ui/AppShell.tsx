@@ -30,7 +30,6 @@ import { useAuth } from '@/lib/auth-context';
 import { usePolling } from '@/lib/use-polling';
 import { api } from '@/lib/api';
 import { Button } from './Button';
-import { Tooltip } from './Tooltip';
 
 export interface AppShellProps {
   children: React.ReactNode;
@@ -320,27 +319,25 @@ export const AppShell: React.FC<AppShellProps> = ({
         {/* Fixed Sign Out Action */}
         <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid #EBECEF', flexShrink: 0 }}>
           {sidebarCollapsed ? (
-            <Tooltip content="Sign Out" position="right">
-              <button
-                onClick={async () => {
-                  await logout();
-                  router.push('/signin');
-                }}
-                className="snow-flex snow-items-center snow-justify-center"
-                style={{
-                  width: '100%',
-                  background: 'none',
-                  border: 'none',
-                  color: '#EF4444',
-                  cursor: 'pointer',
-                  padding: '8px 0',
-                  borderRadius: 8,
-                }}
-                aria-label="Sign Out"
-              >
-                <LogOut size={16} />
-              </button>
-            </Tooltip>
+            <button
+              onClick={async () => {
+                await logout();
+                router.push('/signin');
+              }}
+              className="snow-flex snow-items-center snow-justify-center"
+              style={{
+                width: '100%',
+                background: 'none',
+                border: 'none',
+                color: '#EF4444',
+                cursor: 'pointer',
+                padding: '8px 0',
+                borderRadius: 8,
+              }}
+              aria-label="Sign Out"
+            >
+              <LogOut size={16} />
+            </button>
           ) : (
             <button
               onClick={async () => {
@@ -383,22 +380,18 @@ export const AppShell: React.FC<AppShellProps> = ({
             </button>
 
             {/* Desktop Sidebar Toggle */}
-            <Tooltip content={sidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'} position="bottom">
-              <button
-                className="snow-desktop-sidebar-btn"
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
-                aria-label="Toggle Sidebar"
-              >
-                {sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-              </button>
-            </Tooltip>
+            <button
+              className="snow-desktop-sidebar-btn"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
+              aria-label="Toggle Sidebar"
+            >
+              {sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+            </button>
 
-            <Tooltip content="Favorite Shortcuts" position="bottom">
-              <span style={{ display: 'inline-flex', cursor: 'pointer' }}>
-                <Star size={16} color="#A1A1AA" />
-              </span>
-            </Tooltip>
+            <span style={{ display: 'inline-flex', cursor: 'pointer' }} aria-label="Favorite Shortcuts">
+              <Star size={16} color="#A1A1AA" />
+            </span>
 
             <div className="snow-flex snow-items-center snow-gap-2">
               {breadcrumbs.map((crumb, idx) => (
@@ -442,7 +435,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                   fontWeight: 600,
                 }}
                 onClick={() => searchInputRef.current?.focus()}
-                title="Press ⌘K or Ctrl+K to search"
+                aria-label="Search shortcut"
               >
                 ⌘K
               </button>
@@ -450,40 +443,38 @@ export const AppShell: React.FC<AppShellProps> = ({
 
             {/* Notification Bell with Dropdown Popover */}
             <div style={{ position: 'relative' }} ref={notificationsRef}>
-              <Tooltip content="Notifications" position="bottom">
-                <button
-                  type="button"
-                  style={{
-                    background: notificationsOpen ? '#E4E4E7' : 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: '#71717A',
-                    position: 'relative',
-                    padding: '6px',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                  aria-label="Notifications"
-                  onClick={() => setNotificationsOpen(!notificationsOpen)}
-                >
-                  <Bell size={18} />
-                  {notifications.some((n) => n.unread) && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: 4,
-                        right: 4,
-                        width: 7,
-                        height: 7,
-                        borderRadius: '50%',
-                        backgroundColor: '#10B981',
-                      }}
-                    />
-                  )}
-                </button>
-              </Tooltip>
+              <button
+                type="button"
+                style={{
+                  background: notificationsOpen ? '#E4E4E7' : 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#71717A',
+                  position: 'relative',
+                  padding: '6px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                aria-label="Notifications"
+                onClick={() => setNotificationsOpen(!notificationsOpen)}
+              >
+                <Bell size={18} />
+                {notifications.some((n) => n.unread) && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: 4,
+                      right: 4,
+                      width: 7,
+                      height: 7,
+                      borderRadius: '50%',
+                      backgroundColor: '#10B981',
+                    }}
+                  />
+                )}
+              </button>
 
               {notificationsOpen && (
                 <div
@@ -608,15 +599,13 @@ export const AppShell: React.FC<AppShellProps> = ({
             </div>
 
             {Boolean(rightDrawerContent && !hideRightDrawer) && (
-              <Tooltip content={rightDrawerOpen ? 'Close Side Panel' : 'Open Side Panel'} position="bottom">
-                <button
-                  onClick={() => setRightDrawerOpen(!rightDrawerOpen)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
-                  aria-label="Toggle Side Panel"
-                >
-                  {rightDrawerOpen ? <PanelRightClose size={18} /> : <PanelRight size={18} />}
-                </button>
-              </Tooltip>
+              <button
+                onClick={() => setRightDrawerOpen(!rightDrawerOpen)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#71717A' }}
+                aria-label="Toggle Side Panel"
+              >
+                {rightDrawerOpen ? <PanelRightClose size={18} /> : <PanelRight size={18} />}
+              </button>
             )}
           </div>
         </header>

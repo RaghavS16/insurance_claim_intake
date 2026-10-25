@@ -601,6 +601,7 @@ input:checked + .snow-switch-slider:before {
 .snow-table-container {
   width: 100%;
   overflow-x: auto;
+  min-height: 120px;
 }
 
 .snow-table {

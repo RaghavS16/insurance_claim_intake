@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, ArrowUpDown, Search, MoreHorizontal, Copy, Eye, Download, Check, Edit2 } from 'lucide-react';
 import { Button } from './Button';
 import { useToast } from './Toast';
@@ -48,14 +49,25 @@ export function Table<T extends Record<string, any>>({
   const [searchTerm, setSearchTerm] = useState('');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | 'none'>('none');
   const [activeMenuRowId, setActiveMenuRowId] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{
+    rect: DOMRect;
+    row: T;
+    id: string;
+  } | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Close row action menu on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (actionMenuRef.current && !actionMenuRef.current.contains(e.target as Node)) {
         setActiveMenuRowId(null);
+        setMenuAnchor(null);
       }
     };
     if (activeMenuRowId) {
@@ -63,6 +75,21 @@ export function Table<T extends Record<string, any>>({
     }
     return () => {
       document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [activeMenuRowId]);
+
+  // Close row action menu on window scroll or resize
+  useEffect(() => {
+    if (!activeMenuRowId) return;
+    const handleClose = () => {
+      setActiveMenuRowId(null);
+      setMenuAnchor(null);
+    };
+    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('resize', handleClose);
+    return () => {
+      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('resize', handleClose);
     };
   }, [activeMenuRowId]);
 
@@ -259,138 +286,39 @@ export function Table<T extends Record<string, any>>({
                       </td>
                     ))}
                     {!hideRowActions && (
-                      <td style={{ textAlign: 'right', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+                      <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
                         {renderRowActions ? (
                           renderRowActions(row)
                         ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="snow-btn snow-btn-ghost snow-btn-sm"
-                              style={{
-                                background: isMenuOpen ? '#E4E4E7' : 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                color: '#71717A',
-                                padding: 6,
-                                borderRadius: 6,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                              aria-label="Row actions"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveMenuRowId(isMenuOpen ? null : id);
-                              }}
-                            >
-                              <MoreHorizontal size={16} />
-                            </button>
-
-                            {/* Row Action Popover */}
-                            {isMenuOpen && (
-                              <div
-                                ref={actionMenuRef}
-                                style={{
-                                  position: 'absolute',
-                                  right: 12,
-                                  top: 'calc(100% + 2px)',
-                                  zIndex: 1200,
-                                  backgroundColor: '#FFFFFF',
-                                  border: '1px solid #EBECEF',
-                                  borderRadius: 10,
-                                  padding: '4px',
-                                  boxShadow: '0 10px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04)',
-                                  minWidth: 140,
-                                  textAlign: 'left',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: 2,
-                                  animation: 'snowFadeIn 0.12s ease-out',
-                                }}
-                              >
-                                {onEditRow && (
-                                  <button
-                                    type="button"
-                                    className="snow-btn-ghost"
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: 8,
-                                      padding: '7px 10px',
-                                      fontSize: 12,
-                                      fontWeight: 500,
-                                      borderRadius: 6,
-                                      border: 'none',
-                                      background: 'none',
-                                      cursor: 'pointer',
-                                      width: '100%',
-                                      textAlign: 'left',
-                                      color: '#1C1C1C',
-                                    }}
-                                    onClick={() => {
-                                      setActiveMenuRowId(null);
-                                      onEditRow(row);
-                                    }}
-                                  >
-                                    <Edit2 size={13} />
-                                    <span>Edit</span>
-                                  </button>
-                                )}
-                                {onRowClick && (
-                                  <button
-                                    type="button"
-                                    className="snow-btn-ghost"
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: 8,
-                                      padding: '7px 10px',
-                                      fontSize: 12,
-                                      fontWeight: 500,
-                                      borderRadius: 6,
-                                      border: 'none',
-                                      background: 'none',
-                                      cursor: 'pointer',
-                                      width: '100%',
-                                      textAlign: 'left',
-                                      color: '#1C1C1C',
-                                    }}
-                                    onClick={() => {
-                                      setActiveMenuRowId(null);
-                                      onRowClick(row);
-                                    }}
-                                  >
-                                    <Eye size={13} />
-                                    <span>View Details</span>
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className="snow-btn-ghost"
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 8,
-                                    padding: '7px 10px',
-                                    fontSize: 12,
-                                    fontWeight: 500,
-                                    borderRadius: 6,
-                                    border: 'none',
-                                    background: 'none',
-                                    cursor: 'pointer',
-                                    width: '100%',
-                                    textAlign: 'left',
-                                    color: '#1C1C1C',
-                                  }}
-                                  onClick={(e) => handleCopyId(id, e)}
-                                >
-                                  <Copy size={13} />
-                                  <span>Copy ID</span>
-                                </button>
-                              </div>
-                            )}
-                          </>
+                          <button
+                            type="button"
+                            className="snow-btn snow-btn-ghost snow-btn-sm"
+                            style={{
+                              background: isMenuOpen ? '#E4E4E7' : 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: '#71717A',
+                              padding: 6,
+                              borderRadius: 6,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                            aria-label="Row actions"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isMenuOpen) {
+                                setActiveMenuRowId(null);
+                                setMenuAnchor(null);
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                setMenuAnchor({ rect, row, id });
+                                setActiveMenuRowId(id);
+                              }
+                            }}
+                          >
+                            <MoreHorizontal size={16} />
+                          </button>
                         )}
                       </td>
                     )}
@@ -401,6 +329,132 @@ export function Table<T extends Record<string, any>>({
           </tbody>
         </table>
       </div>
+
+      {/* Row Action Popover Portaled to document.body */}
+      {isMounted && activeMenuRowId && menuAnchor && typeof document !== 'undefined' && createPortal(
+        (() => {
+          const MENU_WIDTH = 140;
+          const optionsCount = (onEditRow ? 1 : 0) + (onRowClick ? 1 : 0) + 1;
+          const estimatedHeight = optionsCount * 36 + 12;
+          const spaceBelow = window.innerHeight - menuAnchor.rect.bottom;
+          const openUp = spaceBelow < estimatedHeight + 12 && menuAnchor.rect.top > estimatedHeight;
+          const top = openUp ? menuAnchor.rect.top - estimatedHeight - 4 : menuAnchor.rect.bottom + 4;
+          const left = Math.max(8, Math.min(window.innerWidth - MENU_WIDTH - 8, menuAnchor.rect.right - MENU_WIDTH));
+
+          return (
+            <div
+              ref={actionMenuRef}
+              style={{
+                position: 'fixed',
+                top,
+                left,
+                zIndex: 9999,
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #EBECEF',
+                borderRadius: 10,
+                padding: '4px',
+                boxShadow: '0 10px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06)',
+                minWidth: MENU_WIDTH,
+                textAlign: 'left',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                animation: 'snowFadeIn 0.12s ease-out',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {onEditRow && (
+                <button
+                  type="button"
+                  className="snow-btn-ghost"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '7px 10px',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    borderRadius: 6,
+                    border: 'none',
+                    background: 'none',
+                    cursor: 'pointer',
+                    width: '100%',
+                    textAlign: 'left',
+                    color: '#1C1C1C',
+                  }}
+                  onClick={() => {
+                    const r = menuAnchor.row;
+                    setActiveMenuRowId(null);
+                    setMenuAnchor(null);
+                    onEditRow(r);
+                  }}
+                >
+                  <Edit2 size={13} />
+                  <span>Edit</span>
+                </button>
+              )}
+              {onRowClick && (
+                <button
+                  type="button"
+                  className="snow-btn-ghost"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '7px 10px',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    borderRadius: 6,
+                    border: 'none',
+                    background: 'none',
+                    cursor: 'pointer',
+                    width: '100%',
+                    textAlign: 'left',
+                    color: '#1C1C1C',
+                  }}
+                  onClick={() => {
+                    const r = menuAnchor.row;
+                    setActiveMenuRowId(null);
+                    setMenuAnchor(null);
+                    onRowClick(r);
+                  }}
+                >
+                  <Eye size={13} />
+                  <span>View Details</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="snow-btn-ghost"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '7px 10px',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'none',
+                  cursor: 'pointer',
+                  width: '100%',
+                  textAlign: 'left',
+                  color: '#1C1C1C',
+                }}
+                onClick={(e) => {
+                  const idToCopy = menuAnchor.id;
+                  handleCopyId(idToCopy, e);
+                  setMenuAnchor(null);
+                }}
+              >
+                <Copy size={13} />
+                <span>Copy ID</span>
+              </button>
+            </div>
+          );
+        })(),
+        document.body
+      )}
     </div>
   );
 }
