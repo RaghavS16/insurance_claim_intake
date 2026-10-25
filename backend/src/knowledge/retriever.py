@@ -16,8 +16,8 @@ def infer_insurance_type_from_query(query: str) -> str | None:
         return None
     low = query.lower()
     # 1. Senior Citizen Health (must be evaluated before generic health)
-    if any(k in low for k in ("senior citizen", "senior_citizen", "geriatric", "60 years", "age 60")):
-        return "senior_citizen_health"
+    if any(k in low for k in ("senior citizen", "senior_citizen", "geriatric", "60 years", "age 60", "senior health", "60-75", "60–75")):
+        return "senior_health"
     # 2. Motor
     if any(k in low for k in ("motor", "car", "vehicle", "auto", "two-wheeler", "bike", "accident", "garage", "idv", "own damage", "third-party")):
         return "motor"
@@ -163,7 +163,9 @@ class KnowledgeRetriever:
                         cached = compile_policy_requirements(document_id=doc["document_id"], insurance_type=insurance_type or "general", chunks=chunks)
                         if cached: save_requirement_manifest(doc["document_id"], cached, tenant_id)
                     except Exception:
-                        cached = []
+                        from .policy_compiler import _extract_deterministic_manifest_from_chunks
+                        cached = _extract_deterministic_manifest_from_chunks(chunks, insurance_type or "general", doc["document_id"])
+                        if cached: save_requirement_manifest(doc["document_id"], cached, tenant_id)
                 manifest.extend(cached)
         except Exception:
             manifest = []
@@ -195,7 +197,7 @@ class KnowledgeRetriever:
                 reg_hits = search(
                     q,
                     insurance_type=insurance_type,
-                    document_types=["regulation", "guideline", "claim_requirement"],
+                    document_types=["regulation", "guideline", "claim_requirement", "policy_regulatory"],
                     incident_date=incident_date,
                     tenant_id=tenant_id,
                     jurisdiction=jurisdiction,

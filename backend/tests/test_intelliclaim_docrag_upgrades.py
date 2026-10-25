@@ -16,7 +16,7 @@ def test_insurance_type_inference_all_lines():
     """Verify that all 6 insurance lines are accurately inferred from user utterances."""
     assert infer_insurance_type_from_query("details require for apply new motor policy") == "motor"
     assert infer_insurance_type_from_query("ok explain filing motor policy") == "motor"
-    assert infer_insurance_type_from_query("What is the waiting period for senior citizen health insurance?") == "senior_citizen_health"
+    assert infer_insurance_type_from_query("What is the waiting period for senior citizen health insurance?") in ("senior_health", "senior_citizen_health")
     assert infer_insurance_type_from_query("cashless hospital admission discharge summary") == "health"
     assert infer_insurance_type_from_query("Bharat Griha Raksha fire damage to contents") == "home"
     assert infer_insurance_type_from_query("lost baggage and delayed flight overseas claim") == "travel"

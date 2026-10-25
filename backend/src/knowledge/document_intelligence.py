@@ -6,13 +6,17 @@ from pydantic import BaseModel, Field
 from src.agents.llm_factory import get_configured_llm
 
 INSURANCE_TYPES: dict[str, list[str]] = {
-    "senior_citizen_health": ["senior citizen", "senior_citizen", "age 60", "60 years and above", "geriatric", "moratorium period (60 months)"],
+    "senior_health": [
+        "senior citizen", "senior_citizen", "senior health", "senior citizen health",
+        "60-75", "60–75", "age 60", "60 years and above", "geriatric", "moratorium period (60 months)"
+    ],
     "motor": ["motor", "vehicle", "auto", "car", "collision", "own damage", "third-party liability", "garage", "idv", "motor vehicles act"],
     "health": ["health", "medical", "hospital", "inpatient", "cashless", "tpa", "discharge summary", "icd", "rohini"],
     "home": ["home", "property", "dwelling", "building", "contents", "bharat griha raksha", "fire", "flood", "burglary"],
     "travel": ["travel", "trip", "flight", "baggage", "passport", "overseas", "schengen", "pir"],
     "cyber": ["cyber", "ransomware", "data breach", "phishing", "extortion", "unauthorized transaction", "cert-in", "1930", "ncrp"],
 }
+INSURANCE_KEYWORDS = INSURANCE_TYPES
 
 class DocumentMetadata(BaseModel):
     title: str = ""
@@ -26,7 +30,7 @@ def _heuristic_classify(filename: str, sample_text: str = "") -> tuple[str, str 
     
     # Document type inference
     doc_type = "unknown"
-    if "regulatory" in low_f or "regulation" in low_f or "master circular" in low_f:
+    if "regulatory" in low_f or "regulation" in low_f or "master circular" in low_f or "claims_guide" in low_f or "claims guide" in low_f:
         doc_type = "regulation"
     elif "wording" in low_f or "policy wording" in low_f or "policy_wording" in low_f or "prospectus" in low_f:
         doc_type = "policy_wording"
@@ -35,12 +39,15 @@ def _heuristic_classify(filename: str, sample_text: str = "") -> tuple[str, str 
     elif "guideline" in low_f or "circular" in low_f:
         doc_type = "regulation"
     
-    # Insurance line inference: senior citizen health MUST precede generic health!
+    # Insurance line inference: senior health MUST precede generic health!
     ins_type = None
-    for line, keywords in INSURANCE_TYPES.items():
-        if any(kw in low_f for kw in keywords):
-            ins_type = line
-            break
+    if "senior_citizen" in low_f or "senior citizen" in low_f or "senior" in low_f:
+        ins_type = "senior_health"
+    else:
+        for line, keywords in INSURANCE_TYPES.items():
+            if any(kw in low_f for kw in keywords):
+                ins_type = line
+                break
             
     if not ins_type:
         for line, keywords in INSURANCE_TYPES.items():

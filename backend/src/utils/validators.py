@@ -99,11 +99,23 @@ VALID_CLAIM_TYPES: Set[str] = {
 CANONICAL_POLICY_TYPES: Set[str] = VALID_CLAIM_TYPES
 
 
+def normalize_policy_type(value: str | None) -> str:
+    """Normalize policy/insurance type aliases to canonical values."""
+    if not value or not isinstance(value, str):
+        return ""
+    val = value.strip().lower()
+    if val in ("senior_citizen_health", "senior citizen health", "senior citizen", "senior"):
+        return "senior_health"
+    return val
+
+
 def validate_enum(value: str, valid_values: Set[str], field_name: str) -> str:
     """Validate that a string value is within an allowed set. Raises ValueError."""
     if not value or not isinstance(value, str):
         raise ValueError(f"{field_name} is required.")
     cleaned = value.strip().lower()
+    if valid_values is CANONICAL_POLICY_TYPES or field_name in ("policy_type", "insurance_type", "specialization"):
+        cleaned = normalize_policy_type(cleaned)
     if cleaned not in valid_values:
         raise ValueError(
             f"Invalid {field_name}: '{value}'. Must be one of: {', '.join(sorted(valid_values))}"

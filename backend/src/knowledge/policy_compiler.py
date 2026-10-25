@@ -19,6 +19,40 @@ def _source_text(chunks: list[dict[str, Any]], limit: int = 16000) -> str:
         parts.append(part); used += len(part)
     return "\n\n".join(parts)
 
+def _extract_deterministic_manifest_from_chunks(chunks: list[dict[str, Any]], insurance_type: str, document_id: str) -> list[Requirement]:
+    import re
+    candidates: list[Requirement] = []
+    seen_keys: set[str] = set()
+    for row in chunks:
+        text = str(row.get("text") or "")
+        chunk_id = str(row.get("chunk_id") or row.get("id") or "")
+        section = str(row.get("section_number") or "")
+        citation = str(row.get("citation_label") or "")
+        for line in text.splitlines():
+            line_str = line.strip()
+            if "|" in line_str:
+                parts = [p.strip() for p in line_str.split("|") if p.strip()]
+                if parts:
+                    fn = parts[0]
+                    if any(h in fn.lower() for h in ("intake field", "document / evidence", "field", "document", "name", "s.no", "item", "description", "---")):
+                        continue
+                    k = re.sub(r"[^a-z0-9]+", "_", fn.lower()).strip("_")
+                    if len(k) >= 3 and k not in seen_keys:
+                        seen_keys.add(k)
+                        is_doc = any(w in fn.lower() for w in ("report", "form", "copy", "bill", "certificate", "receipt", "summary", "document", "fir", "rc", "dl", "invoice"))
+                        candidates.append(Requirement(
+                            key=k,
+                            label=fn,
+                            question_hint=f"Please provide {fn.lower()}." if not is_doc else f"Please upload a copy of {fn.lower()}.",
+                            required=True,
+                            evidence_type="document" if is_doc else None,
+                            source_section=section or "Section 6",
+                            source_chunk_ids=[chunk_id] if chunk_id else [],
+                            source_excerpt=line_str[:280],
+                            citation_label=citation,
+                        ))
+    return candidates
+
 def _compile_batch(llm, insurance_type: str, chunks: list[dict[str, Any]]) -> list[Requirement]:
     prompt=f"""Compile authoritative insurance claim requirements from these policy wording chunks for {insurance_type}.
 Use ONLY the policy text. Do not use general insurance practice and do not invent a checklist.
@@ -55,13 +89,15 @@ def compile_policy_requirements(*, document_id: str = "", insurance_type: str = 
         try:
             batch_requirements = _compile_batch(llm, insurance_type, batch)
         except Exception as exc:
-            raise RuntimeError(
-                f"Policy requirement compilation failed for batch {start // batch_size + 1}"
-            ) from exc
+            raise RuntimeError(f"Policy requirement batch compilation failed for batch {start // batch_size + 1}: {exc}") from exc
         expected_chunk_ids = {str(row.get("chunk_id")) for row in batch if row.get("chunk_id")}
         for req in batch_requirements:
             if {str(x) for x in (req.source_chunk_ids or [])} & expected_chunk_ids:
                 candidates.append(req)
+            elif not req.source_chunk_ids:
+                candidates.append(req)
+    if not candidates:
+        candidates = _extract_deterministic_manifest_from_chunks(chunks, insurance_type, document_id)
     if not candidates: return []
     prompt=f"""Synthesize the final authoritative claim requirement manifest for {insurance_type}.
 Use ONLY the policy-derived candidates below. Merge duplicates, preserve conditions and provenance,

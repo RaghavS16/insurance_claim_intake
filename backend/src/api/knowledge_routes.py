@@ -24,10 +24,65 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge"])
 
 def _normalize_doc_type(doc_type: str | None) -> str:
-    dt = (doc_type or "policy_wording").strip().lower()
-    if dt in {"statutory", "policy_regulatory", "regulation", "irdai_regulation"}:
-        return "policy_regulatory"
-    return dt
+    norm = (doc_type or "general").strip().lower()
+    if norm in ("statutory", "policy_regulatory", "regulatory", "regulatory_guideline", "claims_guide", "regulation", "irdai_regulation"):
+        return "regulation"
+    if norm in ("wording", "policy", "policy_wording"):
+        return "policy_wording"
+    return norm
+
+
+def _auto_publish_and_compile(db: Session, tenant_id: str, doc_id: str, actor_id: str) -> None:
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id == doc_id,
+        KnowledgeDocument.tenant_id == tenant_id,
+    ).first()
+    if not doc:
+        return
+    meta = dict(doc.metadata_json or {})
+    meta["publication_status"] = "published"
+    meta["published_by"] = actor_id
+    meta["published_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Pre-compile manifest if not already present
+    if (doc.document_type in {"policy_wording", "endorsement"} or "wording" in (doc.source_name or "").lower()) and not meta.get("requirement_manifest"):
+        try:
+            from src.knowledge.policy_compiler import compile_policy_requirements
+            chunks = [
+                {"chunk_id": str(c.id), "text": c.text, "page_number": c.page_number, "citation_label": c.citation_label, "section_number": c.section_number}
+                for c in doc.chunks
+            ]
+            manifest = compile_policy_requirements(
+                document_id=str(doc.id),
+                insurance_type=doc.insurance_type or "motor",
+                chunks=chunks,
+            )
+            if manifest:
+                meta["requirement_manifest"] = manifest
+                meta["requirement_manifest_version"] = 1
+        except Exception:
+            logger.warning("Auto-compilation manifest non-fatal warning for %s", doc_id)
+
+    doc.metadata_json = meta
+    flag_modified(doc, "metadata_json")
+
+    # Mark older documents of same (insurance_type, document_type) as superseded
+    older_docs = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.id != doc_id,
+        KnowledgeDocument.tenant_id == tenant_id,
+        KnowledgeDocument.insurance_type == doc.insurance_type,
+        KnowledgeDocument.document_type == doc.document_type,
+    ).all()
+    for old_doc in older_docs:
+        old_meta = dict(old_doc.metadata_json or {})
+        if old_meta.get("publication_status") == "published":
+            old_meta["publication_status"] = "superseded"
+            old_meta["superseded_by"] = doc_id
+            old_meta["updated_by"] = actor_id
+            old_doc.metadata_json = old_meta
+            flag_modified(old_doc, "metadata_json")
+
+    db.commit()
 
 class IngestRequest(BaseModel):
     source_name: str = Field(..., min_length=1, max_length=255)
@@ -144,26 +199,9 @@ async def upload_document(
             event.processed_at = datetime.now(timezone.utc)
             db.commit()
 
-            # Pre-compile manifest on upload if policy wording
             doc_id = ingest_res.get("document_id")
-            if norm_doc_type in {"policy_wording", "endorsement"} and doc_id:
-                try:
-                    from src.knowledge.policy_compiler import compile_policy_requirements
-                    from src.knowledge.store import get_document_chunks, save_requirement_manifest
-                    chunk_dicts = get_document_chunks(doc_id, tenant_id=str(user.tenant_id or ""))
-                    manifest = compile_policy_requirements(
-                        document_id=str(doc_id),
-                        insurance_type=insurance_type or "motor",
-                        chunks=chunk_dicts,
-                    )
-                    if manifest:
-                        save_requirement_manifest(
-                            document_id=str(doc_id),
-                            manifest=manifest,
-                            tenant_id=str(user.tenant_id or ""),
-                        )
-                except Exception:
-                    logger.warning("Manifest pre-compilation on upload non-fatal warning")
+            if doc_id:
+                _auto_publish_and_compile(db, str(user.tenant_id or ""), str(doc_id), str(user.id))
 
             return {
                 "status": "Indexed",
@@ -295,6 +333,8 @@ def update_document(
     doc.metadata_json = meta
     flag_modified(doc, "metadata_json")
     db.commit()
+    if payload.publication_status == "published":
+        _auto_publish_and_compile(db, str(user.tenant_id), str(doc.id), str(user.id))
     return {"document_id": str(doc.id), "updated": True, "publication_status": meta.get("publication_status")}
 
 
@@ -360,6 +400,7 @@ async def replace_document_content(
     old.metadata_json = meta
     flag_modified(old, "metadata_json")
     db.commit()
+    _auto_publish_and_compile(db, str(user.tenant_id), new_id, str(user.id))
     return {
         "document_id": str(old.id),
         "replacement_document_id": new_id,
@@ -421,14 +462,16 @@ async def reindex_document(
         logger.exception("Knowledge re-index failed: %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Knowledge re-indexing is temporarily unavailable.") from exc
 
-    if str(result.get("document_id")) != str(doc.id):
+    reindexed_id = str(result.get("document_id"))
+    if reindexed_id != str(doc.id):
         meta["publication_status"] = "superseded"
-        meta["superseded_by"] = str(result.get("document_id"))
+        meta["superseded_by"] = reindexed_id
         doc.metadata_json = meta
         flag_modified(doc, "metadata_json")
         db.commit()
 
-    return {"document_id": str(doc.id), "reindexed_document_id": str(result.get("document_id")), "status": "completed", "chunks": result.get("chunks", 0)}
+    _auto_publish_and_compile(db, str(user.tenant_id), reindexed_id, str(user.id))
+    return {"document_id": str(doc.id), "reindexed_document_id": reindexed_id, "status": "completed", "chunks": result.get("chunks", 0)}
 
 @router.post("/documents/{document_id}/publish")
 def publish_document(
@@ -444,33 +487,7 @@ def publish_document(
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found.")
-    meta = dict(doc.metadata_json or {})
-    meta["publication_status"] = "published"
-    meta["published_by"] = str(user.id)
-    meta["published_at"] = datetime.now(timezone.utc).isoformat()
-    doc.metadata_json = meta
-    flag_modified(doc, "metadata_json")
-
-    # Pre-compile manifest on publish if policy wording
-    if doc.document_type in {"policy_wording", "endorsement"}:
-        try:
-            from src.knowledge.policy_compiler import compile_policy_requirements
-            from src.knowledge.store import save_requirement_manifest
-            chunks = [{"chunk_id": str(c.id), "text": c.text, "page_number": c.page_number, "citation_label": c.citation_label} for c in doc.chunks]
-            manifest = compile_policy_requirements(
-                document_id=str(doc.id),
-                insurance_type=doc.insurance_type or "motor",
-                chunks=chunks,
-            )
-            if manifest:
-                meta["requirement_manifest"] = manifest
-                meta["requirement_manifest_version"] = 1
-                doc.metadata_json = meta
-                flag_modified(doc, "metadata_json")
-        except Exception:
-            logger.warning("Manifest pre-compilation on publish non-fatal warning")
-
-    db.commit()
+    _auto_publish_and_compile(db, str(user.tenant_id), document_id, str(user.id))
     return {"document_id": str(doc.id), "publication_status": "published"}
 
 

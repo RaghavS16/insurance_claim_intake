@@ -420,14 +420,7 @@ def ingest_document(
     insurance_type = insurance_type or meta.insurance_type
     content_sha256 = hashlib.sha256(content).hexdigest()
 
-    pub_status = publication_status or (
-        "published"
-        if uploaded_by in ("system_seed", "admin")
-        or resolved_doc_type in ("policy_wording", "regulation")
-        or "wording" in filename.lower()
-        or "regulatory" in filename.lower()
-        else "pending_review"
-    )
+    pub_status = publication_status or "published"
 
     docx_manifest: list[dict[str, Any]] = []
     if filename.lower().endswith(".docx") and (

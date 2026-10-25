@@ -141,11 +141,9 @@ export default function KnowledgeBasePage() {
 
   const handlePublish = async (docId: string) => {
     try {
-      await api.put(`/api/v1/knowledge/documents/${docId}`, {
-        publication_status: 'published',
-      });
+      await api.post(`/api/v1/knowledge/documents/${docId}/publish`, {});
       setDocuments(documents.map((d) => (d.id === docId ? { ...d, is_published: true, publication_status: 'published' } : d)));
-      showToast('Document published to Copilot RAG pool!', 'success');
+      showToast('Document published and compiled into Copilot RAG manifest!', 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to publish document.', 'error');
     }
@@ -177,6 +175,19 @@ export default function KnowledgeBasePage() {
       ),
     },
     { key: 'insurance_type', header: 'Line of Business' },
+    {
+      key: 'document_type',
+      header: 'Doc Type',
+      render: (d) => {
+        const type = ((d as any).document_type || '').toLowerCase();
+        const isReg = type === 'regulation' || type === 'policy_regulatory' || type === 'regulatory';
+        return (
+          <BadgePill variant={isReg ? 'purple' : 'neutral'}>
+            {isReg ? 'Regulatory' : 'Policy Wording'}
+          </BadgePill>
+        );
+      },
+    },
     { key: 'jurisdiction', header: 'Jurisdiction', render: (d) => d.jurisdiction || 'All' },
     { key: 'document_version', header: 'Version', render: (d) => d.document_version || d.policy_version || '1.0' },
     {

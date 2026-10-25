@@ -90,12 +90,32 @@ def classify_turn(text: str, known_facts: Dict[str, Any] | None = None) -> ChatI
         return fallback
 
 
+def infer_insurance_type_from_text(text: str) -> Optional[str]:
+    low = (text or "").lower()
+    if any(k in low for k in ("senior citizen", "senior_citizen", "senior health", "elderly", "geriatric", "60-75", "60–75")):
+        return "senior_health"
+    if any(k in low for k in ("motor", "vehicle", "car", "bike", "two-wheeler", "accident", "bumper", "collision", "windshield", "driver")):
+        return "motor"
+    if any(k in low for k in ("health", "hospital", "medical", "doctor", "cashless", "tpa", "illness", "surgery", "patient", "admission")):
+        return "health"
+    if any(k in low for k in ("home", "property", "house", "dwelling", "griha", "leak", "flood", "burglary")):
+        return "home"
+    if any(k in low for k in ("travel", "flight", "baggage", "trip", "passport")):
+        return "travel"
+    if any(k in low for k in ("cyber", "ransomware", "phishing", "data breach", "hack", "fraudulent transaction")):
+        return "cyber"
+    return None
+
+
 def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
     facts = dict(state.get("extracted_data") or {})
-    insurance_type = facts.get("insurance_type") or state.get("insurance_type_hint")
+    insurance_type = facts.get("insurance_type") or state.get("insurance_type_hint") or state.get("insurance_type")
     if not insurance_type and text:
         from src.knowledge.retriever import infer_insurance_type_from_query
-        insurance_type = infer_insurance_type_from_query(text)
+        insurance_type = infer_insurance_type_from_text(text) or infer_insurance_type_from_query(text)
+    if insurance_type:
+        state["insurance_type"] = insurance_type
+
     incident_date = None
     if facts.get("event_date"):
         try:
@@ -104,17 +124,27 @@ def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError:
             pass
 
+    search_query = text or ""
+    low_text = search_query.lower()
+    if any(w in low_text for w in ("apply", "new policy", "application", "buy", "proposal", "kyc")):
+        search_query += " Section 5 How to Apply Application Process Section 5.4 Documents Required for New Policy Application KYC"
+    elif any(w in low_text for w in ("file", "filing", "claim process", "how to claim", "documents required", "checklist")):
+        search_query += " Section 6 How to File a Claim Step-by-Step Section 6.3 IRDAI Timelines Section 6.5 Information Required Section 6.6 Mandatory Documents"
+
+    tenant_id = state.get("tenant_id") or "00000000-0000-0000-0000-000000000001"
+    jurisdiction = state.get("jurisdiction") or "India"
+
     if insurance_type:
         try:
             return KnowledgeRetriever().retrieve(
                 insurance_type=str(insurance_type),
                 policy_number=facts.get("policy_id"),
                 incident_date=incident_date,
-                query=text,
+                query=search_query,
                 intake_channel="claimant_chat",
                 claim_facts=facts,
-                tenant_id=state.get("tenant_id"),
-                jurisdiction=state.get("jurisdiction"),
+                tenant_id=tenant_id,
+                jurisdiction=jurisdiction,
             )
         except Exception:
             return {
@@ -128,26 +158,16 @@ def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
     # Before type is known, do pure semantic retrieval from the user's question.
     try:
         from src.knowledge.store import search
-        tenant_id = state.get("tenant_id")
-        jurisdiction = state.get("jurisdiction")
-        if not tenant_id:
-            return {
-                "available": False,
-                "status": "TENANT_CONTEXT_REQUIRED",
-                "requirements": [],
-                "policy": [],
-                "regulations": [],
-            }
         policy = search(
-            text,
+            search_query,
             document_types=["policy_wording"],
             limit=8,
             tenant_id=tenant_id,
             jurisdiction=jurisdiction,
         )
         guidance = search(
-            text,
-            document_types=["regulation", "guideline", "claim_requirement"],
+            search_query,
+            document_types=["regulation", "guideline", "claim_requirement", "policy_regulatory"],
             limit=8,
             tenant_id=tenant_id,
             jurisdiction=jurisdiction,

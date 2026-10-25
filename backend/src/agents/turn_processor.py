@@ -81,6 +81,11 @@ async def process_claimant_turn(
     claimant_id_val = str(getattr(claim, "claimant_id", "") or "")
     prior_state["tenant_id"] = tenant_id_val
     prior_state["claimant_id"] = claimant_id_val
+    prior_state.setdefault("ticket_id", getattr(claim, "ticket_id", None))
+    if getattr(claim, "insurance_type", None) and not prior_state.get("insurance_type"):
+        prior_state["insurance_type"] = claim.insurance_type
+    if getattr(claim, "policy_id", None) and not prior_state.get("policy_id"):
+        prior_state["policy_id"] = claim.policy_id
 
     prior_extracted = dict(prior_state.get("extracted_data") or {})
     if not prior_extracted.get("insurance_type"):
@@ -90,6 +95,7 @@ async def process_claimant_turn(
             inferred_type = claim.insurance_type
         if inferred_type:
             prior_extracted["insurance_type"] = inferred_type
+            prior_state["insurance_type"] = inferred_type
             prior_state["insurance_type_hint"] = inferred_type
     if not prior_extracted.get("policy_id") and getattr(claim, "policy_id", None):
         prior_extracted["policy_id"] = claim.policy_id

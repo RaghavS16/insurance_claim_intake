@@ -210,7 +210,15 @@ export default function AdminPoliciesPage() {
       const updatedCount = res.updated ?? 0;
       let toastMsg = `Bulk policies imported! Created: ${createdCount}, Updated: ${updatedCount}`;
       if (res.errors && Array.isArray(res.errors) && res.errors.length > 0) {
-        toastMsg += ` (${res.errors.length} error${res.errors.length > 1 ? 's' : ''}: ${res.errors.slice(0, 2).join('; ')})`;
+        const formattedErrors = res.errors.slice(0, 2).map((e: any) => {
+          if (typeof e === 'string') return e;
+          const rowInfo = e.row !== undefined ? `Row ${e.row}` : '';
+          const polInfo = e.policy_number ? ` (${e.policy_number})` : '';
+          const errMsg = e.error || e.message || JSON.stringify(e);
+          const prefix = (rowInfo || polInfo) ? `${rowInfo}${polInfo}: ` : '';
+          return `${prefix}${errMsg}`.trim();
+        });
+        toastMsg += ` (${res.errors.length} error${res.errors.length > 1 ? 's' : ''}: ${formattedErrors.join('; ')})`;
       }
       showToast(toastMsg, res.errors && res.errors.length > 0 ? 'info' : 'success');
       setImportModalOpen(false);
