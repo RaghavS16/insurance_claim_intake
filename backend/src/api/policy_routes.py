@@ -5,7 +5,7 @@ Allows claimants to link policies to their account using PII validation
 (Date of Birth and Last 4 digits of phone number) and list linked policies.
 """
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,7 @@ from src.database.session import get_db
 from src.database.models import Policy, PolicyLinkAudit, User
 from src.utils.logger import app_logger
 from src.utils.rate_limiter import enforce_rate_limit
-from src.api.deps import get_current_user, resolve_bearer_user
+from src.api.deps import resolve_bearer_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/policies", tags=["Policies"])

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, ShieldCheck, Calendar, FileText, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';

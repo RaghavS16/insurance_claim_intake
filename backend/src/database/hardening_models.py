@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import uuid
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, Index, JSON, text
 from sqlalchemy.orm import Mapped, mapped_column
-from src.database.models import Base, _UUID, _JSONB
+from src.database.models import Base, _UUID
 
 def _now(): return datetime.now(timezone.utc)
 def _uuid(): return str(uuid.uuid4())

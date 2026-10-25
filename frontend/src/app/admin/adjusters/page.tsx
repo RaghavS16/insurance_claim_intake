@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
+import { Mail, Download, RefreshCw, Trash2, KeyRound, AlertTriangle, Inbox } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';

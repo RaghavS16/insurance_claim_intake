@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, ArrowUpDown, Search, MoreHorizontal, Copy, Eye, Download, Check, Edit2 } from 'lucide-react';
+import { Plus, ArrowUpDown, Search, MoreHorizontal, Copy, Eye, Edit2 } from 'lucide-react';
 import { Button } from './Button';
 import { useToast } from './Toast';
 import { Checkbox } from './Checkbox';

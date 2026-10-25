@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { LogOut, Check } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';

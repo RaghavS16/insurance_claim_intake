@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, UserCheck, ShieldAlert, ArrowUpDown, ChevronRight, AlertTriangle, Inbox, ShieldCheck, CheckCircle2, TrendingUp, IndianRupee, Layers } from 'lucide-react';
+import { Users, UserCheck, AlertTriangle, Inbox, ShieldCheck, IndianRupee, Layers } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';

@@ -5,8 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   FolderOpen,
-  CheckCircle2,
-  Clock,
   AlertTriangle,
   ArrowRight,
   TrendingUp,
@@ -45,7 +43,7 @@ export default function AdjusterDashboardPage() {
   } = usePolling<AdjusterDashboardState>(
     async (signal) => {
       const pDash = api.get<any>('/api/v1/adjuster/dashboard', { signal }).catch(() => null);
-      const pQueue = api.get<any>('/api/v1/adjuster/queue', { signal }).catch(() => null);
+      const pQueue = api.get<any>('/api/v1/adjuster/queue?scope=assigned', { signal }).catch(() => null);
 
       const [dashRes, qRes] = await Promise.allSettled([pDash, pQueue]);
       const data = dashRes.status === 'fulfilled' ? dashRes.value : null;
@@ -211,8 +209,8 @@ export default function AdjusterDashboardPage() {
                 ) : recentClaims.length === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ textAlign: 'center', padding: '32px 16px', color: '#71717A' }}>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>Queue is currently clear</div>
-                      <div style={{ fontSize: 11, marginTop: 4 }}>No active claims requiring immediate action.</div>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>Assigned queue is currently clear</div>
+                      <div style={{ fontSize: 11, marginTop: 4 }}>No active claims assigned to your priority queue.</div>
                     </td>
                   </tr>
                 ) : (

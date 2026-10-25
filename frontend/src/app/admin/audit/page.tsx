@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Activity, ShieldCheck, KeyRound, UserCheck, AlertTriangle, Inbox } from 'lucide-react';
+import { AlertTriangle, Inbox } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';

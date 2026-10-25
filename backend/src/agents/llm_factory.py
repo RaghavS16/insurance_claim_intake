@@ -73,7 +73,16 @@ _CIRCUIT_COOLDOWN_UNTIL: dict[str, float] = {}
 
 def _get_candidate_key(candidate: Any) -> str:
     model = getattr(candidate, "model", None) or getattr(candidate, "model_name", None) or type(candidate).__name__
-    return str(model)
+    base_url = str(getattr(candidate, "openai_api_base", None) or getattr(candidate, "base_url", None) or type(candidate).__name__)
+    raw_key = getattr(candidate, "openai_api_key", None) or getattr(candidate, "google_api_key", None) or ""
+    if hasattr(raw_key, "get_secret_value"):
+        try:
+            raw_key = raw_key.get_secret_value()
+        except Exception:
+            raw_key = str(raw_key)
+    key_fp = hashlib.sha256(str(raw_key).encode("utf-8")).hexdigest()[:6] if raw_key else "nokey"
+    prov = "groq" if "groq.com" in base_url else ("hf" if "huggingface.co" in base_url else ("gemini" if "Google" in type(candidate).__name__ else "local"))
+    return f"{prov}:{model}:{key_fp}"
 
 
 def _is_in_cooldown(key: str) -> bool:
@@ -131,7 +140,7 @@ _PROMPT_CACHE = _PromptCache()
 def invoke_with_retry(operation: Callable[[], R], *, operation_name: str, attempts: int | None = None) -> R:
     """Run an LLM operation with bounded exponential backoff for transient failures."""
     last_exc: BaseException | None = None
-    max_attempts = attempts if attempts is not None else settings.LLM_RETRY_ATTEMPTS
+    max_attempts = attempts if attempts is not None else 1
     for attempt in range(1, max(1, max_attempts) + 1):
         try:
             return operation()
@@ -453,12 +462,6 @@ def _build_raw_gemini(model_name: str | None = None) -> BaseChatModel:
     )
 
 
-def _build_gemini(model_name: str | None = None) -> BaseChatModel:
-    """Build a direct Google Gemini client wrapped with automatic Ollama fallback."""
-    gemini_client = _build_raw_gemini(model_name)
-    fallback_model = "qwen2.5:1.5b" if model_name == settings.GEMINI_FAST_MODEL else settings.OLLAMA_MODEL
-    return cast(BaseChatModel, ResilientChatModel(gemini_client, lambda: _build_ollama(fallback_model)))
-
 
 def _build_raw_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
     token = _rotate_key("hf", settings.HF_TOKEN)
@@ -475,21 +478,6 @@ def _build_raw_huggingface(*, model_name: str, timeout_seconds: float) -> BaseCh
         model=model, api_key=token, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
-
-
-def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
-    """Build an OpenAI-compatible client through Hugging Face Inference Providers with Groq fallback."""
-    primary = _build_raw_huggingface(model_name=model_name, timeout_seconds=timeout_seconds)
-
-    def _fallback_chain() -> BaseChatModel:
-        if settings.GROQ_API_KEY:
-            try:
-                return _build_groq(model_name=model_name, timeout_seconds=timeout_seconds)
-            except Exception as e:
-                logger.warning("Groq emergency fallback initialization failed: %s", e)
-        return _build_ollama()
-
-    return cast(BaseChatModel, ResilientChatModel(primary, _fallback_chain))
 
 
 def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: float | None = None) -> BaseChatModel:
@@ -521,12 +509,6 @@ def _build_raw_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
-
-
-def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
-    """Direct Groq client wrapped with automatic Ollama fallback."""
-    primary = _build_raw_groq(model_name, timeout_seconds=timeout_seconds)
-    return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 
 def _build_configured_fast_llm() -> BaseChatModel:
@@ -561,7 +543,6 @@ def _build_configured_reasoning_llm() -> BaseChatModel:
 
 def get_fast_llm() -> BaseChatModel:
     """Return the low-latency model with zero-cost multi-provider failover."""
-    primary = _build_configured_fast_llm()
     candidates: list[Callable[[], BaseChatModel]] = []
 
     # Direct Groq candidates
@@ -577,19 +558,30 @@ def get_fast_llm() -> BaseChatModel:
     # Hugging Face candidates
     if settings.HF_TOKEN:
         candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-20b:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
-        candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-7B-Instruct:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_huggingface(model_name="meta-llama/Llama-3.3-70B-Instruct:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
 
     # Groq secondary
     if settings.GROQ_API_KEY:
         candidates.append(lambda: _build_raw_groq("llama-3.3-70b-versatile", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
 
     fallback = lambda: _build_ollama("qwen2.5:1.5b")
+
+    primary: Any = None
+    try:
+        primary = _build_configured_fast_llm()
+    except Exception as e:
+        logger.warning("Configured fast LLM unavailable (%s); promoting candidate from pool", e)
+        if candidates:
+            first_builder = candidates.pop(0)
+            primary = first_builder()
+        else:
+            primary = fallback()
+
     return cast(BaseChatModel, ResilientChatModel(primary, fallback, candidate_builders=candidates))
 
 
 def get_reasoning_llm() -> BaseChatModel:
     """Return the high-quality model with zero-cost multi-provider failover."""
-    primary = _build_configured_reasoning_llm()
     candidates: list[Callable[[], BaseChatModel]] = []
 
     # Direct Groq candidates
@@ -600,18 +592,31 @@ def get_reasoning_llm() -> BaseChatModel:
     # Gemini candidates
     if settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY:
         candidates.append(lambda: _build_raw_gemini("gemini-2.5-flash"))
-        candidates.append(lambda: _build_raw_gemini("gemini-1.5-pro"))
+        candidates.append(lambda: _build_raw_gemini("gemini-2.5-flash-lite"))
 
     # Hugging Face candidates
     if settings.HF_TOKEN:
         candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-120b:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
-        candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-72B-Instruct:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_huggingface(model_name="meta-llama/Llama-3.3-70B-Instruct:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-72B-Instruct:together", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
 
     # Groq secondary
     if settings.GROQ_API_KEY:
         candidates.append(lambda: _build_raw_groq("llama-3.1-8b-instant", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
 
     fallback = lambda: _build_ollama(settings.OLLAMA_MODEL)
+
+    primary: Any = None
+    try:
+        primary = _build_configured_reasoning_llm()
+    except Exception as e:
+        logger.warning("Configured reasoning LLM unavailable (%s); promoting candidate from pool", e)
+        if candidates:
+            first_builder = candidates.pop(0)
+            primary = first_builder()
+        else:
+            primary = fallback()
+
     return cast(BaseChatModel, ResilientChatModel(primary, fallback, candidate_builders=candidates))
 
 

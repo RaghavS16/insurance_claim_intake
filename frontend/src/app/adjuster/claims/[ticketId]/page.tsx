@@ -7,18 +7,10 @@ import {
   ShieldCheck,
   FileText,
   AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  HelpCircle,
   Send,
-  ThumbsUp,
-  ThumbsDown,
   Sparkles,
   ArrowLeft,
   Download,
-  Clock,
-  User,
-  Paperclip,
   Inbox,
 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';

@@ -6,7 +6,7 @@ logic only; no LLM output can make a claim submission-ready by itself.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Iterable, Optional
 
 
 FACT_STATES = {
@@ -49,56 +49,6 @@ class ReadinessResult:
             "evidence": self.evidence,
             "exceptions": self.exceptions,
         }
-
-
-def canonical_fact(
-    *,
-    field: str,
-    value: Any,
-    source_type: str,
-    source_id: Optional[str] = None,
-    status: str = "PROPOSED",
-    confidence: Optional[float] = None,
-    metadata: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    if status not in FACT_STATES:
-        raise ValueError(f"Unknown fact status: {status}")
-    if confidence is not None and not 0 <= confidence <= 1:
-        raise ValueError("confidence must be between 0 and 1")
-    return {
-        "field": field,
-        "value": value,
-        "source_type": source_type,
-        "source_id": source_id,
-        "status": status,
-        "confidence": confidence,
-        "metadata": metadata or {},
-    }
-
-
-def merge_fact_metadata(
-    existing: Optional[dict[str, Any]],
-    *,
-    source_type: str,
-    source_id: Optional[str],
-    confidence: Optional[float],
-    status: str,
-) -> dict[str, Any]:
-    result = dict(existing or {})
-    history = list(result.get("provenance_history") or [])
-    history.append(
-        {
-            "source_type": source_type,
-            "source_id": source_id,
-            "confidence": confidence,
-            "status": status,
-        }
-    )
-    result["provenance_history"] = history[-20:]
-    result["last_source_type"] = source_type
-    result["last_source_id"] = source_id
-    result["last_status"] = status
-    return result
 
 
 def _requirement_blocking(requirement: Any) -> bool:

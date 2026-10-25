@@ -5,7 +5,6 @@ import os
 import re
 import urllib.parse
 from pathlib import Path
-from typing import Any
 
 MEDIA_TYPE_ALLOWLIST = {
     ".pdf": "application/pdf",

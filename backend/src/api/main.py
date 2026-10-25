@@ -11,39 +11,32 @@ All business logic has been extracted into dedicated route modules:
 - auth_routes.py: Authentication (signup, login, logout)
 - claim_routes.py: Claim intake, confirmation, documents
 """
-import logging
 import os
-import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from src.config import settings
-from src.database.session import get_db, engine, SessionLocal, dispose_engine
-from src.database.models import Base, Claim, Policy, Adjuster, ConversationTurn, User, PasswordResetOTP, RevokedToken
-from src.database.hardening_models import UserNotificationState
+from src.database.session import get_db, engine, dispose_engine
+from src.database.models import Base, User
 from src.api.realtime_voice import router as voice_router
 from src.utils.logger import app_logger
-from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, is_token_revoked
 from src.utils.validators import validate_full_name, validate_phone
-from src.utils.tracing import CorrelationIdMiddleware, get_correlation_id
+from src.utils.tracing import CorrelationIdMiddleware
 from src.middleware import SecurityHeadersMiddleware, RequestSizeLimitMiddleware, RequestContextMiddleware
 from src.services.observability import configure_otel
 
 # Route modules
 from src.api import auth_routes, auth_onboarding_routes, claim_routes, policy_routes, admin_routes, admin_workflow_routes, adjuster_routes, knowledge_routes, notification_routes
 
-# Shared auth dependencies (also exported for backward compatibility)
-from src.api.deps import get_current_user, get_current_user_id, require_role  # noqa: F401
+# Shared auth dependencies
+from src.api.deps import get_current_user
 
 logger = app_logger
 
@@ -173,9 +166,6 @@ def _init_db_schema():
         logger.info("Database schema and tables initialized.")
     except Exception as exc:
         logger.warning("Database schema check notice: %s", exc)
-
-
-_init_db_and_seeds = _init_db_schema  # Backward-compatible alias
 
 
 # ---------------------------------------------------------------------------
@@ -415,10 +405,6 @@ app.include_router(notification_routes.router)
 
 
 # Claim routes — inject get_current_user dependency
-claim_routes.router.dependencies = []
-for route in claim_routes.router.routes:
-    # Override the placeholder Depends() with actual get_current_user
-    pass
 app.include_router(
     claim_routes.router,
     dependencies=[Depends(get_current_user)],

@@ -5,7 +5,7 @@ All user-facing input validation should be routed through these helpers
 to ensure consistent, production-grade security across the entire API surface.
 """
 import re
-from typing import List, Optional, Set
+from typing import Optional, Set
 
 # ---------------------------------------------------------------------------
 # Email validation

@@ -8,12 +8,7 @@ import {
   Download,
   Copy,
   MessageSquare,
-  ShieldCheck,
-  Calendar,
-  MapPin,
-  Clock,
   ArrowLeft,
-  Upload,
   Trash2,
 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';

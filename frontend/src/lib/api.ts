@@ -1,5 +1,3 @@
-import { User, Policy, Claim, Adjuster, KnowledgeDocument, AuditEvent } from './types';
-
 const API_BASE =
   typeof window !== 'undefined'
     ? ''
@@ -79,7 +77,7 @@ class ApiClient {
     }
 
     const url = `${API_BASE}${endpoint}`;
-    let token = this.getToken();
+    const token = this.getToken();
     const isGet = (options.method || 'GET').toUpperCase() === 'GET';
 
     const headers: Record<string, string> = {

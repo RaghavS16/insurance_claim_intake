@@ -17,26 +17,6 @@ from src.agents.dynamic_requirements import build_dynamic_context, extract_answe
 
 from src.agents.gap_analysis import analyze_claim_gaps
 
-_RESPONSE_SYSTEM_PROMPT = """You are the claimant-facing conversational AI for an insurance agency.
-You are a general-purpose insurance assistant with RAG-backed claim intake.
-
-Answer the claimant's actual question or request first. Claim intake is parallel background work, not a prerequisite for conversation.
-Use retrieved policy, procedure, regulatory, and claim-guidance evidence when available. Never invent policy terms, exclusions, limits, deadlines, eligibility rules, or required documents.
-When retrieved evidence is insufficient for a policy-specific answer, say so clearly instead of guessing.
-
-When a claimant shares facts, extract and preserve them without making them repeat information already provided. When a claimant is filing a claim, use the applicable retrieved requirements to identify the next useful detail or document dynamically.
-A claimant can ask questions at any point—before, during, or after intake, while documents are being reviewed, and while a claim is being prepared for submission.
-Policy verification remains a workflow gate before submission; it is not a gate for answering questions.
-Final submission remains a strict workflow action after required information/evidence and authoritative policy checks are satisfied.
-
-Conversation rules:
-- Be natural, concise, empathetic, and direct.
-- Answer the question before asking an intake follow-up.
-- Never restart the conversation or dump the full missing-field list.
-- If the claimant already supplied a fact, acknowledge it and move on.
-- Never expose raw JSON, schemas, Python code, internal state names, or orchestration details.
-- Keep voice-friendly responses normally to 2–6 sentences.
-"""
 
 _FIELD_LABELS = {
     "policy_id": "policy number",
@@ -65,43 +45,6 @@ def _natural_fallback(missing: list[str], data: dict[str, Any]) -> str:
     return f"I've recorded those details. When you have a moment, could you also tell me {', '.join(labels[:2])}?"
 
 
-def _compact_knowledge_context(context: dict[str, Any]) -> dict[str, Any]:
-    """Keep conversational prompts small while preserving RAG provenance."""
-    compact: dict[str, Any] = {
-        "available": context.get("available", False),
-        "status": context.get("status"),
-        "requirements": [
-            {
-                k: req.get(k)
-                for k in ("key", "label", "question_hint", "required", "evidence_type", "condition")
-                if req.get(k) is not None
-            }
-            for req in (context.get("requirements") or [])
-        ],
-    }
-    for key in ("policy", "regulations"):
-        rows = []
-        for row in (context.get(key) or [])[:3]:
-            item = dict(row)
-            item["text"] = str(item.get("text") or "")[:3500]
-            rows.append(item)
-        compact[key] = rows
-    return compact
-
-
-def _message_text(result: Any) -> str:
-    content = getattr(result, "content", result)
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-        return " ".join(parts).strip()
-    return str(content or "").strip()
 
 
 def _looks_like_question(state: ClaimState) -> bool:
@@ -226,90 +169,17 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
     return state
 
 
-def _response_is_usable(response: str, missing: list[str], data: dict[str, Any]) -> bool:
-    if not response or len(response) > 600:
-        return False
-    low = response.lower()
-    if "<" in response or ">" in response:
-        return False
-    if any(token in low for token in ("json", "schema", "langgraph", "extracted_data", "missing_fields")):
-        return False
-    return True
-
-
-def _model_response(state: ClaimState) -> str:
-    data = state.get("extracted_data", {})
-    missing = list(state.get("missing_fields", []))
-    history = state.get("conversation_history", [])[-10:]
-    history_text = "\n".join(
-        f"{turn.get('speaker', 'unknown')}: {turn.get('text', '')}" for turn in history
-    ) or "No previous conversation."
-
-    dynamic_missing = [
-        {k: item.get(k) for k in ("key", "label", "question_hint", "required", "evidence_type")}
-        for item in (state.get("dynamic_missing") or [])
-    ]
-    missing_evidence_items = [
-        {k: item.get(k) for k in ("key", "label", "question_hint", "required", "evidence_type")}
-        for item in (state.get("missing_evidence") or [])
-    ]
-    gap_data = state.get("gap_analysis") or analyze_claim_gaps(state)
-    sentiment = gap_data.get("user_sentiment", "normal")
-    phase = state.get("conversation_phase", "source_of_truth_intake")
-
-    # Fast path: Use verified manifest question hint directly when collecting details
-    last_intent = str(state.get("last_intent") or "").lower()
-    if last_intent in {"claim_detail", "greeting", "confirmation", "filler", "unclear"}:
-        if dynamic_missing and dynamic_missing[0].get("question_hint"):
-            hint = str(dynamic_missing[0]["question_hint"]).strip()
-            recent = state.get("recently_extracted_fields") or []
-            if recent:
-                return f"Got it, I've noted that. {hint}"
-            return hint
-        if missing_evidence_items and missing_evidence_items[0].get("question_hint"):
-            return str(missing_evidence_items[0]["question_hint"]).strip()
-
-    prompt = (
-        f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
-        f"Conversation context: {phase}\n"
-        f"Authoritative claim facts: {data}\n"
-        f"Still-needed baseline information: {missing}\n"
-        f"Still-needed claim-specific information: {dynamic_missing}\n"
-        f"Still-needed evidence uploads: {missing_evidence_items}\n"
-        f"Detected claimant sentiment: {sentiment}\n"
-        f"Identified gaps / consistency notes: {gap_data.get('flagged_gaps', [])}\n"
-        f"Grounding context: {_compact_knowledge_context(state.get('knowledge_context', {}))}\n"
-        f"Current conversation status: {state.get('conversation_status', 'collecting')}\n"
-        f"Latest detected intent: {state.get('last_intent', 'unclear')}\n"
-        f"Latest claimant utterance: {state.get('last_user_utterance', '')}\n\n"
-        f"Recent conversation:\n{history_text}\n\n"
-        "Write 1 to 3 clear, warm, and natural conversational sentences suitable for speech and text."
-    )
-    try:
-        response = _message_text(
-            nodes.invoke_with_retry(
-                lambda: nodes._get_llm().invoke(prompt),
-                operation_name="conversational response planning",
-                attempts=1,
-            )
-        )
-        if _response_is_usable(response, missing, data):
-            return response
-    except Exception as exc:
-        nodes.logger.warning("Conversational response planning failed: %s", exc)
-    if dynamic_missing or missing_evidence_items:
-        return _dynamic_fallback(state)
-    return _natural_fallback(missing, data)
-
-
 def _dynamic_fallback(state: ClaimState) -> str:
     remaining = state.get("dynamic_missing") or []
     missing_ev = state.get("missing_evidence") or []
     data = state.get("extracted_data") or {}
+    recent = state.get("recently_extracted_fields") or []
+    last_intent = str(state.get("last_intent") or "").lower()
+    prefix = "Got it, I've noted that. " if (recent and last_intent in {"claim_detail", "greeting", "confirmation", "filler", "unclear"}) else ""
     if remaining:
         first = remaining[0]
-        hint = first.get("question_hint") or f"could you provide your {first.get('label', 'details').lower()}?"
-        return str(hint).strip()
+        hint = str(first.get("question_hint") or f"Could you provide your {first.get('label', 'details').lower()}?").strip()
+        return f"{prefix}{hint}" if prefix and not hint.lower().startswith("got it") else hint
     if missing_ev:
         first_ev = missing_ev[0]
         hint = first_ev.get("question_hint")

@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
-  FileText,
   ShieldCheck,
   FolderOpen,
   MessageSquare,
@@ -13,7 +12,6 @@ import {
   Settings,
   Bell,
   Search,
-  ChevronRight,
   LogOut,
   PanelLeftClose,
   PanelLeft,
@@ -21,7 +19,6 @@ import {
   PanelRight,
   Star,
   Activity,
-  UserCheck,
   BookOpen,
   Menu,
   X,
@@ -29,7 +26,6 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { usePolling } from '@/lib/use-polling';
 import { api } from '@/lib/api';
-import { Button } from './Button';
 
 export interface AppShellProps {
   children: React.ReactNode;

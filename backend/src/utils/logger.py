@@ -4,7 +4,6 @@ Structured application logger with sensitive information masking and correlation
 import logging
 import re
 import sys
-from typing import Any
 
 # Sensitive field patterns to redact in logs
 _SENSITIVE_PATTERNS = [

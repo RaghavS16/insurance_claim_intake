@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.database.session import get_db
 from src.database.models import Adjuster, Claim, RevokedToken, User
+from src.database.hardening_models import ClaimEvidence
 from src.utils.auth import get_password_hash, is_token_revoked, verify_token
 from src.utils.logger import app_logger
 
@@ -252,3 +253,31 @@ def db_commit_or_500(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"{error_detail} Exception: {str(e)}",
         )
+
+
+def serialize_evidence_request(row: Any, db: Session) -> dict[str, Any]:
+    """Serialize a ClaimEvidenceRequest row and its latest associated evidence."""
+    evidence = (
+        db.query(ClaimEvidence)
+        .filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id)
+        .order_by(ClaimEvidence.created_at.desc())
+        .first()
+    )
+    return {
+        "id": str(row.id),
+        "claim_id": str(row.claim_id),
+        "adjuster_id": str(row.adjuster_id),
+        "request_text": row.request_text,
+        "notes": row.request_text,
+        "status": row.status,
+        "response_note": row.response_note,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
+        "evidence_id": str(evidence.id) if evidence else None,
+        "evidence_name": evidence.original_filename if evidence else None,
+        "response_evidence": {
+            "id": str(evidence.id),
+            "name": evidence.original_filename,
+            "verification_status": evidence.verification_status,
+        } if evidence else None,
+    }

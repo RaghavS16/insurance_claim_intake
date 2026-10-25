@@ -9,7 +9,7 @@ Provides endpoints for administrators to:
 import csv
 import io
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -28,9 +28,7 @@ from src.utils.validators import (
 )
 from src.utils.logger import app_logger
 from src.api.deps import (
-    get_current_user,
     resolve_bearer_user,
-    get_adjuster_or_404,
     db_commit_or_500,
 )
 

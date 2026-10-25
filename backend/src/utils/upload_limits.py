@@ -4,8 +4,6 @@ Never call UploadFile.read() without a bounded read for untrusted uploads.
 """
 from __future__ import annotations
 
-from typing import BinaryIO
-
 async def read_limited(upload, max_bytes: int, chunk_size: int = 1024 * 1024) -> bytes:
     total = 0
     chunks: list[bytes] = []

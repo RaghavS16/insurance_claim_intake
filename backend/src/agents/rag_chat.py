@@ -15,7 +15,7 @@ import json
 import re
 from typing import Any, Dict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from src.agents.llm_factory import get_fast_llm, get_reasoning_llm, invoke_with_retry, structured_output
 from src.knowledge.retriever import KnowledgeRetriever
@@ -30,12 +30,6 @@ class ChatIntent(BaseModel):
     wants_policy_explanation: bool = False
     wants_human: bool = False
 
-
-class ChatAnswer(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    answer: str = Field(default="")
-    should_continue_intake: bool = True
-    suggested_follow_up: str = Field(default="")
 
 
 QUESTION_RE = re.compile(

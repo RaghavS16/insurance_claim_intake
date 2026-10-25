@@ -2,12 +2,6 @@
 from typing import Any, Dict, List, Optional, TypedDict
 
 
-class DynamicFieldEntry(TypedDict, total=False):
-    field_key: str
-    field_label: str
-    value: Any
-    source_requirement_id: Optional[str]
-
 
 class ClaimState(TypedDict, total=False):
     ticket_id: str

@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from src.database.models import Claim, Adjuster
-from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmission, ClaimSubmissionConfirmation
+from src.database.hardening_models import ClaimAssignment, ClaimAuditEvent, ClaimRequirement, ClaimEvidence, ClaimException, ClaimFact, ClaimSubmissionConfirmation
 from src.services.outbox import enqueue
 
 ALLOWED_TRANSITIONS = {

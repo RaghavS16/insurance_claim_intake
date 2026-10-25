@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, TypeVar
+from typing import Any, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.agents.constants import COMMON_REQUIRED_FIELDS, INSURANCE_TYPE_KEYS, SUPPORTED_INSURANCE_TYPES
-from src.agents.llm_factory import get_configured_llm, get_fast_llm, invoke_with_retry, is_transient_llm_error, structured_output
+from src.agents.constants import INSURANCE_TYPE_KEYS
+from src.agents.llm_factory import get_fast_llm, invoke_with_retry, is_transient_llm_error, structured_output
 from src.agents.state import ClaimState
 from src.utils.logger import app_logger
 
@@ -320,7 +320,6 @@ def _deterministic_policy(text: str) -> Optional[str]:
             if candidate: return candidate
     return None
 
-def _policy_is_suspicious(value: Any) -> bool: return _clean_policy_candidate(value) is None
 _LOCATION_STOPWORDS = {"a car accident", "an accident", "a collision", "a crash", "a incident", "an event", "a damage", "damage", "the accident", "the incident", "a fight", "scene", "the scene", "spot", "the spot", "site", "the site", "here", "there", "the place"}
 
 _LOCATION_TEMPORAL_WORDS = {
@@ -636,16 +635,6 @@ def conversation_turn_processor(state: ClaimState) -> ClaimState:
             state["message"] = ""
             # Continue through the graph so the knowledge layer gets another
             # chance without forcing the claimant to repeat a question.
-        elif awaiting and intent == "confirmation":
-            state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
-        elif awaiting and intent == "rejection":
-            state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"
-            state["_rejection_active"] = True
-        elif awaiting and intent == "confirmation":
-            state["confirmed"] = True; state["awaiting_confirmation"] = False; state["conversation_status"] = "pending_verification"
-        elif awaiting and intent == "rejection":
-            state["confirmed"] = False; state["awaiting_confirmation"] = False; state["conversation_status"] = "collecting"
-            state["_rejection_active"] = True
 
     deterministic = _rule_changes(raw, state); deterministic_fields = {c.field for c in deterministic}; patch: Optional[ExtractionPatch] = None
     if not deterministic:
@@ -767,26 +756,3 @@ def mandatory_field_checker(state: ClaimState) -> ClaimState:
     else:
         state["conversation_status"] = "collecting"
     return state
-
-def _confirmation_summary(data: Dict[str, Any]) -> str:
-    label = SUPPORTED_INSURANCE_TYPES.get(data.get("insurance_type"), str(data.get("insurance_type"))) if data.get("insurance_type") else ""; date_text = str(data.get("event_date") or ""); location = str(data.get("event_location") or ""); amount = data.get("estimated_claim_amount"); policy = data.get("policy_id"); description = str(data.get("event_description") or "").strip().rstrip(".")
-    lead = f"I have your {label.lower() if label else 'claim'} claim"; details = []
-    if description: lead += f" for {description}"
-    if date_text: details.append(f"on {date_text}")
-    if location: details.append(f"in {location}")
-    if amount is not None: details.append(f"with an estimated loss of ₹{int(float(amount)):,}")
-    if policy: details.append(f"under policy {policy}")
-    return lead + (", " + ", ".join(details) if details else "") + "."
-
-def _deterministic_response(state: ClaimState) -> str:
-    if state.get("_skip_all"): return state.get("next_question", "")
-    if state.get("awaiting_confirmation"): return _confirmation_summary(state.get("extracted_data", {})) + " Is everything correct?"
-    target = state.get("next_question_field") or (state.get("missing_fields", [None])[0] if state.get("missing_fields") else None)
-    prompts = {"policy_id":"What is your policy number?","event_date":"When did the incident happen?","insurance_type":"What type of insurance is this claim under?","event_description":"Could you briefly tell me what happened?","event_location":"Where did the incident happen?","estimated_claim_amount":"What is the approximate loss or repair cost?"}
-    return prompts.get(target, "Tell me a little more about what happened.") if isinstance(target, str) else "Tell me a little more about what happened."
-
-def next_question_generator(state: ClaimState) -> ClaimState:
-    if state.get("_skip_all"): return state
-    missing = state.get("missing_fields", []); state["next_question_field"] = "confirmation" if state.get("awaiting_confirmation") else ((state.get("current_field_hint") if state.get("current_field_hint") in missing else missing[0]) if missing else "confirmation"); state["next_question"] = _deterministic_response(state); state["message"] = state["next_question"]; return state
-
-def natural_response_generator(state: ClaimState) -> ClaimState: return state

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShieldAlert, Inbox, Plus } from 'lucide-react';
+import { Inbox, Plus } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';

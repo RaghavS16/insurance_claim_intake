@@ -1,7 +1,5 @@
 """LLM-based document metadata extraction. No claim requirements are hard-coded here."""
 from __future__ import annotations
-import re
-from datetime import date
 from pydantic import BaseModel, Field
 from src.agents.llm_factory import get_configured_llm
 

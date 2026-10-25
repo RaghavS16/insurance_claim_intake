@@ -3,24 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  FolderOpen,
-  Filter,
-  ArrowUpDown,
-  Search,
   UserCheck,
   CheckCircle2,
-  Clock,
-  AlertCircle,
-  MoreHorizontal,
   Inbox,
   AlertTriangle,
+  ArrowRight,
 } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
-import { BadgeDot, BadgePill } from '@/components/ui/Badge';
+import { BadgeDot } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
-import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { Claim, ClaimStatus } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -29,6 +22,7 @@ import { usePolling, LiveIndicator } from '@/lib/use-polling';
 export default function AdjusterQueuePage() {
   const router = useRouter();
   const { showToast } = useToast();
+  const [scope, setScope] = useState<'assigned' | 'unassigned'>('assigned');
 
   const {
     data: claimsData,
@@ -40,7 +34,7 @@ export default function AdjusterQueuePage() {
     refresh: fetchQueue,
   } = usePolling<Claim[]>(
     async (signal) => {
-      const data = await api.get<any>('/api/v1/adjuster/queue', { signal });
+      const data = await api.get<any>(`/api/v1/adjuster/queue?scope=${scope}`, { signal });
       return Array.isArray(data) ? data : data?.items || [];
     },
     {
@@ -49,8 +43,11 @@ export default function AdjusterQueuePage() {
     }
   );
 
+  useEffect(() => {
+    fetchQueue();
+  }, [scope]);
+
   const claims = claimsData || [];
-  const setClaims = (updater: any) => setClaimsData(updater);
   const error = pollError ? pollError.message : null;
 
   const handleNextClaim = async () => {
@@ -64,7 +61,7 @@ export default function AdjusterQueuePage() {
         router.push(`/adjuster/claims/${res.ticket_id}`);
         return;
       }
-      showToast('No pending claims in your queue.', 'info');
+      showToast('No pending claims in your priority queue.', 'info');
     } catch (err: any) {
       showToast(err.message || 'Failed to fetch next priority claim.', 'error');
     }
@@ -147,14 +144,28 @@ export default function AdjusterQueuePage() {
       key: 'actions',
       header: 'Actions',
       render: (c) => (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={(e) => handleAssignToMe(c.ticket_id, e)}
-          icon={<UserCheck size={12} />}
-        >
-          Assign
-        </Button>
+        scope === 'assigned' ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={(e) => {
+              e.stopPropagation();
+              router.push(`/adjuster/claims/${c.ticket_id}`);
+            }}
+            icon={<ArrowRight size={12} />}
+          >
+            Adjudicate
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={(e) => handleAssignToMe(c.ticket_id, e)}
+            icon={<UserCheck size={12} />}
+          >
+            Assign to Me
+          </Button>
+        )
       ),
     },
   ];
@@ -163,7 +174,53 @@ export default function AdjusterQueuePage() {
     <AppShell breadcrumbs={['Adjuster', 'Claims Queue']} activeTitle="Claims Adjudication Queue">
       {/* Action Header */}
       <div className="snow-action-bar" style={{ marginBottom: 20 }}>
-        <div className="snow-action-buttons">
+        <div className="snow-flex snow-items-center snow-gap-3">
+          <div
+            className="snow-flex snow-gap-1"
+            style={{
+              backgroundColor: '#F3F4F6',
+              padding: '3px',
+              borderRadius: 10,
+              border: '1px solid #E5E7EB',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setScope('assigned')}
+              style={{
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 600,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: scope === 'assigned' ? '#FFFFFF' : 'transparent',
+                color: scope === 'assigned' ? '#111827' : '#6B7280',
+                boxShadow: scope === 'assigned' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              My Assigned Queue
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope('unassigned')}
+              style={{
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 600,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: scope === 'unassigned' ? '#FFFFFF' : 'transparent',
+                color: scope === 'unassigned' ? '#111827' : '#6B7280',
+                boxShadow: scope === 'unassigned' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              Unassigned Pool
+            </button>
+          </div>
           <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
         </div>
 
@@ -202,14 +259,20 @@ export default function AdjusterQueuePage() {
 
       {loading ? (
         <Card style={{ padding: 48, textAlign: 'center', color: '#71717A' }}>
-          <div className="snow-caption">Loading assigned claims queue from server...</div>
+          <div className="snow-caption">
+            {scope === 'assigned' ? 'Loading your assigned claims queue...' : 'Loading unassigned claims pool...'}
+          </div>
         </Card>
       ) : claims.length === 0 ? (
         <Card style={{ padding: 48, textAlign: 'center' }}>
           <Inbox size={40} color="#A1A1AA" style={{ margin: '0 auto 12px' }} />
-          <h3 className="snow-h2" style={{ fontSize: 16, marginBottom: 4 }}>No Claims in Queue</h3>
+          <h3 className="snow-h2" style={{ fontSize: 16, marginBottom: 4 }}>
+            {scope === 'assigned' ? 'Your Assigned Queue is Clear' : 'No Unassigned Claims in Pool'}
+          </h3>
           <p className="snow-caption" style={{ color: '#71717A' }}>
-            There are currently no active claims requiring adjudication.
+            {scope === 'assigned'
+              ? 'There are currently no active claims assigned to your adjudication queue.'
+              : 'All submitted claims across the system are currently assigned to active adjusters.'}
           </p>
         </Card>
       ) : (
@@ -219,7 +282,7 @@ export default function AdjusterQueuePage() {
           keyField="ticket_id"
           hideRowActions={true}
           onRowClick={(c) => router.push(`/adjuster/claims/${c.ticket_id}`)}
-          searchPlaceholder="Filter queue..."
+          searchPlaceholder={scope === 'assigned' ? 'Filter assigned queue...' : 'Filter unassigned pool...'}
         />
       )}
     </AppShell>

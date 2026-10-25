@@ -2,7 +2,6 @@
 from pathlib import Path
 from typing import Any, List, Optional
 import os
-from urllib.parse import urlparse
 import socket
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

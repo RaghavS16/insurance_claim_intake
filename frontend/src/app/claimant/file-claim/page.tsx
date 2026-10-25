@@ -7,8 +7,6 @@ import {
   MicOff,
   Send,
   Paperclip,
-  CheckCircle2,
-  AlertTriangle,
   Volume2,
   VolumeX,
   ShieldCheck,

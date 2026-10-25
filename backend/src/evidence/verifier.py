@@ -11,7 +11,6 @@ import hashlib
 import io
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field

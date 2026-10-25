@@ -21,19 +21,19 @@ from src.config import settings
 from src.database.session import get_db
 from src.database.models import Claim, ConversationTurn, User, Policy
 from src.services.ai_governance import tenant_ai_guard
-from src.api.voice_ws import process_claimant_turn
+from src.agents.turn_processor import process_claimant_turn
 from src.agents.turn_processor import ClaimTurnConflict
 from src.utils.authorization import enforce_claim_ownership
 from src.utils.logger import app_logger
 from src.utils.upload_limits import read_limited
 from src.utils.clamav import scan_bytes
 from src.agents.policy_check import verify_policy_for_claim
-from src.agents.dynamic_requirements import missing_evidence, pending_evidence_review
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimFact, ClaimSubmissionConfirmation
+from src.agents.dynamic_requirements import missing_evidence
+from src.database.hardening_models import ClaimEvidence, ClaimRequirement, ClaimEvidenceRequest, ClaimAuditEvent, ClaimSubmission, ClaimException, ClaimSubmissionConfirmation
 from src.evidence.verifier import verify_evidence, validate_evidence_file
 from src.storage.s3 import put_bytes, quarantine_bytes, promote_quarantined
 from src.database.claim_workflow import assign_claim, transition_claim, build_submission_readiness, record_exception
-from src.api.deps import get_current_user, resolve_bearer_user
+from src.api.deps import resolve_bearer_user, serialize_evidence_request as _request_payload
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/claims", tags=["Claims"])
@@ -54,8 +54,6 @@ class TextTurnRequest(BaseModel):
 
 def _is_post_submission_status(status: str | None) -> bool:
     return str(status or "") in {"submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"}
-
-# Consolidated _request_payload is defined below
 
 
 SERVER_CONTROLLED_CLAIM_FIELDS = {
@@ -126,33 +124,6 @@ def _resolve_user(request: Request, db: Session) -> User:
     """Resolve the authenticated claimant. Delegates to the shared revocation-aware
     implementation in deps.resolve_bearer_user (supports JWT Bearer + test X-User-ID)."""
     return resolve_bearer_user(request, db, ["CLAIMANT", "ADMIN", "ADJUSTER"])
-
-
-def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
-    evidence = (
-        db.query(ClaimEvidence)
-        .filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id)
-        .order_by(ClaimEvidence.created_at.desc())
-        .first()
-    )
-    return {
-        "id": str(row.id),
-        "claim_id": str(row.claim_id),
-        "adjuster_id": str(row.adjuster_id),
-        "request_text": row.request_text,
-        "notes": row.request_text,
-        "status": row.status,
-        "response_note": row.response_note,
-        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
-        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
-        "evidence_id": str(evidence.id) if evidence else None,
-        "evidence_name": evidence.original_filename if evidence else None,
-        "response_evidence": {
-            "id": str(evidence.id),
-            "name": evidence.original_filename,
-            "verification_status": evidence.verification_status,
-        } if evidence else None,
-    }
 
 
 def _claim_payload(claim: Claim, db: Optional[Session] = None) -> Dict[str, Any]:

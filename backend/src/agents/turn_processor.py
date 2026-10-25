@@ -505,7 +505,6 @@ async def process_claimant_turn(
 
     # Continuous gap/consistency analysis. The phase field below is a legacy UI projection, not workflow authority.
     try:
-        from src.agents.gap_analysis import analyze_claim_gaps
         dynamic_rem = result.get("dynamic_missing") or []
         missing_ev = result.get("missing_evidence") or []
         pending_review = result.get("pending_evidence_review") or []

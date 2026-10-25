@@ -12,9 +12,10 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func, select
 from datetime import datetime, timezone
-from src.api.deps import get_current_user, require_role, resolve_bearer_user, get_claim_or_404
+from src.api.deps import require_role, resolve_bearer_user, get_claim_or_404, serialize_evidence_request as _request_payload
 from src.config import settings
 from src.database.models import Claim, Adjuster, User, ConversationTurn, Policy
 from src.database.hardening_models import (
@@ -33,62 +34,6 @@ router = APIRouter(prefix="/api/v1/adjuster", tags=["Adjuster"])
 # Shared dependency for endpoints using Depends(); also used by _resolve_adjuster below.
 _guard = require_role(["ADJUSTER", "ADMIN"])
 
-def _request_payload(row: ClaimEvidenceRequest, db: Session) -> dict[str, Any]:
-    evidence = (
-        db.query(ClaimEvidence)
-        .filter(ClaimEvidence.request_id == row.id, ClaimEvidence.tenant_id == row.tenant_id)
-        .order_by(ClaimEvidence.created_at.desc())
-        .first()
-    )
-    return {
-        "id": row.id,
-        "claim_id": row.claim_id,
-        "adjuster_id": row.adjuster_id,
-        "request_text": row.request_text,
-        "notes": row.request_text,
-        "status": row.status,
-        "response_note": row.response_note,
-        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
-        "responded_at": row.responded_at.isoformat() if row.responded_at else None,
-        "evidence_id": str(evidence.id) if evidence else None,
-        "evidence_name": evidence.original_filename if evidence else None,
-        "response_evidence": {
-            "id": str(evidence.id),
-            "name": evidence.original_filename,
-            "verification_status": evidence.verification_status,
-        } if evidence else None,
-    }
-
-def _auto_assign_pending(claims:list[Claim], db:Session):
-    changed=False
-    for c in claims:
-        state=dict(c.pipeline_state or {})
-        if c.status not in {"submitted","pending_adjuster"}:
-            continue
-        active = db.query(ClaimAssignment).filter(
-            ClaimAssignment.claim_id == c.id, ClaimAssignment.tenant_id == c.tenant_id, ClaimAssignment.is_active.is_(True)
-        ).first()
-        if active:
-            continue
-        readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
-        if not readiness.get("ready"):
-            continue
-        spec=(c.insurance_type or "").lower()
-        a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.tenant_id==c.tenant_id,Adjuster.specialization==spec).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
-        if not a:
-            a=db.query(Adjuster).filter(Adjuster.is_active==True,Adjuster.tenant_id==c.tenant_id).order_by(Adjuster.claims_assigned.asc(),Adjuster.name.asc()).first()
-        if a:
-            a.claims_assigned=(a.claims_assigned or 0)+1
-            db.add(ClaimAssignment(claim_id=c.id, tenant_id=c.tenant_id or "", adjuster_id=a.id, assigned_by=None, reason="readiness_then_specialization_then_load"))
-            state["assigned_adjuster_id"]=a.id
-            state["assigned_adjuster_name"]=a.name
-            c.pipeline_state=state
-            if c.status == "submitted":
-                c.status="pending_adjuster"
-            changed=True
-    if changed:
-        db.commit()
-
 def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
     claim_tenant = str(getattr(c, "tenant_id", "") or "").strip()
     user_tenant = str(getattr(user, "tenant_id", "") or "").strip()
@@ -96,28 +41,42 @@ def _can_access_claim(c: Claim, user: User, db: Session | None = None) -> bool:
         return False
     if user.role == "ADMIN":
         return True
+
     assigned_adj_id = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
     if assigned_adj_id and assigned_adj_id in {str(user.id)}:
         return True
-    if not assigned_adj_id and getattr(c, "status", None) in {"submitted", "verified", "pending_adjuster", "assigned"}:
-        return True
+
+    adj_ids = {str(user.id)}
     if db is not None:
-        adjuster = db.query(Adjuster).filter(Adjuster.user_id == user.id, Adjuster.tenant_id == c.tenant_id).first()
+        adjuster = db.query(Adjuster).filter(
+            (Adjuster.user_id == user.id) | (Adjuster.id == user.id),
+            Adjuster.tenant_id == c.tenant_id,
+        ).first()
         if adjuster:
-            if assigned_adj_id and assigned_adj_id == adjuster.id:
+            adj_ids.add(str(adjuster.id))
+            if assigned_adj_id and assigned_adj_id == str(adjuster.id):
                 return True
             if db.query(ClaimAssignment).filter(
                 ClaimAssignment.claim_id == c.id,
                 ClaimAssignment.tenant_id == c.tenant_id,
                 ClaimAssignment.adjuster_id == adjuster.id,
+                ClaimAssignment.is_active.is_(True),
             ).first():
                 return True
         if db.query(ClaimAssignment).filter(
             ClaimAssignment.claim_id == c.id,
             ClaimAssignment.tenant_id == c.tenant_id,
             ClaimAssignment.adjuster_id == user.id,
+            ClaimAssignment.is_active.is_(True),
         ).first():
             return True
+
+    # If assigned to another adjuster in pipeline_state, deny
+    if assigned_adj_id and assigned_adj_id not in adj_ids:
+        return False
+
+    if not assigned_adj_id and getattr(c, "status", None) in {"submitted", "verified", "pending_adjuster", "assigned"}:
+        return True
     return False
 
 
@@ -231,10 +190,19 @@ def _format_audit_row(r: ClaimAuditEvent) -> dict[str, Any]:
         "created_at": r.created_at.isoformat(),
     }
 
-def _get_adjuster_relevant_claims(db: Session, user: User, tenant_id: str, statuses: list[str] | None = None) -> tuple[list[Claim], set[str]]:
+def _get_adjuster_relevant_claims(
+    db: Session,
+    user: User,
+    tenant_id: str,
+    statuses: list[str] | None = None,
+    scope: str = "assigned",
+) -> tuple[list[Claim], set[str]]:
     """
     Returns (relevant_claims, assigned_claim_ids) for the given user (Adjuster or Admin).
     Ensures strict type-safety across UUIDs/strings and consistency between Dashboard and Queue.
+    When scope == 'assigned' (default), adjusters receive ONLY claims assigned to them.
+    When scope == 'unassigned', adjusters receive unassigned claims awaiting adjudication.
+    Admins retain oversight across the tenant.
     """
     q = db.query(Claim).filter(Claim.tenant_id == tenant_id)
     if statuses:
@@ -243,36 +211,83 @@ def _get_adjuster_relevant_claims(db: Session, user: User, tenant_id: str, statu
 
     if user.role == "ADMIN":
         assigned_ids = {str(c.id) for c in all_claims}
+        if scope == "unassigned":
+            # For admin inspecting unassigned claims
+            active_assigned_ids = {
+                str(row.claim_id)
+                for row in db.query(ClaimAssignment.claim_id).filter(
+                    ClaimAssignment.tenant_id == tenant_id,
+                    ClaimAssignment.is_active.is_(True),
+                ).all()
+            }
+            unassigned_claims = [
+                c for c in all_claims
+                if str(c.id) not in active_assigned_ids and not (c.pipeline_state or {}).get("assigned_adjuster_id")
+            ]
+            return unassigned_claims, assigned_ids
         return all_claims, assigned_ids
 
     adj_ids = {str(user.id)}
-    adjuster = db.query(Adjuster).filter(
-        Adjuster.user_id == user.id,
+    adjusters = db.query(Adjuster).filter(
+        (Adjuster.user_id == user.id) | (Adjuster.id == user.id),
         Adjuster.tenant_id == tenant_id,
         Adjuster.is_active.is_(True),
-    ).first()
-    if adjuster:
-        adj_ids.add(str(adjuster.id))
+    ).all()
+    for a in adjusters:
+        adj_ids.add(str(a.id))
 
-    assigned_claim_ids = {
+    # Active assignments for THIS adjuster in the DB
+    my_assigned_claim_ids = {
         str(row.claim_id)
-        for row in db.query(ClaimAssignment).filter(
+        for row in db.query(ClaimAssignment.claim_id).filter(
             ClaimAssignment.adjuster_id.in_(list(adj_ids)),
             ClaimAssignment.tenant_id == tenant_id,
             ClaimAssignment.is_active.is_(True),
         ).all()
     }
 
+    # Active assignments for OTHER adjusters in the DB
+    other_assigned_claim_ids = {
+        str(row.claim_id)
+        for row in db.query(ClaimAssignment.claim_id).filter(
+            ~ClaimAssignment.adjuster_id.in_(list(adj_ids)),
+            ClaimAssignment.tenant_id == tenant_id,
+            ClaimAssignment.is_active.is_(True),
+        ).all()
+    }
+
     relevant_claims = []
+    assigned_claim_ids = set()
+
     for c in all_claims:
         cid_str = str(c.id)
-        assigned_to = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
-        is_assigned_to_me = cid_str in assigned_claim_ids or (assigned_to and assigned_to in adj_ids)
+        assigned_to_state = str((c.pipeline_state or {}).get("assigned_adjuster_id") or "")
+
+        # Is this claim assigned to THIS adjuster?
+        is_assigned_to_me = (cid_str in my_assigned_claim_ids) or (
+            bool(assigned_to_state) and (assigned_to_state in adj_ids) and (cid_str not in other_assigned_claim_ids)
+        )
+
+        # Is this claim assigned to ANOTHER adjuster?
+        is_assigned_to_other = (cid_str in other_assigned_claim_ids) or (
+            bool(assigned_to_state) and (assigned_to_state not in adj_ids) and (cid_str not in my_assigned_claim_ids)
+        )
+
+        # Is this claim unassigned?
+        is_unassigned = not is_assigned_to_me and not is_assigned_to_other
+
         if is_assigned_to_me:
             assigned_claim_ids.add(cid_str)
-            relevant_claims.append(c)
-        elif not assigned_to and c.status in {"submitted", "verified", "pending_adjuster", "assigned"}:
-            relevant_claims.append(c)
+
+        if scope == "assigned":
+            if is_assigned_to_me:
+                relevant_claims.append(c)
+        elif scope == "unassigned":
+            if is_unassigned:
+                relevant_claims.append(c)
+        elif scope == "all":
+            if is_assigned_to_me:
+                relevant_claims.append(c)
 
     return relevant_claims, assigned_claim_ids
 
@@ -296,7 +311,7 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
         User.status == "active",
     ).scalar() or 0
 
-    assigned_claims, assigned_ids = _get_adjuster_relevant_claims(db, user, tenant_id)
+    assigned_claims, assigned_ids = _get_adjuster_relevant_claims(db, user, tenant_id, scope="assigned")
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
@@ -336,8 +351,13 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
     }
 
 @router.get("/queue")
-def queue(status: str | None = None, user: User = Depends(_guard), db: Session = Depends(get_db)):
-    """Return tenant-scoped claims with SLA/aging metadata."""
+def queue(
+    status: str | None = None,
+    scope: str = "assigned",
+    user: User = Depends(_guard),
+    db: Session = Depends(get_db),
+):
+    """Return tenant-scoped claims with SLA/aging metadata, scoped to caller's assignment or unassigned pool."""
     valid_queue_statuses = [
         "submitted", "verified", "pending_adjuster", "assigned", "under_review",
         "pending_evidence", "approved", "partially_approved", "rejected", "escalated", "closed",
@@ -346,8 +366,13 @@ def queue(status: str | None = None, user: User = Depends(_guard), db: Session =
     if requested != "all" and requested not in valid_queue_statuses:
         raise HTTPException(status_code=400, detail="Invalid queue status.")
     statuses = valid_queue_statuses if requested == "all" else [requested]
-    
-    claims, _ = _get_adjuster_relevant_claims(db, user, user.tenant_id, statuses)
+
+    valid_scopes = {"assigned", "unassigned", "all"}
+    scope_clean = scope.lower().strip() if scope else "assigned"
+    if scope_clean not in valid_scopes:
+        scope_clean = "assigned"
+
+    claims, _ = _get_adjuster_relevant_claims(db, user, user.tenant_id, statuses, scope=scope_clean)
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
@@ -1060,6 +1085,7 @@ CITATION RULE: For every policy/regulatory/coverage conclusion, include a citati
         ]
     state["copilot_chat"] = existing_chat
     c.pipeline_state = state
+    flag_modified(c, "pipeline_state")
     try:
         db.add(CopilotAnalysis(
             tenant_id=c.tenant_id or "",
@@ -1210,6 +1236,7 @@ Instructions:
     chat = full_history + [user_msg, bot_msg]
     state["copilot_chat"] = chat
     c.pipeline_state = state
+    flag_modified(c, "pipeline_state")
     db.commit()
     return {"ticket_id": ticket_id, "answer": answer, "chat": chat, "sources": source_rows, "citations": citation_rows}
 
@@ -1217,8 +1244,6 @@ Instructions:
 
 class EvidenceRequestCreate(BaseModel):
     request_text: str = Field(..., min_length=5, max_length=4000)
-
-# Consolidated _request_payload defined at top of module
 
 @router.post("/claims/{ticket_id}/evidence-requests")
 def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user: User = Depends(_guard), db: Session = Depends(get_db)):

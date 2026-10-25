@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 from fastapi import HTTPException, status
 from src.config import settings
 from src.utils.logger import app_logger

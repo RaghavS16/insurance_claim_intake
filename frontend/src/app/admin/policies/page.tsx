@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Download, ShieldCheck, FileSpreadsheet, Trash2, AlertTriangle, Inbox, Edit2 } from 'lucide-react';
+import { Plus, Upload, Download, ShieldCheck, FileSpreadsheet, AlertTriangle, Inbox } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Card } from '@/components/ui/Card';

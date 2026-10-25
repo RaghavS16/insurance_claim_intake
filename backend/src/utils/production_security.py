@@ -1,7 +1,6 @@
 """Shared security primitives used by HTTP and WebSocket entry points."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 import jwt
@@ -52,8 +51,3 @@ def token_payload(token: str) -> Optional[dict]:
         return jwt.decode(token, options={"verify_signature": False})
     except Exception:
         return None
-
-def request_bearer_token(authorization: str | None) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    return authorization[7:].strip()

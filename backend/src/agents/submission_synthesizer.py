@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from src.database.models import Claim, ConversationTurn, Policy, User
-from src.database.hardening_models import ClaimEvidence, ClaimRequirement
+from src.database.hardening_models import ClaimEvidence
 from src.utils.logger import app_logger
 
 logger = app_logger

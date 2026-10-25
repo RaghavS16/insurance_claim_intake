@@ -9,7 +9,6 @@ import {
   ShieldCheck,
   Clock,
   CheckCircle2,
-  ChevronRight,
   AlertCircle,
   Pencil,
   Trash2,
@@ -19,7 +18,7 @@ import { AppShell } from '@/components/ui/AppShell';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { BadgeDot, BadgePill } from '@/components/ui/Badge';
+import { BadgeDot } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/Toast';

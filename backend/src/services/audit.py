@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.database.hardening_models import SystemAuditEvent

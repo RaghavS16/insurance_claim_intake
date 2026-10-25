@@ -20,6 +20,8 @@ _local_budget: dict[str, int] = defaultdict(int)
 _BUILTIN_GOVERNED_MODELS = {
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct:groq",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-1.5-flash",
@@ -27,6 +29,7 @@ _BUILTIN_GOVERNED_MODELS = {
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct:together",
     "Qwen/Qwen2.5-7B-Instruct",
 }
 

@@ -4,7 +4,7 @@ from typing import Optional, Any
 
 from sqlalchemy.orm import Session
 
-from src.database.models import Policy, Claim, User
+from src.database.models import Policy, Claim
 
 
 def verify_policy_for_claim(

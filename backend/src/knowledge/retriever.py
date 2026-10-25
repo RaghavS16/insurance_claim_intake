@@ -5,11 +5,8 @@ from .requirements import get_requirements_from_context
 from .store import search, list_policy_documents, get_document_chunks, get_cached_requirement_manifest, save_requirement_manifest
 from .reranker import rerank
 from .policy_compiler import compile_policy_requirements, resolve_requirement_manifest
-import re
 from src.config import settings
 
-class KnowledgeRetrievalError(RuntimeError):
-    pass
 
 def infer_insurance_type_from_query(query: str) -> str | None:
     if not query:

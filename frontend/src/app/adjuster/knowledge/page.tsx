@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Upload, Search, RefreshCw, CheckCircle2, FileText, Plus, AlertTriangle, Inbox, Trash2 } from 'lucide-react';
+import { Upload, Search, CheckCircle2, FileText, AlertTriangle, Inbox } from 'lucide-react';
 import { AppShell } from '@/components/ui/AppShell';
 import { Table, Column } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';

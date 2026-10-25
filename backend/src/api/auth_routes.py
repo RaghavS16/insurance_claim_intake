@@ -23,7 +23,6 @@ from src.utils.validators import validate_email, validate_password_strength, val
 from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email, send_otp_email
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
-from src.api.deps import get_current_user
 
 logger = app_logger
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])

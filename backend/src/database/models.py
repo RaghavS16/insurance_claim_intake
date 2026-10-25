@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON, Index, UniqueConstraint
+from sqlalchemy import String, Boolean, Date, DateTime, Numeric, Float, ForeignKey, Integer, JSON, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 from src.config import settings
