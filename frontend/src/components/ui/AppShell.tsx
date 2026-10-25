@@ -59,10 +59,28 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [rightDrawerOpen, setRightDrawerOpen] = useState(Boolean(rightDrawerContent && !hideRightDrawer));
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [topbarQuery, setTopbarQuery] = useState('');
   const { data: notificationsData, setData: setNotificationsData } = usePolling<any[]>(
     async () => {
       const res = await api.get<any>('/api/v1/notifications');
-      return Array.isArray(res?.items) ? res.items : [];
+      const items = Array.isArray(res?.items) ? res.items : [];
+      if (typeof window !== 'undefined' && user?.id) {
+        const clearedKey = `intelliclaim_cleared_notifs_${user.id}`;
+        const readKey = `intelliclaim_read_notifs_${user.id}`;
+        try {
+          const clearedIds: string[] = JSON.parse(sessionStorage.getItem(clearedKey) || '[]');
+          const readIds: string[] = JSON.parse(sessionStorage.getItem(readKey) || '[]');
+          return items
+            .filter((it: any) => !clearedIds.includes(it.id))
+            .map((it: any) => ({
+              ...it,
+              unread: readIds.includes(it.id) ? false : it.unread,
+            }));
+        } catch {
+          return items;
+        }
+      }
+      return items;
     },
     {
       intervalMs: 30000,
@@ -157,6 +175,30 @@ export const AppShell: React.FC<AppShellProps> = ({
         { label: 'Policies Management', href: '/admin/policies', icon: ShieldCheck },
         { label: 'System Audit Trail', href: '/admin/audit', icon: Activity },
       ];
+    }
+  };
+
+  const handleTopbarSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const q = topbarQuery.trim();
+      if (!q) return;
+      if (q.toUpperCase().startsWith('CLM-') || q.toUpperCase().startsWith('CLAIM-')) {
+        if (role === 'ADJUSTER' || role === 'ADMIN') {
+          router.push(`/adjuster/claims/${encodeURIComponent(q)}`);
+        } else {
+          router.push(`/claimant/claims/${encodeURIComponent(q)}`);
+        }
+      } else if (q.toLowerCase().includes('polic')) {
+        router.push(role === 'ADMIN' ? '/admin/policies' : (role === 'ADJUSTER' ? '/adjuster/policies' : '/claimant/policies'));
+      } else if (q.toLowerCase().includes('know') || q.toLowerCase().includes('rag') || q.toLowerCase().includes('doc')) {
+        router.push('/adjuster/knowledge');
+      } else if (q.toLowerCase().includes('audit')) {
+        router.push('/admin/audit');
+      } else if (q.toLowerCase().includes('queue') || q.toLowerCase().includes('claim')) {
+        router.push(role === 'ADJUSTER' ? '/adjuster/queue' : (role === 'ADMIN' ? '/admin/claims' : '/claimant/claims'));
+      } else {
+        router.push(role === 'ADJUSTER' ? `/adjuster/queue` : `/claimant/claims`);
+      }
     }
   };
 
@@ -377,6 +419,9 @@ export const AppShell: React.FC<AppShellProps> = ({
                 ref={searchInputRef}
                 type="text"
                 className="snow-input"
+                value={topbarQuery}
+                onChange={(e) => setTopbarQuery(e.target.value)}
+                onKeyDown={handleTopbarSearch}
                 style={{ height: 34, paddingLeft: 30, paddingRight: 40, width: 180, fontSize: 13 }}
                 placeholder="Search..."
               />
@@ -481,8 +526,13 @@ export const AppShell: React.FC<AppShellProps> = ({
                         }}
                         onClick={async () => {
                           setNotifications((prev: any[]) => prev.map((n: any) => ({ ...n, unread: false })));
+                          if (typeof window !== 'undefined' && user?.id) {
+                            const readKey = `intelliclaim_read_notifs_${user.id}`;
+                            const allIds = notifications.map((n: any) => n.id);
+                            sessionStorage.setItem(readKey, JSON.stringify(allIds));
+                          }
                           try {
-                            await api.post('/api/v1/notifications/mark-read');
+                            await api.post('/api/v1/notifications/mark-read', {});
                           } catch (err) {
                             console.error('Failed to persist mark-read notification state', err);
                           }
@@ -502,10 +552,15 @@ export const AppShell: React.FC<AppShellProps> = ({
                       notifications.map((n) => (
                         <div
                           key={n.id}
+                          onClick={() => {
+                            setNotificationsOpen(false);
+                            if (n.href) router.push(n.href);
+                          }}
                           style={{
                             padding: '12px 16px',
                             borderBottom: '1px solid #F4F5F7',
                             backgroundColor: n.unread ? '#FBFBFC' : '#FFFFFF',
+                            cursor: n.href ? 'pointer' : 'default',
                             transition: 'background-color 0.1s ease',
                           }}
                         >
@@ -531,9 +586,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                         type="button"
                         style={{ background: 'none', border: 'none', color: '#EF4444', fontSize: 12, cursor: 'pointer' }}
                         onClick={async () => {
+                          if (typeof window !== 'undefined' && user?.id) {
+                            const clearedKey = `intelliclaim_cleared_notifs_${user.id}`;
+                            const allIds = notifications.map((n: any) => n.id);
+                            sessionStorage.setItem(clearedKey, JSON.stringify(allIds));
+                          }
                           setNotifications([]);
                           try {
-                            await api.post('/api/v1/notifications/clear');
+                            await api.post('/api/v1/notifications/clear', {});
                           } catch (err) {
                             console.error('Failed to persist clear notification state', err);
                           }
@@ -647,8 +707,9 @@ export const AppShell: React.FC<AppShellProps> = ({
             {/* Mobile Nav Links */}
             <nav className="snow-flex-col snow-gap-1" style={{ flex: 1 }}>
               {navLinks.map((link) => {
+                const basePath = link.href.split('?')[0];
+                const isActive = pathname === basePath || pathname.startsWith(basePath + '/');
                 const Icon = link.icon;
-                const isActive = pathname === link.href || pathname.startsWith(link.href + '/');
 
                 return (
                   <Link

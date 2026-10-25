@@ -733,7 +733,7 @@ def _run_deterministic_copilot_prechecks(
         sla_mandates.append("Surveyor Report: Within 15 days of appointment.")
         sla_mandates.append("Settlement Offer: Within 7 days of surveyor report receipt.")
         sla_mandates.append("Compulsory Deductible: Rs 1,000 (engines <= 1500cc) / Rs 2,000 (engines > 1500cc).")
-    elif ins_type in ("health", "senior_citizen_health"):
+    elif ins_type in ("health", "senior_health", "senior_citizen_health"):
         sla_mandates.append("Cashless Pre-Authorization Decision: Within 1 hour of request (IRDAI 2024).")
         sla_mandates.append("Cashless Final Discharge Authorization: Within 3 hours of discharge summary submission.")
         sla_mandates.append("Reimbursement Claim Settlement: Within 15 days of last document submission.")
@@ -826,11 +826,22 @@ def _run_deterministic_copilot_prechecks(
     }
 
 @router.get("/claims/{ticket_id}/copilot")
-async def copilot(ticket_id: str, user: User = Depends(_guard), db: Session = Depends(get_db)):
+async def copilot(ticket_id: str, refresh: bool = False, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     if not _can_access_claim(c, user, db):
         raise HTTPException(status_code=403, detail="This claim is not assigned to you.")
     state = dict(c.pipeline_state or {})
+    cached_copilot = state.get("copilot")
+    cached_version = state.get("copilot_state_version")
+    if not refresh and cached_copilot and cached_version == getattr(c, "state_version", 1):
+        return {
+            "ticket_id": ticket_id,
+            "analysis": cached_copilot,
+            "status": "ready",
+            "sources": state.get("knowledge_sources") or [],
+            "chat": state.get("copilot_chat") or [],
+            "cached": True,
+        }
     data = state.get("extracted_data") or {}
 
     # Context Resolution: Resolve linked Policy row
@@ -1023,6 +1034,7 @@ CITATION RULE: For every policy/regulatory/coverage conclusion, include a citati
         parsed = det_baseline
 
     state["copilot"] = parsed
+    state["copilot_state_version"] = getattr(c, "state_version", 1)
     state["knowledge_sources"] = source_rows
 
     existing_chat = list(state.get("copilot_chat") or [])

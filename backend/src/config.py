@@ -1,6 +1,6 @@
 """Centralized application settings and environment validation."""
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 import os
 from urllib.parse import urlparse
 import socket
@@ -179,6 +179,24 @@ class Settings(BaseSettings):
     @property
     def allowed_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()] or ["http://localhost:3000"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_raw_env_inputs(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        sanitized = {}
+        for k, v in data.items():
+            if isinstance(v, str):
+                cleaned = v.strip()
+                if cleaned.startswith("[") and cleaned.endswith("]"):
+                    cleaned = cleaned[1:-1].strip()
+                if "(" in cleaned and (k in ("EMBEDDING_PROVIDER", "LLM_PROVIDER", "FAST_LLM_PROVIDER", "REASONING_LLM_PROVIDER", "PUBLIC_APP_URL") or "URL" in k or "KEY" in k or "TOKEN" in k):
+                    cleaned = cleaned.split("(", 1)[0].strip()
+                sanitized[k] = cleaned
+            else:
+                sanitized[k] = v
+        return sanitized
 
     @field_validator("ENVIRONMENT")
     @classmethod

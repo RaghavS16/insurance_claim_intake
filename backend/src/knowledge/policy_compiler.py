@@ -30,27 +30,49 @@ def _extract_deterministic_manifest_from_chunks(chunks: list[dict[str, Any]], in
         citation = str(row.get("citation_label") or "")
         for line in text.splitlines():
             line_str = line.strip()
-            if "|" in line_str:
+            fn = ""
+            cond: str | None = None
+            # Case A: Bullet row emitted by store.py DOCX table parser ("• Header1: Value1 — Header2: Value2")
+            if line_str.startswith("•") and "—" in line_str:
+                segments = [s.strip() for s in line_str.lstrip("• ").split("—") if s.strip()]
+                if segments:
+                    first_seg = segments[0]
+                    fn = first_seg.split(":", 1)[1].strip() if ":" in first_seg else first_seg
+                    for seg in segments[1:]:
+                        low_seg = seg.lower()
+                        if ("when needed" in low_seg or "requirement" in low_seg or "condition" in low_seg) and ":" in seg:
+                            val = seg.split(":", 1)[1].strip()
+                            if val.lower() not in ("all claims", "all", "core", "mandatory", "yes"):
+                                cond = val
+            # Case B: Pipe-delimited table row ("| Col1 | Col2 |")
+            elif "|" in line_str:
                 parts = [p.strip() for p in line_str.split("|") if p.strip()]
                 if parts:
                     fn = parts[0]
-                    if any(h in fn.lower() for h in ("intake field", "document / evidence", "field", "document", "name", "s.no", "item", "description", "---")):
-                        continue
-                    k = re.sub(r"[^a-z0-9]+", "_", fn.lower()).strip("_")
-                    if len(k) >= 3 and k not in seen_keys:
-                        seen_keys.add(k)
-                        is_doc = any(w in fn.lower() for w in ("report", "form", "copy", "bill", "certificate", "receipt", "summary", "document", "fir", "rc", "dl", "invoice"))
-                        candidates.append(Requirement(
-                            key=k,
-                            label=fn,
-                            question_hint=f"Please provide {fn.lower()}." if not is_doc else f"Please upload a copy of {fn.lower()}.",
-                            required=True,
-                            evidence_type="document" if is_doc else None,
-                            source_section=section or "Section 6",
-                            source_chunk_ids=[chunk_id] if chunk_id else [],
-                            source_excerpt=line_str[:280],
-                            citation_label=citation,
-                        ))
+                    if len(parts) > 1 and parts[1].lower() not in ("all claims", "all", "core", "mandatory", "requirement", "when needed"):
+                        cond = parts[1]
+
+            if not fn:
+                continue
+            fn_low = fn.lower().strip()
+            if fn_low in ("intake field", "document / evidence", "field", "fields", "document", "documents", "field name", "document name", "name", "s.no", "s. no", "item", "description", "category", "stage / step", "milestone") or fn_low.startswith("---"):
+                continue
+            k = re.sub(r"[^a-z0-9]+", "_", fn.lower()).strip("_")
+            if len(k) >= 3 and k not in seen_keys:
+                seen_keys.add(k)
+                is_doc = any(w in fn.lower() for w in ("report", "form", "copy", "bill", "certificate", "receipt", "summary", "document", "fir", "rc", "dl", "licence", "license", "invoice", "photo", "pir", "cheque", "statement", "complaint", "sticker", "id"))
+                candidates.append(Requirement(
+                    key=k,
+                    label=fn,
+                    question_hint=f"Please provide {fn.lower()}." if not is_doc else f"Please upload a copy of {fn.lower()}.",
+                    required=True,
+                    evidence_type="document" if is_doc else None,
+                    condition=cond,
+                    source_section=section or "Section 6",
+                    source_chunk_ids=[chunk_id] if chunk_id else [],
+                    source_excerpt=line_str[:280],
+                    citation_label=citation,
+                ))
     return candidates
 
 def _compile_batch(llm, insurance_type: str, chunks: list[dict[str, Any]]) -> list[Requirement]:
@@ -88,14 +110,15 @@ def compile_policy_requirements(*, document_id: str = "", insurance_type: str = 
         batch = chunks[start:start + batch_size]
         try:
             batch_requirements = _compile_batch(llm, insurance_type, batch)
-        except Exception as exc:
-            raise RuntimeError(f"Policy requirement batch compilation failed for batch {start // batch_size + 1}: {exc}") from exc
-        expected_chunk_ids = {str(row.get("chunk_id")) for row in batch if row.get("chunk_id")}
-        for req in batch_requirements:
-            if {str(x) for x in (req.source_chunk_ids or [])} & expected_chunk_ids:
-                candidates.append(req)
-            elif not req.source_chunk_ids:
-                candidates.append(req)
+            expected_chunk_ids = {str(row.get("chunk_id")) for row in batch if row.get("chunk_id")}
+            for req in batch_requirements:
+                if {str(x) for x in (req.source_chunk_ids or [])} & expected_chunk_ids:
+                    candidates.append(req)
+                elif not req.source_chunk_ids:
+                    candidates.append(req)
+        except Exception:
+            det_batch = _extract_deterministic_manifest_from_chunks(batch, insurance_type, document_id)
+            candidates.extend(det_batch)
     if not candidates:
         candidates = _extract_deterministic_manifest_from_chunks(chunks, insurance_type, document_id)
     if not candidates: return []

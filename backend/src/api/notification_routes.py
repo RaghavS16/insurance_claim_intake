@@ -1,7 +1,7 @@
 """Real-time role-based In-App Notification Center API with persistent user states."""
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -176,7 +176,7 @@ def get_user_notifications(
 
 @router.post("/mark-read")
 def mark_notifications_read(
-    payload: Optional[NotificationActionPayload] = None,
+    payload: Optional[NotificationActionPayload] = Body(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, str]:
@@ -217,7 +217,7 @@ def mark_notifications_read(
 
 @router.post("/clear")
 def clear_notifications(
-    payload: Optional[NotificationActionPayload] = None,
+    payload: Optional[NotificationActionPayload] = Body(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, str]:

@@ -433,11 +433,14 @@ export default function ClaimantDashboardPage() {
                         background: 'none',
                         border: 'none',
                         padding: '6px 8px',
+                        minWidth: 34,
+                        minHeight: 34,
                         borderRadius: 6,
                         cursor: 'pointer',
                         color: '#71717A',
                         display: 'flex',
                         alignItems: 'center',
+                        justifyContent: 'center',
                         transition: 'background-color 0.1s ease',
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F4F5F7')}
@@ -454,11 +457,14 @@ export default function ClaimantDashboardPage() {
                         background: 'none',
                         border: 'none',
                         padding: '6px 8px',
+                        minWidth: 34,
+                        minHeight: 34,
                         borderRadius: 6,
                         cursor: 'pointer',
                         color: '#EF4444',
                         display: 'flex',
                         alignItems: 'center',
+                        justifyContent: 'center',
                         transition: 'background-color 0.1s ease',
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#FEE2E2')}

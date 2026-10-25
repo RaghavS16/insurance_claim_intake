@@ -173,12 +173,39 @@ export default function ClaimDetailsPage({
 
   const evidenceList = Array.isArray(claim.evidence) ? claim.evidence : [];
 
+  const statusStr = (claim.status || '').toLowerCase();
+  let currentStep = 1;
+  let decisionLabel = 'Decision';
+  if (statusStr === 'approved' || statusStr === 'settled') {
+    currentStep = 5;
+    decisionLabel = 'Approved';
+  } else if (statusStr === 'rejected' || statusStr === 'denied') {
+    currentStep = 5;
+    decisionLabel = 'Rejected';
+  } else if (statusStr === 'under_review' || statusStr === 'pending_evidence') {
+    currentStep = 4;
+  } else if (claim.assigned_adjuster?.name || statusStr === 'assigned') {
+    currentStep = 3;
+  } else if (claim.policy_number || statusStr === 'verified') {
+    currentStep = 2;
+  } else {
+    currentStep = 1;
+  }
+
+  const steps = [
+    { label: 'Submitted', desc: 'Claim received' },
+    { label: 'Policy Verified', desc: 'Coverage active' },
+    { label: 'Adjuster Assigned', desc: claim.assigned_adjuster?.name ? claim.assigned_adjuster.name : 'Queue allocation' },
+    { label: 'In Review', desc: 'Evidence & facts' },
+    { label: decisionLabel, desc: statusStr === 'approved' ? 'Settlement ready' : (statusStr === 'rejected' ? 'Declined' : 'Pending verdict') },
+  ];
+
   return (
     <AppShell
       breadcrumbs={['Claimant', 'Claims', ticketId]}
       activeTitle={`Claim File #${ticketId}`}
     >
-      <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 20 }}>
+      <div className="snow-action-bar" style={{ marginBottom: 20 }}>
         <div className="snow-flex snow-items-center snow-gap-3">
           <Link href="/claimant/claims">
             <Button size="sm" variant="secondary" icon={<ArrowLeft size={14} />}>
@@ -188,7 +215,7 @@ export default function ClaimDetailsPage({
           <LiveIndicator secondsAgo={secondsAgo} isRefreshing={isRefreshing} />
         </div>
 
-        <div className="snow-flex snow-gap-2">
+        <div className="snow-action-buttons snow-flex snow-gap-2">
           {(claim.status === 'draft' || claim.status === 'pending_confirmation') && (
             <Button
               size="sm"
@@ -220,6 +247,56 @@ export default function ClaimDetailsPage({
         </div>
       </div>
 
+      {/* 5-Stage Claim Lifecycle Progress Stepper */}
+      <Card style={{ marginBottom: 24, padding: '18px 24px' }}>
+        <div className="snow-flex snow-justify-between snow-items-center" style={{ marginBottom: 14 }}>
+          <span className="snow-body" style={{ fontWeight: 700, fontSize: 13, color: '#1E293B' }}>
+            Claim Lifecycle Progress
+          </span>
+          <span className="snow-caption" style={{ color: '#64748B', fontSize: 12 }}>
+            Stage {currentStep} of 5
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, position: 'relative' }}>
+          {steps.map((st, idx) => {
+            const stepNum = idx + 1;
+            const isCompleted = stepNum < currentStep || (stepNum === 5 && currentStep === 5);
+            const isCurrent = stepNum === currentStep && currentStep < 5;
+            return (
+              <div key={idx} style={{ textAlign: 'center', position: 'relative' }}>
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    margin: '0 auto 6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    backgroundColor: isCompleted
+                      ? (stepNum === 5 && statusStr === 'rejected' ? '#EF4444' : '#10B981')
+                      : (isCurrent ? '#007AFF' : '#E2E8F0'),
+                    color: isCompleted || isCurrent ? '#FFFFFF' : '#64748B',
+                    boxShadow: isCurrent ? '0 0 0 4px rgba(0, 122, 255, 0.15)' : 'none',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {isCompleted && stepNum < 5 ? '✓' : stepNum}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: isCurrent ? 700 : 600, color: isCurrent ? '#007AFF' : '#1E293B' }}>
+                  {st.label}
+                </div>
+                <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>
+                  {st.desc}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
       {/* Adjuster Pending Request Alert Banner */}
       {claim.pending_request && (
         <div
@@ -249,7 +326,7 @@ export default function ClaimDetailsPage({
       )}
 
       {/* Claim Overview Anatomy */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 24 }}>
+      <div className="snow-claim-detail-grid">
         <div className="snow-flex-col snow-gap-6">
           <Card title="Incident Findings & Loss Summary">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>

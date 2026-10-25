@@ -107,7 +107,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             "Governs terms of coverage, claim procedures, loss adjudication guidelines, exclusions, and statutory compliance."
         )
     try:
-        return await asyncio.to_thread(
+        res = await asyncio.to_thread(
             ingest_document,
             content=raw_text.encode("utf-8"),
             filename=payload.source_name,
@@ -121,6 +121,14 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
             tenant_id=str(user.tenant_id or ""),
             jurisdiction=payload.jurisdiction,
         )
+        if isinstance(res, dict) and res.get("document_id"):
+            from database._db_helpers import SessionLocal
+            db = SessionLocal()
+            try:
+                _auto_publish_and_compile(db, str(user.tenant_id or ""), str(res["document_id"]), str(user.id))
+            finally:
+                db.close()
+        return res
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

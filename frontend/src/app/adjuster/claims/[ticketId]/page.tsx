@@ -147,10 +147,11 @@ export default function AdjusterClaimWorkspacePage({
     }
   };
 
-  const fetchCopilotSynopsis = async () => {
+  const fetchCopilotSynopsis = async (forceRefresh = false) => {
     setFetchingCopilot(true);
     try {
-      const res = await api.get<any>(`/api/v1/adjuster/claims/${ticketId}/copilot`);
+      const endpoint = forceRefresh ? `/api/v1/adjuster/claims/${ticketId}/copilot?refresh=true` : `/api/v1/adjuster/claims/${ticketId}/copilot`;
+      const res = await api.get<any>(endpoint);
       const synopsis = res?.analysis || res?.copilot || (res?.executive_summary ? res : null);
       if (synopsis) {
         setCopilotSynopsis(synopsis);
@@ -438,7 +439,7 @@ export default function AdjusterClaimWorkspacePage({
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={fetchCopilotSynopsis}
+                          onClick={() => fetchCopilotSynopsis(true)}
                           disabled={fetchingCopilot}
                           icon={<Sparkles size={14} color="#7C3AED" />}
                         >
@@ -457,7 +458,7 @@ export default function AdjusterClaimWorkspacePage({
                             </div>
                           </div>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                          <div className="snow-copilot-kpi-grid">
                             <div style={{ padding: '10px 12px', backgroundColor: '#FAFAFB', borderRadius: 8, border: '1px solid #E5E7EB' }}>
                               <span className="snow-caption" style={{ color: '#6B7280' }}>Recommendation</span>
                               <div className="snow-body" style={{ fontWeight: 700, textTransform: 'uppercase', color: (copilotSynopsis.decision_recommendation || copilotSynopsis.recommendation) === 'approve' ? '#059669' : '#D97706' }}>
@@ -519,7 +520,7 @@ export default function AdjusterClaimWorkspacePage({
                         </div>
                       ) : (
                         <div style={{ padding: 16, textAlign: 'center', color: '#6B7280' }}>
-                          <Button size="sm" variant="secondary" onClick={fetchCopilotSynopsis} disabled={fetchingCopilot}>
+                          <Button size="sm" variant="secondary" onClick={() => fetchCopilotSynopsis(true)} disabled={fetchingCopilot}>
                             {fetchingCopilot ? 'Generating Copilot Analysis...' : 'Generate AI Copilot Analysis'}
                           </Button>
                         </div>
@@ -1018,7 +1019,7 @@ export default function AdjusterClaimWorkspacePage({
           </div>
 
           <Input
-            label="Settlement Approved Amount ($)"
+            label="Settlement Approved Amount (₹)"
             type="number"
             value={payoutAmount}
             onChange={(e) => setPayoutAmount(e.target.value)}

@@ -72,6 +72,17 @@ def _heuristic_intent(text: str) -> ChatIntent:
 
 def classify_turn(text: str, known_facts: Dict[str, Any] | None = None) -> ChatIntent:
     fallback = _heuristic_intent(text)
+    # Heuristic intent is fast and deterministic; return immediately when signals are detected to prevent LLM rate limits
+    if (
+        fallback.is_question
+        or fallback.wants_to_file
+        or fallback.wants_status
+        or fallback.wants_policy_explanation
+        or fallback.wants_human
+        or fallback.is_claim_input
+        or not _clean(text)
+    ):
+        return fallback
     try:
         prompt = (
             "Classify this claimant message. It can contain both a question and claim facts. "

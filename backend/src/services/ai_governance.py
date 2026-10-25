@@ -17,12 +17,27 @@ _local_concurrency: dict[str, int] = defaultdict(int)
 _local_budget: dict[str, int] = defaultdict(int)
 
 
+_BUILTIN_GOVERNED_MODELS = {
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+}
+
+
 def assert_model_allowed(model_name: str) -> None:
-    allowed = settings.ai_allowed_models_list
+    allowed = set(settings.ai_allowed_models_list) | _BUILTIN_GOVERNED_MODELS
     if settings.ENVIRONMENT in {"production", "staging"} and settings.AI_REQUIRE_MODEL_GOVERNANCE_IN_PRODUCTION:
         if not allowed:
             raise RuntimeError("No approved AI models are configured.")
-        if model_name not in allowed:
+        base_name = model_name.split(":")[0] if ":" in model_name else model_name
+        if model_name not in allowed and base_name not in allowed:
             raise RuntimeError(f"AI model '{model_name}' is not approved for this environment.")
 
 

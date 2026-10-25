@@ -1,9 +1,11 @@
-"""Centralized LLM factory with separate low-latency and reasoning profiles."""
+"""Centralized LLM factory with separate low-latency and reasoning profiles, multi-provider failover, and prompt caching."""
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import time
+from collections import OrderedDict, defaultdict
 from typing import Any, Callable, Generic, TypeVar, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -42,6 +44,90 @@ def is_transient_llm_error(exc: BaseException) -> bool:
     ))
 
 
+# ---------------------------------------------------------------------------
+# Multi-Key Rotation
+# ---------------------------------------------------------------------------
+_KEY_INDEX: dict[str, int] = defaultdict(int)
+
+
+def _split_keys(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _rotate_key(provider: str, raw: str | None) -> str:
+    keys = _split_keys(raw)
+    if not keys:
+        return ""
+    idx = _KEY_INDEX[provider] % len(keys)
+    _KEY_INDEX[provider] += 1
+    return keys[idx]
+
+
+# ---------------------------------------------------------------------------
+# Circuit Breaker Tracking
+# ---------------------------------------------------------------------------
+_CIRCUIT_COOLDOWN_UNTIL: dict[str, float] = {}
+
+
+def _get_candidate_key(candidate: Any) -> str:
+    model = getattr(candidate, "model", None) or getattr(candidate, "model_name", None) or type(candidate).__name__
+    return str(model)
+
+
+def _is_in_cooldown(key: str) -> bool:
+    cooldown = _CIRCUIT_COOLDOWN_UNTIL.get(key, 0.0)
+    return time.time() < cooldown
+
+
+def _trip_circuit(key: str, exc: BaseException) -> None:
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    now = time.time()
+    if status == 402 or "402" in text or "credit" in text or "quota" in text:
+        cooldown_duration = 300.0  # 5 minutes for quota/credit exhaustion
+    else:
+        cooldown_duration = 45.0   # 45 seconds for 429/503/timeout
+    _CIRCUIT_COOLDOWN_UNTIL[key] = now + cooldown_duration
+    logger.warning("Circuit breaker tripped for '%s': in cooldown for %.1fs (%s)", key, cooldown_duration, exc)
+
+
+# ---------------------------------------------------------------------------
+# Content-Addressable In-Memory Prompt Cache
+# ---------------------------------------------------------------------------
+class _PromptCache:
+    def __init__(self, maxsize: int = 512, ttl_seconds: float = 3600.0):
+        self.maxsize = maxsize
+        self.ttl = ttl_seconds
+        self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
+
+    def _hash_key(self, prompt: Any, extra: str = "") -> str:
+        prompt_repr = str(prompt)
+        return hashlib.sha256((prompt_repr + "::" + extra).encode("utf-8")).hexdigest()
+
+    def get(self, prompt: Any, extra: str = "") -> Any | None:
+        key = self._hash_key(prompt, extra)
+        if key in self._cache:
+            ts, val = self._cache[key]
+            if time.time() - ts < self.ttl:
+                self._cache.move_to_end(key)
+                return val
+            del self._cache[key]
+        return None
+
+    def set(self, prompt: Any, value: Any, extra: str = "") -> None:
+        key = self._hash_key(prompt, extra)
+        if key in self._cache:
+            del self._cache[key]
+        elif len(self._cache) >= self.maxsize:
+            self._cache.popitem(last=False)
+        self._cache[key] = (time.time(), value)
+
+
+_PROMPT_CACHE = _PromptCache()
+
+
 def invoke_with_retry(operation: Callable[[], R], *, operation_name: str, attempts: int | None = None) -> R:
     """Run an LLM operation with bounded exponential backoff for transient failures."""
     last_exc: BaseException | None = None
@@ -67,9 +153,9 @@ def invoke_with_retry(operation: Callable[[], R], *, operation_name: str, attemp
 
 
 class _GeminiJsonStructured(Generic[T]):
-    """Parse JSON directly from Gemini without automatic function calling."""
+    """Parse JSON directly without automatic function calling."""
 
-    def __init__(self, model: ChatGoogleGenerativeAI, schema: type[T]):
+    def __init__(self, model: Any, schema: type[T]):
         self.model = model
         self.schema = schema
 
@@ -122,33 +208,71 @@ class _ResilientStructured(Generic[T]):
     def __init__(self, resilient_model: "ResilientChatModel", schema: type[T]):
         self.resilient_model = resilient_model
         self.schema = schema
-        self._gemini_structured = _GeminiJsonStructured(resilient_model.primary, schema)
 
     def invoke(self, prompt: Any) -> T:
-        try:
-            return self._gemini_structured.invoke(prompt)
-        except Exception as exc:
-            if (
-                settings.AI_ALLOW_LOCAL_FALLBACK
-                and (
-                    is_transient_llm_error(exc)
-                    or "getaddrinfo" in str(exc).lower()
-                    or isinstance(exc, (LLMTransientError, OSError))
-                )
-            ):
-                logger.warning("Primary structured LLM failed: %s; using governed local fallback.", exc)
-                record_ai_fallback(operation="structured")
-                fb = self.resilient_model.get_fallback()
-                return structured_output(fb, self.schema).invoke(prompt)
-            raise
+        schema_name = getattr(self.schema, "__name__", "Structured")
+        cached = _PROMPT_CACHE.get(prompt, extra=schema_name)
+        if cached is not None:
+            return cached
+
+        candidates = [lambda: self.resilient_model.primary]
+        if self.resilient_model.candidate_builders:
+            candidates.extend(self.resilient_model.candidate_builders)
+        if self.resilient_model.fallback_builder:
+            candidates.append(self.resilient_model.fallback_builder)
+
+        last_exc: BaseException | None = None
+        for c_fn in candidates:
+            if c_fn is self.resilient_model.fallback_builder and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                continue
+            try:
+                c_inst = c_fn() if callable(c_fn) else c_fn
+            except Exception as e:
+                logger.debug("Structured candidate init skipped: %s", e)
+                continue
+
+            c_key = _get_candidate_key(c_inst)
+            if _is_in_cooldown(c_key):
+                logger.debug("Skipping candidate '%s' in cooldown", c_key)
+                continue
+
+            is_local = "ollama" in c_key.lower() or isinstance(c_inst, ChatOllama)
+            if is_local and settings.ENVIRONMENT in {"production", "staging"} and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                raise RuntimeError("Local Ollama fallback is disabled by AI governance.")
+
+            try:
+                helper = _GeminiJsonStructured(c_inst, self.schema)
+                res = helper.invoke(prompt)
+                _PROMPT_CACHE.set(prompt, res, extra=schema_name)
+                return res
+            except Exception as exc:
+                last_exc = exc
+                _trip_circuit(c_key, exc)
+                if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                    raise
+                if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                    record_ai_fallback(operation="structured")
+                    logger.warning("Structured candidate '%s' failed: %s; failing over (0ms)", c_key, exc)
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No candidate LLM available for structured output.")
 
 
 class ResilientChatModel:
-    """Wraps primary cloud chat model with seamless fallback to local Ollama."""
+    """Wraps primary cloud chat model with circuit breaker, multi-provider failover, and prompt caching."""
 
-    def __init__(self, primary: Any, fallback_builder: Callable[[], BaseChatModel]):
+    def __init__(
+        self,
+        primary: Any,
+        fallback_builder: Callable[[], BaseChatModel] | None = None,
+        candidate_builders: list[Callable[[], BaseChatModel]] | None = None,
+    ):
         self.primary = primary
-        self.fallback_builder = fallback_builder
+        self.fallback_builder = fallback_builder or (lambda: _build_ollama())
+        self.candidate_builders = candidate_builders or []
         self._fallback_instance: BaseChatModel | None = None
 
     def get_fallback(self) -> BaseChatModel:
@@ -157,45 +281,104 @@ class ResilientChatModel:
         return self._fallback_instance
 
     def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return self.primary.invoke(prompt, *args, **kwargs)
-        except Exception as exc:
-            if (
-                settings.AI_ALLOW_LOCAL_FALLBACK
-                and (
-                    is_transient_llm_error(exc)
-                    or "getaddrinfo" in str(exc).lower()
-                    or isinstance(exc, (LLMTransientError, OSError))
-                )
-            ):
-                logger.warning("Primary LLM invocation failed: %s; using governed local fallback.", exc)
-                record_ai_fallback(operation="sync")
-                return self.get_fallback().invoke(prompt, *args, **kwargs)
-            raise
+        cached = _PROMPT_CACHE.get(prompt)
+        if cached is not None:
+            return cached
+
+        candidates = [lambda: self.primary]
+        if self.candidate_builders:
+            candidates.extend(self.candidate_builders)
+        if self.fallback_builder:
+            candidates.append(self.fallback_builder)
+
+        last_exc: BaseException | None = None
+        for c_fn in candidates:
+            if c_fn is self.fallback_builder and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                continue
+            try:
+                c_inst = c_fn() if callable(c_fn) else c_fn
+            except Exception as e:
+                logger.debug("Candidate initialization skipped: %s", e)
+                continue
+
+            c_key = _get_candidate_key(c_inst)
+            if _is_in_cooldown(c_key):
+                logger.debug("Candidate '%s' in circuit breaker cooldown; skipping immediately", c_key)
+                continue
+
+            is_local = "ollama" in c_key.lower() or isinstance(c_inst, ChatOllama)
+            if is_local and settings.ENVIRONMENT in {"production", "staging"} and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                raise RuntimeError("Local Ollama fallback is disabled by AI governance.")
+
+            try:
+                res = c_inst.invoke(prompt, *args, **kwargs)
+                _PROMPT_CACHE.set(prompt, res)
+                return res
+            except Exception as exc:
+                last_exc = exc
+                _trip_circuit(c_key, exc)
+                if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                    raise
+                if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                    record_ai_fallback(operation="sync")
+                    logger.warning("LLM candidate '%s' transient error: %s; failing over immediately (0ms)", c_key, exc)
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No candidate LLM available.")
 
     async def ainvoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
-        try:
-            ainvoke_fn = getattr(self.primary, "ainvoke", None)
-            if callable(ainvoke_fn):
-                return await ainvoke_fn(prompt, *args, **kwargs)
-            return self.invoke(prompt, *args, **kwargs)
-        except Exception as exc:
-            if (
-                settings.AI_ALLOW_LOCAL_FALLBACK
-                and (
-                    is_transient_llm_error(exc)
-                    or "getaddrinfo" in str(exc).lower()
-                    or isinstance(exc, (LLMTransientError, OSError))
-                )
-            ):
-                logger.warning("Primary LLM ainvoke failed: %s; using governed local fallback.", exc)
-                record_ai_fallback(operation="async")
-                fb = self.get_fallback()
-                fb_ainvoke = getattr(fb, "ainvoke", None)
-                if callable(fb_ainvoke):
-                    return await fb_ainvoke(prompt, *args, **kwargs)
-                return fb.invoke(prompt, *args, **kwargs)
-            raise
+        cached = _PROMPT_CACHE.get(prompt)
+        if cached is not None:
+            return cached
+
+        candidates = [lambda: self.primary]
+        if self.candidate_builders:
+            candidates.extend(self.candidate_builders)
+        if self.fallback_builder:
+            candidates.append(self.fallback_builder)
+
+        last_exc: BaseException | None = None
+        for c_fn in candidates:
+            if c_fn is self.fallback_builder and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                continue
+            try:
+                c_inst = c_fn() if callable(c_fn) else c_fn
+            except Exception as e:
+                continue
+
+            c_key = _get_candidate_key(c_inst)
+            if _is_in_cooldown(c_key):
+                continue
+
+            is_local = "ollama" in c_key.lower() or isinstance(c_inst, ChatOllama)
+            if is_local and settings.ENVIRONMENT in {"production", "staging"} and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                raise RuntimeError("Local Ollama fallback is disabled by AI governance.")
+
+            try:
+                ainvoke_fn = getattr(c_inst, "ainvoke", None)
+                if callable(ainvoke_fn):
+                    res = await ainvoke_fn(prompt, *args, **kwargs)
+                else:
+                    res = c_inst.invoke(prompt, *args, **kwargs)
+                _PROMPT_CACHE.set(prompt, res)
+                return res
+            except Exception as exc:
+                last_exc = exc
+                _trip_circuit(c_key, exc)
+                if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
+                    raise
+                if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
+                    record_ai_fallback(operation="async")
+                    logger.warning("LLM candidate '%s' ainvoke error: %s; failing over immediately (0ms)", c_key, exc)
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No candidate LLM available for ainvoke.")
 
     def with_structured_output(self, schema: type[T], **kwargs: Any) -> Any:
         return structured_output(self, schema)
@@ -249,7 +432,8 @@ def _build_ollama(model_name: str | None = None) -> BaseChatModel:
 
 
 def _get_google_api_key() -> str:
-    key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY
+    raw_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY
+    key = _rotate_key("gemini", raw_key)
     if not key:
         raise RuntimeError(
             "GEMINI_API_KEY (or GOOGLE_API_KEY) is required when LLM_PROVIDER=gemini."
@@ -257,24 +441,27 @@ def _get_google_api_key() -> str:
     return key
 
 
-def _build_gemini(model_name: str | None = None) -> BaseChatModel:
-    """Build a direct Google Gemini client wrapped with automatic Ollama fallback."""
+def _build_raw_gemini(model_name: str | None = None) -> BaseChatModel:
     resolved_model = model_name or settings.GEMINI_MODEL
     assert_model_allowed(resolved_model)
-    gemini_client = ChatGoogleGenerativeAI(
+    return ChatGoogleGenerativeAI(
         model=resolved_model,
         google_api_key=_get_google_api_key(),
         max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         max_retries=0,
     )
+
+
+def _build_gemini(model_name: str | None = None) -> BaseChatModel:
+    """Build a direct Google Gemini client wrapped with automatic Ollama fallback."""
+    gemini_client = _build_raw_gemini(model_name)
     fallback_model = "qwen2.5:1.5b" if model_name == settings.GEMINI_FAST_MODEL else settings.OLLAMA_MODEL
     return cast(BaseChatModel, ResilientChatModel(gemini_client, lambda: _build_ollama(fallback_model)))
 
 
-def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
-    """Build an OpenAI-compatible client through Hugging Face Inference Providers with Groq fallback."""
-    token = (settings.HF_TOKEN or "").strip()
+def _build_raw_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
+    token = _rotate_key("hf", settings.HF_TOKEN)
     if not token:
         raise RuntimeError("HF_TOKEN is required when using Hugging Face Inference Providers.")
     base_url = (settings.HF_BASE_URL or "https://router.huggingface.co/v1").rstrip("/")
@@ -284,15 +471,20 @@ def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatMo
     assert_model_allowed(model)
     if ":" not in model:
         raise RuntimeError("Hugging Face routing requires a provider-qualified model such as openai/gpt-oss-20b:groq.")
-    primary = ChatOpenAI(
+    return ChatOpenAI(
         model=model, api_key=token, base_url=base_url, temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
 
+
+def _build_huggingface(*, model_name: str, timeout_seconds: float) -> BaseChatModel:
+    """Build an OpenAI-compatible client through Hugging Face Inference Providers with Groq fallback."""
+    primary = _build_raw_huggingface(model_name=model_name, timeout_seconds=timeout_seconds)
+
     def _fallback_chain() -> BaseChatModel:
         if settings.GROQ_API_KEY:
             try:
-                return _build_groq(model_name=model, timeout_seconds=timeout_seconds)
+                return _build_groq(model_name=model_name, timeout_seconds=timeout_seconds)
             except Exception as e:
                 logger.warning("Groq emergency fallback initialization failed: %s", e)
         return _build_ollama()
@@ -318,49 +510,110 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
     return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 
-def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
-    """Optional emergency direct-Groq path; HF is the production default."""
-    if not settings.GROQ_API_KEY:
+def _build_raw_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
+    api_key = _rotate_key("groq", settings.GROQ_API_KEY)
+    if not api_key:
         raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
     clean_model = model_name.split(":")[0] if ":" in model_name else model_name
     assert_model_allowed(model_name)
-    primary = ChatOpenAI(
-        model=clean_model, api_key=settings.GROQ_API_KEY,
+    return ChatOpenAI(
+        model=clean_model, api_key=api_key,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
         max_tokens=2048, max_retries=0, timeout=timeout_seconds,
     )
+
+
+def _build_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel:
+    """Direct Groq client wrapped with automatic Ollama fallback."""
+    primary = _build_raw_groq(model_name, timeout_seconds=timeout_seconds)
     return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
 
-def get_fast_llm() -> BaseChatModel:
-    """Return the low-latency model used for claimant turns."""
+def _build_configured_fast_llm() -> BaseChatModel:
     provider = (settings.FAST_LLM_PROVIDER or settings.LLM_PROVIDER or "huggingface").lower().strip()
     if provider in ("huggingface", "hf", "inference-providers"):
-        return _build_huggingface(model_name=settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
+        return _build_raw_huggingface(model_name=settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
     if provider == "groq":
-        return _build_groq(settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
+        return _build_raw_groq(settings.FAST_LLM_MODEL, timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
     if provider in ("gemini", "google"):
-        return _build_gemini(settings.GEMINI_FAST_MODEL)
+        return _build_raw_gemini(settings.GEMINI_FAST_MODEL)
     if provider in ("openai", "cloud"):
         return _build_openai_compatible(timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS)
     if provider == "ollama":
         return _build_ollama()
     raise RuntimeError(f"Unsupported fast LLM provider: {provider}")
 
-def get_reasoning_llm() -> BaseChatModel:
-    """Return the higher-quality model for RAG and adjuster analysis."""
+
+def _build_configured_reasoning_llm() -> BaseChatModel:
     provider = (settings.REASONING_LLM_PROVIDER or settings.LLM_PROVIDER or "huggingface").lower().strip()
     if provider in ("huggingface", "hf", "inference-providers"):
-        return _build_huggingface(model_name=settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
+        return _build_raw_huggingface(model_name=settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
     if provider == "groq":
-        return _build_groq(settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
+        return _build_raw_groq(settings.REASONING_LLM_MODEL, timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
     if provider in ("gemini", "google"):
-        return _build_gemini()
+        return _build_raw_gemini(settings.GEMINI_MODEL)
     if provider in ("openai", "cloud"):
         return _build_openai_compatible(timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS)
     if provider == "ollama":
         return _build_ollama()
     raise RuntimeError(f"Unsupported reasoning LLM provider: {provider}")
+
+
+def get_fast_llm() -> BaseChatModel:
+    """Return the low-latency model with zero-cost multi-provider failover."""
+    primary = _build_configured_fast_llm()
+    candidates: list[Callable[[], BaseChatModel]] = []
+
+    # Direct Groq candidates
+    if settings.GROQ_API_KEY:
+        candidates.append(lambda: _build_raw_groq("llama-3.1-8b-instant", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_groq("openai/gpt-oss-20b", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+
+    # Gemini candidates
+    if settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY:
+        candidates.append(lambda: _build_raw_gemini("gemini-2.5-flash-lite"))
+        candidates.append(lambda: _build_raw_gemini("gemini-2.5-flash"))
+
+    # Hugging Face candidates
+    if settings.HF_TOKEN:
+        candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-20b:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-7B-Instruct:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+
+    # Groq secondary
+    if settings.GROQ_API_KEY:
+        candidates.append(lambda: _build_raw_groq("llama-3.3-70b-versatile", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+
+    fallback = lambda: _build_ollama("qwen2.5:1.5b")
+    return cast(BaseChatModel, ResilientChatModel(primary, fallback, candidate_builders=candidates))
+
+
+def get_reasoning_llm() -> BaseChatModel:
+    """Return the high-quality model with zero-cost multi-provider failover."""
+    primary = _build_configured_reasoning_llm()
+    candidates: list[Callable[[], BaseChatModel]] = []
+
+    # Direct Groq candidates
+    if settings.GROQ_API_KEY:
+        candidates.append(lambda: _build_raw_groq("llama-3.3-70b-versatile", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_groq("openai/gpt-oss-120b", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+
+    # Gemini candidates
+    if settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY:
+        candidates.append(lambda: _build_raw_gemini("gemini-2.5-flash"))
+        candidates.append(lambda: _build_raw_gemini("gemini-1.5-pro"))
+
+    # Hugging Face candidates
+    if settings.HF_TOKEN:
+        candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-120b:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-72B-Instruct:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+
+    # Groq secondary
+    if settings.GROQ_API_KEY:
+        candidates.append(lambda: _build_raw_groq("llama-3.1-8b-instant", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+
+    fallback = lambda: _build_ollama(settings.OLLAMA_MODEL)
+    return cast(BaseChatModel, ResilientChatModel(primary, fallback, candidate_builders=candidates))
+
 
 def get_configured_llm() -> BaseChatModel:
     """Return the configured reasoning-capable LLM."""

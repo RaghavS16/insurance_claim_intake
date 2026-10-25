@@ -135,6 +135,13 @@ def _claimant_incident_history(state: ClaimState, limit: int = 12) -> str:
 
 def _synthesize_event_description(state: ClaimState) -> None:
     """Continuously turn fragmented claimant speech into one factual narrative."""
+    recent_fields = set(state.get("recently_extracted_fields", []))
+    last_text = (state.get("last_user_utterance") or "").lower()
+    has_incident_mention = bool(_INCIDENT_TERMS.search(last_text))
+    # Only synthesize if event description was actually modified or user spoke incident details on this turn
+    if "event_description" not in recent_fields and not has_incident_mention:
+        return
+
     history = _claimant_incident_history(state)
     if not history:
         return

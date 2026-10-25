@@ -893,6 +893,36 @@ function FileClaimContent() {
               </div>
             ))}
 
+            {messages.length <= 1 && !isThinking && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 8 }}>
+                {[
+                  'What documents are required to file a motor claim?',
+                  'Details required to apply for a new motor policy',
+                  'I want to report a vehicle collision claim',
+                  'Explain cashless hospitalization & IRDAI timelines',
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => handleSendText(chip)}
+                    style={{
+                      backgroundColor: '#F4F5F7',
+                      border: '1px solid #E4E4E7',
+                      borderRadius: 999,
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: '#1C1C1C',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Real-Time Live Transcribing Speech Bubble (on user's right side) */}
             {isVoiceActive && (
               <div
@@ -1066,9 +1096,10 @@ function FileClaimContent() {
               ) : (
                 <Button
                   size="sm"
-                  variant="secondary"
+                  variant={(claimData?.submission_ready || claimData?.conversation_status === 'ready_for_submission') ? "primary" : "secondary"}
                   pill
                   onClick={() => setConfirmModalOpen(true)}
+                  style={(claimData?.submission_ready || claimData?.conversation_status === 'ready_for_submission') ? { backgroundColor: '#10B981', borderColor: '#10B981', color: '#FFFFFF' } : undefined}
                 >
                   Submit Claim
                 </Button>
@@ -1104,6 +1135,43 @@ function FileClaimContent() {
             )}
           </div>
 
+          {/* Zeigarnik Progress Bar */}
+          {(() => {
+            const extData = claimData?.extracted_data || {};
+            const coreChecks = [
+              Boolean(claimData?.policy_number || extData.policy_id || selectedPolicyNumber),
+              Boolean(claimData?.insurance_type || extData.insurance_type),
+              Boolean(claimData?.event_date || extData.event_date),
+              Boolean(claimData?.event_location || extData.event_location),
+              Boolean(claimData?.estimated_claim_amount || extData.estimated_claim_amount),
+            ];
+            const uploadedEv = Array.isArray(claimData?.evidence) ? claimData.evidence : [];
+            const missingEv = Array.isArray(claimData?.missing_evidence) ? claimData.missing_evidence : [];
+            const totalSteps = coreChecks.length + (missingEv.length + uploadedEv.length > 0 ? 1 : 0);
+            const completedSteps = coreChecks.filter(Boolean).length + (uploadedEv.length > 0 && missingEv.length === 0 ? 1 : 0);
+            const progressPct = Math.min(100, Math.round((completedSteps / Math.max(1, totalSteps)) * 100));
+
+            return (
+              <div style={{ marginBottom: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span className="snow-micro" style={{ fontWeight: 600, color: '#4B5563' }}>Intake Readiness</span>
+                  <span className="snow-micro" style={{ fontWeight: 700, color: progressPct === 100 ? '#10B981' : '#007AFF' }}>{progressPct}%</span>
+                </div>
+                <div style={{ height: 6, width: '100%', backgroundColor: '#E5E7EB', borderRadius: 999, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${progressPct}%`,
+                      backgroundColor: progressPct === 100 ? '#10B981' : '#007AFF',
+                      transition: 'width 0.3s ease',
+                      borderRadius: 999,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Canonical Summary */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
@@ -1125,6 +1193,12 @@ function FileClaimContent() {
               </div>
             </div>
             <div>
+              <span className="snow-caption" style={{ color: '#9CA3AF' }}>Location</span>
+              <div className="snow-body" style={{ fontSize: 12 }}>
+                {claimData?.event_location || claimData?.extracted_data?.event_location || 'Awaiting'}
+              </div>
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
               <span className="snow-caption" style={{ color: '#9CA3AF' }}>Est. Amount</span>
               <div className="snow-body" style={{ fontSize: 12, fontWeight: 600 }}>
                 {claimData?.estimated_claim_amount ? `₹${Number(claimData.estimated_claim_amount).toLocaleString('en-IN')}` : (claimData?.extracted_data?.estimated_claim_amount ? `₹${Number(claimData.extracted_data.estimated_claim_amount).toLocaleString('en-IN')}` : '—')}
@@ -1163,6 +1237,64 @@ function FileClaimContent() {
               );
             })()}
           </div>
+
+          {/* Required Documents & Evidence Checklist */}
+          {(() => {
+            const uploadedEv = Array.isArray(claimData?.evidence) ? claimData.evidence : [];
+            const missingEv = Array.isArray(claimData?.missing_evidence) ? claimData.missing_evidence : [];
+            if (uploadedEv.length === 0 && missingEv.length === 0) return null;
+
+            return (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span className="snow-caption" style={{ fontWeight: 600, color: '#374151' }}>
+                    Document Checklist
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEvidenceModalOpen(true)}
+                    style={{ background: 'none', border: 'none', color: '#007AFF', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    + Upload
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {uploadedEv.map((ev: any, idx: number) => (
+                    <div key={idx} style={{ padding: '6px 10px', backgroundColor: '#F0FDF4', borderRadius: 6, border: '1px solid #DCFCE7', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="snow-caption" style={{ fontSize: 12, color: '#166534', fontWeight: 500 }}>
+                        {ev.filename || ev.label || `Document ${idx + 1}`}
+                      </span>
+                      <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 700, backgroundColor: '#BBF7D0', color: '#15803D' }}>
+                        Verified
+                      </span>
+                    </div>
+                  ))}
+                  {missingEv.map((item: any, idx: number) => {
+                    const label = typeof item === 'string' ? item : (item.label || item.key || 'Evidence');
+                    return (
+                      <div key={idx} style={{ padding: '6px 10px', backgroundColor: '#FFFBEB', borderRadius: 6, border: '1px solid #FEF3C7', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="snow-caption" style={{ fontSize: 12, color: '#92400E', fontWeight: 500 }}>
+                          {label}
+                        </span>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 700, backgroundColor: '#FDE68A', color: '#B45309' }}>
+                            Required
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEvidenceModalOpen(true)}
+                            style={{ background: '#007AFF', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 6px', fontSize: 10, fontWeight: 600, cursor: 'pointer' }}
+                          >
+                            Upload
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Policy Details */}
           {(claimData?.coverage_amount || claimData?.deductible) && (

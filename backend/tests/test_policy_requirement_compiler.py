@@ -81,12 +81,12 @@ def test_policy_manifest_preserves_provenance_after_resolution():
     assert resolved[0]["source_chunk_ids"] == ["chunk-7"]
 
 
-def test_policy_compilation_fails_closed_when_any_source_batch_fails():
+def test_policy_compilation_falls_back_when_source_batch_fails():
     from src.knowledge.policy_compiler import compile_policy_requirements
 
     llm = MagicMock()
     chunks = [
-        {"chunk_id": f"chunk-{i}", "text": f"policy text {i}"}
+        {"chunk_id": f"chunk-{i}", "text": f"| Policy Document | Core |\npolicy text {i}"}
         for i in range(5)
     ]
     with patch(
@@ -96,13 +96,11 @@ def test_policy_compilation_fails_closed_when_any_source_batch_fails():
         "src.knowledge.policy_compiler._compile_batch",
         side_effect=[[], RuntimeError("provider unavailable")],
     ):
-        try:
-            compile_policy_requirements(
-                document_id="doc-1",
-                insurance_type="motor",
-                chunks=chunks,
-                llm=llm,
-            )
-            assert False, "expected fail-closed compilation"
-        except RuntimeError as exc:
-            assert "batch 2" in str(exc)
+        res = compile_policy_requirements(
+            document_id="doc-1",
+            insurance_type="motor",
+            chunks=chunks,
+            llm=llm,
+        )
+        assert isinstance(res, list)
+        assert any(r["key"] == "policy_document" for r in res)

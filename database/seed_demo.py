@@ -67,7 +67,7 @@ def seed_demo():
         adjusters=[
             ("00000000-0000-0000-0000-000000000102","Asha Adjuster","asha.adjuster@insurance.com","9876500002","motor"),
             ("00000000-0000-0000-0000-000000000103","Vikram Adjuster","vikram.adjuster@insurance.com","9876500003","health"),
-            ("00000000-0000-0000-0000-000000000105","Meera Adjuster","meera.adjuster@insurance.com","9876500005","senior_citizen_health"),
+            ("00000000-0000-0000-0000-000000000105","Meera Adjuster","meera.adjuster@insurance.com","9876500005","senior_health"),
             ("00000000-0000-0000-0000-000000000106","Rajesh Adjuster","rajesh.adjuster@insurance.com","9876500006","home"),
             ("00000000-0000-0000-0000-000000000107","Priya Adjuster","priya.adjuster@insurance.com","9876500007","travel"),
             ("00000000-0000-0000-0000-000000000108","Arjun Adjuster","arjun.adjuster@insurance.com","9876500008","cyber"),
@@ -77,12 +77,14 @@ def seed_demo():
             row=db.query(Adjuster).filter(Adjuster.id==uid).first()
             if not row:
                 db.add(Adjuster(id=uid,user_id=uid,tenant_id=TENANT_ID,name=name,email=email,phone=phone,specialization=spec,claims_assigned=0,is_active=True))
+            elif row.specialization in ("senior_citizen_health", None):
+                row.specialization = spec
 
         claimant=users[("CLAIMANT","riya.claimant@insurance.com")]
         policies=[
             ("POL-DEMO-MOTOR-001","motor",1500000,10000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
             ("POL-DEMO-HEALTH-001","health",800000,5000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
-            ("POL-DEMO-SENIOR-001","senior_citizen_health",500000,10000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1960,3,10),"9876500004","riya.claimant@insurance.com"),
+            ("POL-DEMO-SENIOR-001","senior_health",500000,10000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1960,3,10),"9876500004","riya.claimant@insurance.com"),
             ("POL-DEMO-HOME-001","home",5000000,25000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
             ("POL-DEMO-TRAVEL-001","travel",2000000,2500,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
             ("POL-DEMO-CYBER-001","cyber",1000000,5000,date(2026,1,1),date(2027,1,1),"Riya Claimant",date(1994,6,15),"9876500004","riya.claimant@insurance.com"),
@@ -94,9 +96,12 @@ def seed_demo():
             if not row:
                 row=Policy(id=str(uuid.uuid4()),tenant_id=TENANT_ID,policy_number=number,customer_id=linked_cid,policy_type=ptype,coverage_amount=coverage,deductible=deductible,effective_date=eff,expiry_date=exp,is_active=True,policyholder_name=name,policyholder_dob=dob,policyholder_phone=phone,policyholder_email=email,policyholder_phone_last4=phone[-4:],linked_at=linked_ts,link_attempts=0)
                 db.add(row)
-            elif not row.customer_id:
-                row.customer_id = claimant.id
-                row.linked_at = datetime.now(timezone.utc)
+            else:
+                if not row.customer_id:
+                    row.customer_id = claimant.id
+                    row.linked_at = datetime.now(timezone.utc)
+                if row.policy_type == "senior_citizen_health":
+                    row.policy_type = "senior_health"
         # Published demo RAG sources make the sample environment immediately useful.
         demo_sources = [
             (

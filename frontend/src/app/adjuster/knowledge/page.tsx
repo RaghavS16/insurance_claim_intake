@@ -26,7 +26,7 @@ export default function KnowledgeBasePage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [docType, setDocType] = useState('policy_wording');
   const [insType, setInsType] = useState('motor');
-  const [jurisdiction, setJurisdiction] = useState('CA');
+  const [jurisdiction, setJurisdiction] = useState('India');
   const [version, setVersion] = useState('1.0');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);

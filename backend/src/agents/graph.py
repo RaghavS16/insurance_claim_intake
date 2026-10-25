@@ -257,6 +257,18 @@ def _model_response(state: ClaimState) -> str:
     sentiment = gap_data.get("user_sentiment", "normal")
     phase = state.get("conversation_phase", "source_of_truth_intake")
 
+    # Fast path: Use verified manifest question hint directly when collecting details
+    last_intent = str(state.get("last_intent") or "").lower()
+    if last_intent in {"claim_detail", "greeting", "confirmation", "filler", "unclear"}:
+        if dynamic_missing and dynamic_missing[0].get("question_hint"):
+            hint = str(dynamic_missing[0]["question_hint"]).strip()
+            recent = state.get("recently_extracted_fields") or []
+            if recent:
+                return f"Got it, I've noted that. {hint}"
+            return hint
+        if missing_evidence_items and missing_evidence_items[0].get("question_hint"):
+            return str(missing_evidence_items[0]["question_hint"]).strip()
+
     prompt = (
         f"{_RESPONSE_SYSTEM_PROMPT}\n\n"
         f"Conversation context: {phase}\n"
