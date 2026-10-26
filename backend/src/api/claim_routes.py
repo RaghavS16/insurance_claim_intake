@@ -272,18 +272,32 @@ def list_user_claims(request: Request, submitted: Optional[bool] = Query(None), 
         .all()
     )
     result = []
+    claim_ids = [c.id for c in claims]
+    turns_by_claim: dict[str, list[ConversationTurn]] = {str(cid): [] for cid in claim_ids}
+    if claim_ids:
+        all_turns = (
+            db.query(ConversationTurn)
+            .filter(ConversationTurn.claim_id.in_(claim_ids))
+            .order_by(ConversationTurn.claim_id, ConversationTurn.turn_number.asc(), ConversationTurn.created_at.asc())
+            .all()
+        )
+        for t in all_turns:
+            cid = str(t.claim_id)
+            if cid in turns_by_claim:
+                turns_by_claim[cid].append(t)
+
     for c in claims:
         payload = _claim_payload(c)
-        last_turn = (
-            db.query(ConversationTurn)
-            .filter(ConversationTurn.claim_id == c.id)
-            .order_by(ConversationTurn.turn_number.desc(), ConversationTurn.created_at.desc())
-            .first()
-        )
-        turn_count = db.query(ConversationTurn).filter(ConversationTurn.claim_id == c.id).count()
+        c_turns = turns_by_claim.get(str(c.id), [])
+        last_turn = c_turns[-1] if c_turns else None
+        turn_count = len(c_turns)
         payload["last_message"] = last_turn.text if last_turn else None
         payload["last_message_speaker"] = last_turn.speaker if last_turn else None
-        payload["last_message_time"] = last_turn.created_at.isoformat() if (last_turn and last_turn.created_at) else (c.updated_at.isoformat() if c.updated_at else None)
+        payload["last_message_time"] = (
+            last_turn.created_at.isoformat()
+            if (last_turn and last_turn.created_at)
+            else (c.updated_at.isoformat() if c.updated_at else None)
+        )
         payload["turn_count"] = turn_count
 
         # Resolve title: explicit title > first user message > description > fallback
@@ -292,12 +306,7 @@ def list_user_claims(request: Request, submitted: Optional[bool] = Query(None), 
         if explicit_title:
             payload["title"] = explicit_title
         else:
-            first_user_turn = (
-                db.query(ConversationTurn)
-                .filter(ConversationTurn.claim_id == c.id, ConversationTurn.speaker.in_(["user", "claimant"]))
-                .order_by(ConversationTurn.turn_number.asc(), ConversationTurn.created_at.asc())
-                .first()
-            )
+            first_user_turn = next((t for t in c_turns if t.speaker in ("user", "claimant")), None)
             if first_user_turn and first_user_turn.text and first_user_turn.text.strip():
                 clean_text = first_user_turn.text.strip().replace("\n", " ")
                 payload["title"] = clean_text[:45] + ("..." if len(clean_text) > 45 else "")

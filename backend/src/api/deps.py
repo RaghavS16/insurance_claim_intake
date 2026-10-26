@@ -23,11 +23,30 @@ from src.utils.logger import app_logger
 logger = app_logger
 security_scheme = HTTPBearer(auto_error=False)
 
+import threading
+import time
+
+_AUTH_CACHE_LOCK = threading.Lock()
+_AUTH_USER_CACHE: dict[str, tuple[float, User]] = {}  # uid -> (monotonic_expiry, User)
+_VALID_JTI_CACHE: dict[str, float] = {}  # jti -> monotonic_expiry
+
+
+def invalidate_user_auth_cache(user_id: Optional[str] = None, jti: Optional[str] = None) -> None:
+    """Invalidate in-memory auth caches upon logout, password change, or profile update."""
+    with _AUTH_CACHE_LOCK:
+        if user_id:
+            _AUTH_USER_CACHE.pop(str(user_id), None)
+        if jti:
+            _VALID_JTI_CACHE.pop(str(jti), None)
+        if not user_id and not jti:
+            _AUTH_USER_CACHE.clear()
+            _VALID_JTI_CACHE.clear()
+
 
 def _is_token_revoked_db(token: str, db: Session) -> bool:
     """
     Check DB-persisted revocation table for revoked JWTs.
-    This supplements the in-memory cache and survives server restarts.
+    Uses a 30s in-memory TTL cache to eliminate redundant SQL queries on active tokens.
     """
     try:
         from datetime import datetime, timezone
@@ -37,6 +56,12 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
         unverified = _jwt.decode(token, options={"verify_signature": False})
         jti = unverified.get("jti")
         if jti:
+            now_mono = time.monotonic()
+            with _AUTH_CACHE_LOCK:
+                cached_exp = _VALID_JTI_CACHE.get(jti)
+                if cached_exp and cached_exp > now_mono:
+                    return False
+
             revoked = db.query(RevokedToken).filter(RevokedToken.token_jti == jti).first()
             if revoked:
                 # Check if revocation record is still within token's expiry window
@@ -46,6 +71,11 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
                 if expires_at > now:
                     return True
+            else:
+                with _AUTH_CACHE_LOCK:
+                    if len(_VALID_JTI_CACHE) >= 512:
+                        _VALID_JTI_CACHE.clear()
+                    _VALID_JTI_CACHE[jti] = now_mono + 30.0
     except Exception as exc:
         # Authentication must fail closed if revocation state cannot be checked.
         logger.exception("Token revocation check failed: %s", type(exc).__name__)
@@ -112,8 +142,25 @@ def get_current_user(
                 detail="Authentication required.",
             )
 
-    # Fetch user from DB and enforce current account/session state.
-    user = db.query(User).filter(User.id == uid).first()
+    # Fetch user from in-memory 30s TTL cache or DB
+    user = None
+    now_mono = time.monotonic()
+    with _AUTH_CACHE_LOCK:
+        cached_tuple = _AUTH_USER_CACHE.get(str(uid))
+        if cached_tuple and cached_tuple[0] > now_mono:
+            cached_user = cached_tuple[1]
+            try:
+                user = db.merge(cached_user, load=False)
+            except Exception:
+                user = cached_user
+
+    if not user:
+        user = db.query(User).filter(User.id == uid).first()
+        if user:
+            with _AUTH_CACHE_LOCK:
+                if len(_AUTH_USER_CACHE) >= 512:
+                    _AUTH_USER_CACHE.clear()
+                _AUTH_USER_CACHE[str(uid)] = (now_mono + 30.0, user)
     if not user:
         if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
             # Autocreate mock user dynamically to prevent breaking existing Phase 1 tests

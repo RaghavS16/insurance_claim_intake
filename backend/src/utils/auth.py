@@ -28,8 +28,10 @@ _revoked_tokens: Dict[str, float] = {}  # jti or token_hash -> expiry_timestamp
 
 def get_password_hash(password: str) -> str:
     """Hash a plain text password using bcrypt."""
+    import os
+    rounds = int(os.getenv("BCRYPT_ROUNDS", "10"))
     password_bytes = password.encode("utf-8")
-    salt = bcrypt.gensalt(rounds=12)
+    salt = bcrypt.gensalt(rounds=rounds)
     hashed = bcrypt.hashpw(password_bytes, salt)
     return hashed.decode("utf-8")
 

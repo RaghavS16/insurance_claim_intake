@@ -178,3 +178,18 @@ async def tenant_ai_guard(tenant_id: str, *, operation: str = "claim_turn", max_
                         await client.decr(lock_key)
                     finally:
                         await client.close()
+
+
+async def run_governed_llm_call(
+    operation: str,
+    call_fn: Any,
+    tenant_id: str = "default",
+    estimated_tokens: int = 500,
+) -> Any:
+    """Run an LLM call inside tenant_ai_guard, handling both async and sync callables."""
+    import inspect
+    async with tenant_ai_guard(tenant_id, operation=operation, estimated_tokens=estimated_tokens):
+        res = call_fn()
+        if inspect.isawaitable(res):
+            return await res
+        return res

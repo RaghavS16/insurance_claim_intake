@@ -10,7 +10,7 @@ import hashlib
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,8 @@ from src.database.models import User, PasswordResetOTP, RevokedToken, Adjuster
 from src.database.hardening_models import Tenant, TenantMembership, RefreshToken
 from src.utils.auth import get_password_hash, verify_password, create_access_token, verify_token, revoke_token
 from src.utils.validators import validate_email, validate_password_strength, validate_full_name, validate_phone
-from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email, send_otp_email
+from src.utils.email_otp import generate_otp, hash_otp, otp_expiry, queue_otp_email, send_otp_email, dispatch_otp_email_background
+from src.api.deps import invalidate_user_auth_cache
 from src.utils.rate_limiter import enforce_rate_limit
 from src.utils.logger import app_logger
 
@@ -156,7 +157,7 @@ def _auth_response(user: User, refresh_token: str | None = None, *, amr: list[st
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.post("/signup")
-def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_db)):
+def signup(payload: SignUpRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Register a new claimant account with validated input."""
     enforce_rate_limit(request, action="signup", max_requests=10, window_seconds=60)
     # Validate and sanitize inputs
@@ -223,22 +224,13 @@ def signup(payload: SignUpRequest, request: Request, db: Session = Depends(get_d
             consumed=False,
         )
         db.add(record)
-        db.flush()
-        email_event = queue_otp_email(
-            db,
+        background_tasks.add_task(
+            dispatch_otp_email_background,
             to_email=new_user.email,
             otp=verification_code,
             full_name=new_user.full_name,
             purpose="email_verification",
-            event_key=f"email-verification:{new_user.id}:{record.id}",
         )
-        try:
-            if send_otp_email(to_email=new_user.email, otp=verification_code, full_name=new_user.full_name, purpose="email_verification"):
-                if email_event:
-                    email_event.status = "sent"
-                    email_event.processed_at = datetime.now(timezone.utc)
-        except Exception:
-            pass
     try:
         db.commit()
     except Exception:
@@ -264,7 +256,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         clean_email = validate_email(payload.email)
     except ValueError:
         # Constant-time dummy verify to prevent timing enumeration
-        DUMMY_BCRYPT_HASH = "$2b$12$e86g5WzY44dE9Bsm4N4b5uQj9Uomv1d/c2zF5tXq2K1s5c8c5z1G."
+        DUMMY_BCRYPT_HASH = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
         verify_password(payload.password, DUMMY_BCRYPT_HASH)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -277,7 +269,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     user = db.query(User).filter(User.email == clean_email, User.tenant_id.is_not(None)).first()
     if not user:
         # Constant-time dummy verify for non-existent account
-        DUMMY_BCRYPT_HASH = "$2b$12$e86g5WzY44dE9Bsm4N4b5uQj9Uomv1d/c2zF5tXq2K1s5c8c5z1G."
+        DUMMY_BCRYPT_HASH = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
         verify_password(payload.password, DUMMY_BCRYPT_HASH)
         record_auth_failure("login", clean_email)
         raise HTTPException(
@@ -313,7 +305,6 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
 
     user.last_login_at = datetime.now(timezone.utc)
     user.session_version = int(getattr(user, "session_version", 1) or 1)
-    db.commit()
     if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email before signing in.")
     auth_context = {"mfa": False, "amr": ["pwd"]}
@@ -384,7 +375,7 @@ def verify_email(payload: VerifyOtpRequest, request: Request, db: Session = Depe
 # ---------------------------------------------------------------------------
 
 @router.post("/resend-verification")
-def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session = Depends(get_db)):
+def resend_verification(payload: EmailOnlyRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     enforce_rate_limit(request, action="resend_verification", max_requests=5, window_seconds=300)
     generic = {"message": "If an account with that email requires verification, a new verification code has been sent."}
     if not settings.REQUIRE_EMAIL_VERIFICATION:
@@ -426,28 +417,19 @@ def resend_verification(payload: EmailOnlyRequest, request: Request, db: Session
         consumed=False,
     )
     db.add(record)
-    db.flush()
-    event = queue_otp_email(
-        db,
+    db.commit()
+    background_tasks.add_task(
+        dispatch_otp_email_background,
         to_email=user.email,
         otp=otp,
         full_name=user.full_name,
         purpose="email_verification",
-        event_key=f"email-verification:{user.id}:{record.id}",
     )
-    try:
-        if send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="email_verification"):
-            if event:
-                event.status = "sent"
-                event.processed_at = datetime.now(timezone.utc)
-    except Exception:
-        pass
-    db.commit()
     return generic
 
 
 @router.post("/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+def forgot_password(payload: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Issue an email OTP for password reset. Always returns a generic success
     message regardless of whether the email exists, to avoid account enumeration.
@@ -461,10 +443,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
     generic_response = {"message": "If an account with that email exists, a reset code has been sent."}
 
-    from sqlalchemy import func
-    user = db.query(User).filter(
-        func.lower(func.trim(User.email)) == clean_email.lower().strip()
-    ).first()
+    user = db.query(User).filter(User.email == clean_email).first()
     if not user or user.status != "active":
         return generic_response
 
@@ -498,23 +477,14 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     )
     db.add(record)
     try:
-        db.flush()
-        event = queue_otp_email(
-            db,
+        db.commit()
+        background_tasks.add_task(
+            dispatch_otp_email_background,
             to_email=user.email,
             otp=otp,
             full_name=user.full_name,
             purpose="password_reset",
-            event_key=f"password-reset:{user.id}:{record.id}",
         )
-        try:
-            if send_otp_email(to_email=user.email, otp=otp, full_name=user.full_name, purpose="password_reset"):
-                if event:
-                    event.status = "sent"
-                    event.processed_at = datetime.now(timezone.utc)
-        except Exception:
-            pass
-        db.commit()
     except Exception:
         db.rollback()
         logger.exception("Failed to queue password reset email for user %s", user.id)
@@ -654,6 +624,7 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: Session 
 
     try:
         db.commit()
+        invalidate_user_auth_cache(user_id=user.id)
         record_auth_success("reset_password", user.email)
     except Exception:
         db.rollback()
@@ -744,6 +715,7 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
                     RefreshToken.revoked_at.is_(None),
                 ).update({RefreshToken.revoked_at: now}, synchronize_session=False)
             db.commit()
+            invalidate_user_auth_cache(user_id=user_id, jti=jti)
         except Exception:
             db.rollback()
 

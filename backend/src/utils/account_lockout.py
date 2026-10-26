@@ -97,13 +97,16 @@ class RedisAccountLockout:
             return self._fallback.is_locked(key)
         try:
             lock_key = f"auth_lock:{key}"
-            ttl = self._redis_client.ttl(lock_key)
-            if ttl is not None and ttl > 0:
-                return True, int(ttl)
             fail_key = f"auth_fail:{key}"
-            count_str = self._redis_client.get(fail_key)
+            pipe = self._redis_client.pipeline()
+            pipe.ttl(lock_key)
+            pipe.get(fail_key)
+            pipe.ttl(fail_key)
+            res = pipe.execute()
+            lock_ttl, count_str, fail_ttl = res[0], res[1], res[2]
+            if lock_ttl is not None and lock_ttl > 0:
+                return True, int(lock_ttl)
             if count_str and int(count_str) >= LOCKOUT_MAX_FAILURES:
-                fail_ttl = self._redis_client.ttl(fail_key)
                 return True, max(1, int(fail_ttl if fail_ttl and fail_ttl > 0 else LOCKOUT_DURATION_SECONDS))
             return False, 0
         except Exception as exc:

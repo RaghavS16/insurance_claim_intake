@@ -30,46 +30,21 @@ def _resolve_smtp_host() -> str:
 
 
 def _send_transactional_email(event: OutboxEvent) -> None:
-    """Deliver a queued email and raise on delivery failure so the outbox retries."""
+    """Deliver a queued email via HTTPS Port 443 (Brevo/Resend) or fast-fail SMTP."""
+    from src.utils.email_otp import _deliver_email
     payload = dict(event.payload_json or {})
     to_email = str(payload.get("to") or "").strip()
     subject = str(payload.get("subject") or "").strip()
     body = str(payload.get("body") or "")
     if not to_email or not subject or not body:
         raise ValueError("Email event is missing recipient, subject, or body.")
-    if not settings.SMTP_HOST:
+
+    delivered = _deliver_email(to_email, subject, body)
+    if not delivered:
         if settings.ENVIRONMENT in {"development", "test"}:
             logger.info("Transactional email suppressed in %s (event=%s)", settings.ENVIRONMENT, event.id)
             return
-        raise RuntimeError("SMTP is not configured for transactional email delivery.")
-
-    from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
-    if not from_email:
-        raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
-    from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = formataddr((from_name, from_email))
-    msg["To"] = to_email
-    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
-    password = settings.SMTP_PASSWORD or ""
-    smtp_host = _resolve_smtp_host()
-
-    if settings.SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
-            if settings.SMTP_USERNAME and password:
-                server.login(settings.SMTP_USERNAME, password)
-            refused = server.sendmail(from_email, [to_email], msg.as_string())
-    else:
-        with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
-            if settings.SMTP_USE_TLS:
-                server.starttls()
-            if settings.SMTP_USERNAME and password:
-                server.login(settings.SMTP_USERNAME, password)
-            refused = server.sendmail(from_email, [to_email], msg.as_string())
-
-    if refused:
-        raise RuntimeError("SMTP rejected recipient(s): " + ", ".join(sorted(refused.keys())))
+        raise RuntimeError(f"Email delivery failed for event {event.id}")
 
 
 async def handle_email_send(event: OutboxEvent) -> None:
@@ -79,37 +54,14 @@ async def handle_email_send(event: OutboxEvent) -> None:
 
 
 def _send_email(to_email: str, subject: str, body: str, event_id: str) -> None:
-    if not settings.SMTP_HOST:
+    """Deliver notification email via HTTPS Port 443 (Brevo/Resend) or fast-fail SMTP."""
+    from src.utils.email_otp import _deliver_email
+    delivered = _deliver_email(to_email, subject, body)
+    if not delivered:
         if settings.ENVIRONMENT in {"development", "test"}:
-            logger.info("Outbox notification suppressed because SMTP is not configured (event=%s)", event_id)
+            logger.info("Outbox notification suppressed because email delivery is unconfigured (event=%s)", event_id)
             return
-        raise RuntimeError("SMTP is not configured for transactional notification delivery.")
-    from_email = (settings.SMTP_USERNAME or settings.SMTP_FROM_EMAIL).strip()
-    if not from_email:
-        raise RuntimeError("SMTP_FROM_EMAIL is not configured.")
-    from_name = getattr(settings, "SMTP_FROM_NAME", "IntelliClaim AI") or "IntelliClaim AI"
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = formataddr((from_name, from_email))
-    msg["To"] = to_email
-    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[-1] or "localhost"))
-    msg["X-IntelliClaim-Event-ID"] = event_id
-    password = (settings.SMTP_PASSWORD or "").replace(" ", "").strip()
-    smtp_host = _resolve_smtp_host()
-    if settings.SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
-            if settings.SMTP_USERNAME and password:
-                server.login(settings.SMTP_USERNAME, password)
-            refused = server.sendmail(from_email, [to_email], msg.as_string())
-    else:
-        with smtplib.SMTP(smtp_host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as server:
-            if settings.SMTP_USE_TLS:
-                server.starttls()
-            if settings.SMTP_USERNAME and password:
-                server.login(settings.SMTP_USERNAME, password)
-            refused = server.sendmail(from_email, [to_email], msg.as_string())
-    if refused:
-        raise RuntimeError("SMTP rejected recipient(s): " + ", ".join(sorted(refused.keys())))
+        raise RuntimeError(f"Outbox notification delivery failed for event {event_id}")
 
 
 def _claimant_for_event(db, event: OutboxEvent) -> User | None:

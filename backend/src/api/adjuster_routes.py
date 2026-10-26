@@ -120,10 +120,125 @@ class ClaimUpdate(BaseModel):
     priority: str|None=None
     note: str|None=Field(None,max_length=4000)
 
-def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[str,Any]:
+def _preload_claims_context(claims: list[Claim], db: Session) -> dict[str, Any]:
+    """Batch-fetches Policy, User, ClaimFact, ClaimRequirement, ClaimEvidence, and ClaimException
+    across all claims using IN (...) queries in 6 total SQL queries to eliminate N+1 latency."""
+    if not claims:
+        return {
+            "facts": {},
+            "requirements": {},
+            "evidence": {},
+            "exceptions": {},
+            "policies_by_id": {},
+            "policies_by_number": {},
+            "users_by_id": {},
+        }
+
+    claim_ids = [c.id for c in claims]
+    policy_ids = [c.policy_id for c in claims if c.policy_id]
+    customer_ids = [c.customer_id for c in claims if c.customer_id]
+    pol_nums: set[str] = set()
+
+    for c in claims:
+        st = dict(c.pipeline_state or {})
+        num = (st.get("extracted_data") or {}).get("policy_id")
+        if num:
+            pol_nums.add(str(num).strip().upper())
+
+    facts_map: dict[str, dict[str, Any]] = {str(cid): {} for cid in claim_ids}
+    all_facts = db.query(ClaimFact).filter(ClaimFact.claim_id.in_(claim_ids)).all()
+    for row in all_facts:
+        cid = str(row.claim_id)
+        if cid in facts_map:
+            facts_map[cid][row.fact_key] = {
+                "value": (row.value_json or {}).get("value"),
+                "state": row.state,
+                "source_type": row.source_type,
+                "confidence": row.confidence,
+                "version": row.version,
+            }
+
+    reqs_map: dict[str, list[dict[str, Any]]] = {str(cid): [] for cid in claim_ids}
+    all_reqs = db.query(ClaimRequirement).filter(ClaimRequirement.claim_id.in_(claim_ids)).all()
+    for row in all_reqs:
+        cid = str(row.claim_id)
+        if cid in reqs_map:
+            reqs_map[cid].append({
+                "key": row.requirement_key,
+                "label": row.label,
+                "status": row.status,
+                "required": row.required,
+                "evidence_type": row.evidence_type,
+                "provenance": row.provenance_json or {},
+            })
+
+    evs_map: dict[str, list[dict[str, Any]]] = {str(cid): [] for cid in claim_ids}
+    all_evs = db.query(ClaimEvidence).filter(ClaimEvidence.claim_id.in_(claim_ids)).all()
+    for row in all_evs:
+        cid = str(row.claim_id)
+        if cid in evs_map:
+            evs_map[cid].append({
+                "id": row.id,
+                "name": row.original_filename,
+                "status": row.status,
+                "verification_status": row.verification_status,
+                "verification_confidence": row.verification_confidence,
+                "requirement_id": row.requirement_id,
+            })
+
+    excs_map: dict[str, list[dict[str, Any]]] = {str(cid): [] for cid in claim_ids}
+    all_excs = db.query(ClaimException).filter(ClaimException.claim_id.in_(claim_ids), ClaimException.status == "open").all()
+    for row in all_excs:
+        cid = str(row.claim_id)
+        if cid in excs_map:
+            excs_map[cid].append({
+                "id": row.id,
+                "event_type": row.event_type,
+                "severity": row.severity,
+                "reason": row.reason,
+                "blocking": row.blocking,
+                "status": row.status,
+            })
+
+    policies_by_id = {}
+    if policy_ids:
+        for p in db.query(Policy).filter(Policy.id.in_(policy_ids)).all():
+            policies_by_id[str(p.id)] = p
+
+    policies_by_number = {}
+    if pol_nums:
+        for p in db.query(Policy).filter(Policy.policy_number.in_(list(pol_nums))).all():
+            policies_by_number[str(p.policy_number).strip().upper()] = p
+
+    users_by_id = {}
+    if customer_ids:
+        for u in db.query(User).filter(User.id.in_(customer_ids)).all():
+            users_by_id[str(u.id)] = u
+
+    return {
+        "facts": facts_map,
+        "requirements": reqs_map,
+        "evidence": evs_map,
+        "exceptions": excs_map,
+        "policies_by_id": policies_by_id,
+        "policies_by_number": policies_by_number,
+        "users_by_id": users_by_id,
+    }
+
+
+def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None, preloaded: dict[str, Any]|None=None)->dict[str,Any]:
     state=dict(c.pipeline_state or {})
     facts, requirements, evidence, exceptions, readiness = {}, [], [], [], {}
-    if db is not None:
+    cid_str = str(c.id)
+
+    if preloaded is not None:
+        facts = preloaded.get("facts", {}).get(cid_str, {})
+        requirements = preloaded.get("requirements", {}).get(cid_str, [])
+        evidence = preloaded.get("evidence", {}).get(cid_str, [])
+        exceptions = preloaded.get("exceptions", {}).get(cid_str, [])
+        if db is not None:
+            readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
+    elif db is not None:
         facts = {row.fact_key: {"value": (row.value_json or {}).get("value"), "state": row.state, "source_type": row.source_type, "confidence": row.confidence, "version": row.version}
                  for row in db.query(ClaimFact).filter(ClaimFact.claim_id == c.id, ClaimFact.tenant_id == c.tenant_id).all()}
         requirements = [{"key": row.requirement_key, "label": row.label, "status": row.status, "required": row.required, "evidence_type": row.evidence_type, "provenance": row.provenance_json or {}}
@@ -135,22 +250,40 @@ def _item(c: Claim, adjuster: Adjuster|None=None, db: Session|None=None)->dict[s
         readiness = build_submission_readiness(db, c, state.get("policy_verification") or {})
 
     policyholder = None
-    if c.policy_id and db is not None:
-        p = db.query(Policy).filter(Policy.id == c.policy_id).first()
-        if p and p.policyholder_name:
-            policyholder = p.policyholder_name
-    if not policyholder:
-        policyholder = (state.get("extracted_data") or {}).get("policyholder_name")
-    if not policyholder and db is not None:
-        pol_num = (state.get("extracted_data") or {}).get("policy_id")
-        if pol_num:
-            p = db.query(Policy).filter(Policy.policy_number == str(pol_num).strip().upper(), Policy.tenant_id == c.tenant_id).first()
+    if preloaded is not None:
+        if c.policy_id:
+            p = preloaded.get("policies_by_id", {}).get(str(c.policy_id))
             if p and p.policyholder_name:
                 policyholder = p.policyholder_name
-    if not policyholder and c.customer_id and db is not None:
-        u = db.query(User).filter(User.id == c.customer_id).first()
-        if u and u.full_name:
-            policyholder = u.full_name
+        if not policyholder:
+            policyholder = (state.get("extracted_data") or {}).get("policyholder_name")
+        if not policyholder:
+            pol_num = (state.get("extracted_data") or {}).get("policy_id")
+            if pol_num:
+                p = preloaded.get("policies_by_number", {}).get(str(pol_num).strip().upper())
+                if p and p.policyholder_name:
+                    policyholder = p.policyholder_name
+        if not policyholder and c.customer_id:
+            u = preloaded.get("users_by_id", {}).get(str(c.customer_id))
+            if u and u.full_name:
+                policyholder = u.full_name
+    else:
+        if c.policy_id and db is not None:
+            p = db.query(Policy).filter(Policy.id == c.policy_id).first()
+            if p and p.policyholder_name:
+                policyholder = p.policyholder_name
+        if not policyholder:
+            policyholder = (state.get("extracted_data") or {}).get("policyholder_name")
+        if not policyholder and db is not None:
+            pol_num = (state.get("extracted_data") or {}).get("policy_id")
+            if pol_num:
+                p = db.query(Policy).filter(Policy.policy_number == str(pol_num).strip().upper(), Policy.tenant_id == c.tenant_id).first()
+                if p and p.policyholder_name:
+                    policyholder = p.policyholder_name
+        if not policyholder and c.customer_id and db is not None:
+            u = db.query(User).filter(User.id == c.customer_id).first()
+            if u and u.full_name:
+                policyholder = u.full_name
 
     return {
         "id": str(c.id),
@@ -327,8 +460,10 @@ def dashboard(user: User = Depends(_guard), db: Session = Depends(get_db)):
             sla_breached += 1
 
     recent = []
-    for c in assigned_claims[:8]:
-        item = _item(c, db=db)
+    recent_claims = assigned_claims[:8]
+    preloaded_recent = _preload_claims_context(recent_claims, db)
+    for c in recent_claims:
+        item = _item(c, db=db, preloaded=preloaded_recent)
         updated = c.updated_at
         updated_utc = updated.replace(tzinfo=timezone.utc) if updated and updated.tzinfo is None else updated
         age_hours = round(max(0.0, (now - updated_utc).total_seconds() / 3600.0), 2) if updated_utc else 0.0
@@ -376,12 +511,13 @@ def queue(
 
     now = datetime.now(timezone.utc)
     sla_hours = int(getattr(settings, "CLAIM_SLA_HOURS", 72))
+    preloaded_queue = _preload_claims_context(claims, db)
     items = []
     for claim in claims:
         updated = claim.updated_at
         updated_utc = updated.replace(tzinfo=timezone.utc) if updated and updated.tzinfo is None else updated
         age_hours = round(max(0.0, (now - updated_utc).total_seconds() / 3600.0), 2) if updated_utc else 0.0
-        item = _item(claim, db=db)
+        item = _item(claim, db=db, preloaded=preloaded_queue)
         item.update({
             "age_hours": age_hours,
             "sla_hours": sla_hours,

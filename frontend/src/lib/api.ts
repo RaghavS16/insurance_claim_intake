@@ -1,3 +1,5 @@
+import { User } from './types';
+
 const API_BASE =
   typeof window !== 'undefined'
     ? ''
@@ -5,8 +7,8 @@ const API_BASE =
 
 // In-memory access token storage (never written to localStorage or cookies on client)
 let inMemoryAccessToken: string | null = null;
-let refreshPromise: Promise<string | null> | null = null;
-let initialAuthPromise: Promise<string | null> | null = null;
+let refreshPromise: Promise<{ access_token: string; user?: User } | null> | null = null;
+let initialAuthPromise: Promise<any> | null = null;
 
 class ApiClient {
   private etagCache = new Map<string, { etag: string; data: any }>();
@@ -19,7 +21,7 @@ class ApiClient {
     inMemoryAccessToken = access;
   }
 
-  public setInitialAuthPromise(promise: Promise<string | null> | null) {
+  public setInitialAuthPromise(promise: Promise<any> | null) {
     initialAuthPromise = promise;
   }
 
@@ -32,7 +34,7 @@ class ApiClient {
     this.clearCache();
   }
 
-  public async refreshToken(): Promise<string | null> {
+  public async refreshToken(): Promise<{ access_token: string; user?: User } | null> {
     if (refreshPromise) {
       return refreshPromise;
     }
@@ -46,7 +48,7 @@ class ApiClient {
         if (refreshRes.ok) {
           const data = await refreshRes.json();
           this.setToken(data.access_token);
-          return data.access_token as string;
+          return { access_token: data.access_token as string, user: data.user as User | undefined };
         } else {
           this.clearTokens();
           return null;
@@ -64,8 +66,14 @@ class ApiClient {
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const isAuthEndpoint =
       endpoint.includes('/auth/login') ||
+      endpoint.includes('/auth/signup') ||
       endpoint.includes('/auth/refresh') ||
-      endpoint.includes('/auth/logout');
+      endpoint.includes('/auth/logout') ||
+      endpoint.includes('/auth/forgot-password') ||
+      endpoint.includes('/auth/verify-otp') ||
+      endpoint.includes('/auth/reset-password') ||
+      endpoint.includes('/auth/verify-email') ||
+      endpoint.includes('/auth/resend-verification');
 
     // If an initial session restoration is underway on page load, await it before making protected calls
     if (!isAuthEndpoint && !this.getToken() && initialAuthPromise) {

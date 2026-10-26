@@ -28,11 +28,17 @@ def _build_raw_notifications(current_user: User, db: Session) -> List[Dict[str, 
             Claim.tenant_id == current_user.tenant_id,
             Claim.status != "discarded",
         ).order_by(Claim.updated_at.desc()).limit(10).all()
-        for c in user_claims:
-            open_reqs = db.query(ClaimEvidenceRequest).filter(
-                ClaimEvidenceRequest.claim_id == c.id,
+        claim_ids = [c.id for c in user_claims]
+        open_reqs_by_claim: dict[str, list[ClaimEvidenceRequest]] = {str(cid): [] for cid in claim_ids}
+        if claim_ids:
+            for req in db.query(ClaimEvidenceRequest).filter(
+                ClaimEvidenceRequest.claim_id.in_(claim_ids),
                 ClaimEvidenceRequest.status == "open",
-            ).all()
+            ).all():
+                open_reqs_by_claim.setdefault(str(req.claim_id), []).append(req)
+
+        for c in user_claims:
+            open_reqs = open_reqs_by_claim.get(str(c.id), [])
             for req in open_reqs:
                 items.append({
                     "id": f"req-{req.id}",
@@ -83,11 +89,17 @@ def _build_raw_notifications(current_user: User, db: Session) -> List[Dict[str, 
             Claim.status.notin_(["draft", "discarded"]),
         ).order_by(Claim.updated_at.desc()).limit(8).all()
 
-        for c in recent_claims:
-            responded_reqs = db.query(ClaimEvidenceRequest).filter(
-                ClaimEvidenceRequest.claim_id == c.id,
+        adj_claim_ids = [c.id for c in recent_claims]
+        resp_reqs_by_claim: dict[str, list[ClaimEvidenceRequest]] = {str(cid): [] for cid in adj_claim_ids}
+        if adj_claim_ids:
+            for rreq in db.query(ClaimEvidenceRequest).filter(
+                ClaimEvidenceRequest.claim_id.in_(adj_claim_ids),
                 ClaimEvidenceRequest.status == "responded",
-            ).all()
+            ).all():
+                resp_reqs_by_claim.setdefault(str(rreq.claim_id), []).append(rreq)
+
+        for c in recent_claims:
+            responded_reqs = resp_reqs_by_claim.get(str(c.id), [])
             for rreq in responded_reqs:
                 items.append({
                     "id": f"resp-{rreq.id}",
@@ -111,11 +123,18 @@ def _build_raw_notifications(current_user: User, db: Session) -> List[Dict[str, 
             Claim.tenant_id == current_user.tenant_id,
             Claim.status.notin_(["draft", "discarded"]),
         ).order_by(Claim.updated_at.desc()).limit(8).all()
-        for c in recent_claims:
-            responded_reqs = db.query(ClaimEvidenceRequest).filter(
-                ClaimEvidenceRequest.claim_id == c.id,
+
+        admin_claim_ids = [c.id for c in recent_claims]
+        admin_reqs_by_claim: dict[str, list[ClaimEvidenceRequest]] = {str(cid): [] for cid in admin_claim_ids}
+        if admin_claim_ids:
+            for rreq in db.query(ClaimEvidenceRequest).filter(
+                ClaimEvidenceRequest.claim_id.in_(admin_claim_ids),
                 ClaimEvidenceRequest.status == "responded",
-            ).all()
+            ).all():
+                admin_reqs_by_claim.setdefault(str(rreq.claim_id), []).append(rreq)
+
+        for c in recent_claims:
+            responded_reqs = admin_reqs_by_claim.get(str(c.id), [])
             for rreq in responded_reqs:
                 items.append({
                     "id": f"resp-{rreq.id}",

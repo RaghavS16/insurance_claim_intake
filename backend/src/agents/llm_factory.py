@@ -201,14 +201,14 @@ class _GeminiJsonStructured(Generic[T]):
                 return candidate
             raise
 
-    def invoke(self, prompt: Any) -> T:
+    def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> T:
         schema_json = json.dumps(self.schema.model_json_schema(), ensure_ascii=False)
         instruction = (
             "\n\nReturn ONLY one valid JSON object. Do not use Markdown, code fences, "
             "explanations, or tool/function calls. The JSON must conform exactly to "
             f"this schema:\n{schema_json}"
         )
-        result = self.model.invoke(f"{prompt}{instruction}")
+        result = self.model.invoke(f"{prompt}{instruction}", *args, **kwargs)
         payload = json.loads(self._extract_json(self._content_to_text(result)))
         return self.schema.model_validate(payload)
 
@@ -218,7 +218,7 @@ class _ResilientStructured(Generic[T]):
         self.resilient_model = resilient_model
         self.schema = schema
 
-    def invoke(self, prompt: Any) -> T:
+    def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> T:
         schema_name = getattr(self.schema, "__name__", "Structured")
         cached = _PROMPT_CACHE.get(prompt, extra=schema_name)
         if cached is not None:
@@ -251,7 +251,7 @@ class _ResilientStructured(Generic[T]):
 
             try:
                 helper = _GeminiJsonStructured(c_inst, self.schema)
-                res = helper.invoke(prompt)
+                res = helper.invoke(prompt, *args, **kwargs)
                 _PROMPT_CACHE.set(prompt, res, extra=schema_name)
                 return res
             except Exception as exc:
@@ -268,6 +268,10 @@ class _ResilientStructured(Generic[T]):
         if last_exc:
             raise last_exc
         raise RuntimeError("No candidate LLM available for structured output.")
+
+    async def ainvoke(self, prompt: Any, *args: Any, **kwargs: Any) -> T:
+        import asyncio
+        return await asyncio.to_thread(self.invoke, prompt, *args, **kwargs)
 
 
 class ResilientChatModel:
@@ -288,6 +292,12 @@ class ResilientChatModel:
         if self._fallback_instance is None:
             self._fallback_instance = self.fallback_builder()
         return self._fallback_instance
+
+    def _invoke_with_fallback(self, messages: Any, is_async: bool = False, **kwargs: Any) -> Any:
+        """Route call with kwargs forwarded to async or sync invocation."""
+        if is_async:
+            return self.ainvoke(messages, **kwargs)
+        return self.invoke(messages, **kwargs)
 
     def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
         cached = _PROMPT_CACHE.get(prompt)
@@ -393,13 +403,22 @@ class ResilientChatModel:
         return structured_output(self, schema)
 
 
+# Backward-compatible alias for multi-provider resilient router
+ResilientLLMRouter = ResilientChatModel
+
+
 def structured_output(model: Any, schema: type[T]) -> Any:
     """Return structured parsing without Gemini automatic function calling."""
     if isinstance(model, ChatGoogleGenerativeAI):
         return _GeminiJsonStructured(model, schema)
     if isinstance(model, ResilientChatModel):
         return _ResilientStructured(model, schema)
-    return model.with_structured_output(schema)
+    if hasattr(model, "with_structured_output"):
+        try:
+            return model.with_structured_output(schema)
+        except Exception:
+            return _GeminiJsonStructured(model, schema)
+    return _GeminiJsonStructured(model, schema)
 
 
 def _resolve_ollama_model(base_url: str, requested_model: str) -> str:
@@ -457,8 +476,8 @@ def _build_raw_gemini(model_name: str | None = None) -> BaseChatModel:
         model=resolved_model,
         google_api_key=_get_google_api_key(),
         max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS,
-        timeout=settings.LLM_TIMEOUT_SECONDS,
-        max_retries=0,
+        timeout=min(float(settings.LLM_TIMEOUT_SECONDS), 12.0),
+        max_retries=1,
     )
 
 
@@ -476,7 +495,7 @@ def _build_raw_huggingface(*, model_name: str, timeout_seconds: float) -> BaseCh
         raise RuntimeError("Hugging Face routing requires a provider-qualified model such as openai/gpt-oss-20b:groq.")
     return ChatOpenAI(
         model=model, api_key=token, base_url=base_url, temperature=0,
-        max_tokens=2048, max_retries=0, timeout=timeout_seconds,
+        max_tokens=2048, max_retries=1, timeout=min(float(timeout_seconds), 12.0),
     )
 
 
@@ -490,10 +509,11 @@ def _build_openai_compatible(*, model_name: str | None = None, timeout_seconds: 
         raise RuntimeError("CLOUD_LLM_API_KEY is required when LLM_PROVIDER=openai.")
     resolved_model = model_name or settings.CLOUD_LLM_MODEL
     assert_model_allowed(resolved_model)
+    timeout = min(float(timeout_seconds or settings.LLM_TIMEOUT_SECONDS), 12.0)
     primary = ChatOpenAI(
         model=resolved_model,
         api_key=settings.CLOUD_LLM_API_KEY, base_url=base_url, temperature=0,
-        max_tokens=2048, max_retries=0, timeout=timeout_seconds or settings.LLM_TIMEOUT_SECONDS,
+        max_tokens=2048, max_retries=1, timeout=timeout,
     )
     return cast(BaseChatModel, ResilientChatModel(primary, lambda: _build_ollama()))
 
@@ -507,7 +527,7 @@ def _build_raw_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel
     return ChatOpenAI(
         model=clean_model, api_key=api_key,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
-        max_tokens=2048, max_retries=0, timeout=timeout_seconds,
+        max_tokens=2048, max_retries=1, timeout=min(float(timeout_seconds), 12.0),
     )
 
 

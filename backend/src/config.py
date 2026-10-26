@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     CLAIM_SLA_HOURS: int = Field(72, ge=1, le=720)
     VOICE_LATENCY_TARGET_MS: int = Field(1800, ge=250, le=10000)
 
+    BREVO_API_KEY: Optional[str] = None
+    RESEND_API_KEY: Optional[str] = None
+    BCRYPT_ROUNDS: int = Field(10, ge=4, le=16)
+    VERIFY_MIGRATIONS_ON_STARTUP: bool = Field(False)
+    OUTBOX_POLL_INTERVAL_SECONDS: float = Field(15.0, ge=1.0, le=300.0)
     EMAIL_BACKEND: str = Field("mailpit")
     MAILPIT_API_URL: str = Field("http://localhost:8025")
     ENABLE_API_DOCS: bool = Field(False)
@@ -31,7 +36,7 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "IntelliClaim AI"
     SMTP_USE_TLS: bool = False
     SMTP_USE_SSL: bool = False
-    SMTP_TIMEOUT_SECONDS: int = Field(15, ge=3, le=60)
+    SMTP_TIMEOUT_SECONDS: int = Field(4, ge=1, le=60)
     PUBLIC_APP_URL: str = "http://localhost:3000"
     OTP_LENGTH: int = Field(6, ge=4, le=8)
     OTP_EXPIRY_MINUTES: int = Field(10, ge=1, le=60)

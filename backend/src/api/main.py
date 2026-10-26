@@ -181,19 +181,22 @@ async def lifespan(app: FastAPI):
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         if settings.REQUIRE_MIGRATIONS_IN_PRODUCTION:
-            try:
-                from alembic.config import Config
-                from alembic.script import ScriptDirectory
-                cfg = Config(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "alembic.ini"))
-                script = ScriptDirectory.from_config(cfg)
-                heads = set(script.get_heads())
-                with engine.connect() as conn:
-                    current = {str(row[0]) for row in conn.execute(text("SELECT version_num FROM alembic_version"))}
-                if current != heads:
-                    raise RuntimeError(f"Database migration state is not at head: current={sorted(current)} expected={sorted(heads)}")
-            except Exception as exc:
-                logger.exception("Production migration verification failed: %s", type(exc).__name__)
-                raise
+            if getattr(settings, "VERIFY_MIGRATIONS_ON_STARTUP", False) or os.getenv("VERIFY_MIGRATIONS_ON_STARTUP", "false").lower() == "true":
+                try:
+                    from alembic.config import Config
+                    from alembic.script import ScriptDirectory
+                    cfg = Config(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "alembic.ini"))
+                    script = ScriptDirectory.from_config(cfg)
+                    heads = set(script.get_heads())
+                    with engine.connect() as conn:
+                        current = {str(row[0]) for row in conn.execute(text("SELECT version_num FROM alembic_version"))}
+                    if current != heads:
+                        raise RuntimeError(f"Database migration state is not at head: current={sorted(current)} expected={sorted(heads)}")
+                except Exception as exc:
+                    logger.exception("Production migration verification failed: %s", type(exc).__name__)
+                    raise
+            else:
+                logger.info("VERIFY_MIGRATIONS_ON_STARTUP is false; skipping synchronous Alembic check on startup (<1.5s boot).")
         if settings.REQUIRE_REDIS_IN_PRODUCTION and not settings.REDIS_URL:
             raise RuntimeError("REDIS_URL is required in production/staging.")
     else:
@@ -205,8 +208,9 @@ async def lifespan(app: FastAPI):
             import asyncio
             from src.services.outbox_worker import run_worker
             from src.services.outbox_handlers import HANDLERS
-            outbox_task = asyncio.create_task(run_worker(HANDLERS, poll_seconds=5.0))
-            logger.info("Embedded outbox worker started.")
+            poll_interval = float(getattr(settings, "OUTBOX_POLL_INTERVAL_SECONDS", 15.0))
+            outbox_task = asyncio.create_task(run_worker(HANDLERS, poll_seconds=poll_interval))
+            logger.info("Embedded outbox worker started (poll_seconds=%.1f).", poll_interval)
         except Exception as exc:
             logger.warning("Could not start embedded outbox worker: %s", exc)
 
