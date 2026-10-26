@@ -7,29 +7,21 @@ End-to-end mutation and integration tests covering the 6-phase system overhaul:
 5. Admin Workflows: Metrics dashboard, adjuster PUT update with canonical specialization, CSV exports, knowledge base RBAC.
 """
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from src.api import (
     admin_routes,
-    admin_workflow_routes,
     adjuster_routes,
     auth_routes,
-    claim_routes,
-    knowledge_routes,
     policy_routes,
 )
-from src.agents import dynamic_requirements, policy_check
-from src.agents.dynamic_requirements import _deterministic_dynamic_extract, clean_extracted_value
+from src.agents import policy_check
+from src.agents.dynamic_requirements import clean_extracted_value
 from src.domain.claim_context import calculate_readiness
-from src.database.hardening_models import (
-    ClaimEvidenceRequest,
-    OutboxEvent,
-)
 from src.database.models import Claim, User, Adjuster, PasswordResetOTP, Policy
 from src.utils.email_otp import hash_otp
 

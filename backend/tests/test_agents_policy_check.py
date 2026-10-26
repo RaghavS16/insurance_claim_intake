@@ -3,9 +3,11 @@ Edge-case tests for src/agents/policy_check.py
 
 Covers: verify_policy_for_claim with all failure branches.
 """
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from datetime import date
+
+from src.database.models import Claim
+from src.agents.policy_check import verify_policy_for_claim
 
 
 class TestVerifyPolicyForClaim:
@@ -30,14 +32,12 @@ class TestVerifyPolicyForClaim:
         return c
 
     def test_no_db_session_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         result = verify_policy_for_claim(policy_id="POL-001", event_date_str="2025-01-01",
                                          claimant_user_id="u1", db=None)
         assert result["valid"] is False
         assert result["reason"] == "no_db_session"
 
     def test_no_policy_id_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         db = self._make_db()
         result = verify_policy_for_claim(policy_id=None, event_date_str="2025-01-01",
                                          claimant_user_id="u1", db=db)
@@ -45,7 +45,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "no_policy_id"
 
     def test_empty_policy_id_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         db = self._make_db()
         result = verify_policy_for_claim(policy_id="", event_date_str="2025-01-01",
                                          claimant_user_id="u1", db=db)
@@ -53,7 +52,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "no_policy_id"
 
     def test_claim_not_found_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         db = self._make_db()
         db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
@@ -63,7 +61,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "claim_not_found"
 
     def test_claim_policy_mismatch_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "DIFFERENT-POLICY"},
@@ -76,8 +73,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "claim_policy_mismatch"
 
     def test_confirmation_not_required_for_early_verification(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -100,7 +95,6 @@ class TestVerifyPolicyForClaim:
         assert result["valid"] is True
 
     def test_policy_not_found_in_db_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -108,7 +102,6 @@ class TestVerifyPolicyForClaim:
         })
         # claim query returns candidate, policy query returns None
         def query_side_effect(model_class):
-            from src.database.models import Claim, Policy
             if model_class is Claim:
                 mock = MagicMock()
                 mock.filter.return_value.filter.return_value.first.return_value = candidate
@@ -124,8 +117,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "policy_not_found"
 
     def test_ownership_mismatch_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -149,8 +140,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "ownership_mismatch"
 
     def test_inactive_policy_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -174,8 +163,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "policy_inactive"
 
     def test_invalid_event_date_format_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -199,8 +186,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "invalid_event_date"
 
     def test_event_before_policy_effective_date_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -227,8 +212,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "policy_not_active_on_event_date"
 
     def test_event_after_policy_expiry_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -255,8 +238,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "policy_not_active_on_event_date"
 
     def test_insurance_type_mismatch_returns_invalid(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -283,8 +264,6 @@ class TestVerifyPolicyForClaim:
         assert result["reason"] == "insurance_type_mismatch"
 
     def test_missing_event_date_allows_early_active_policy_verification(self):
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "POL-001"},
@@ -308,8 +287,6 @@ class TestVerifyPolicyForClaim:
 
     def test_policy_id_case_normalized(self):
         """Lowercase policy IDs should be normalized to uppercase before comparison."""
-        from src.agents.policy_check import verify_policy_for_claim
-        from src.database.models import Claim, Policy
         db = self._make_db()
         candidate = self._make_claim_row({
             "extracted_data": {"policy_id": "pol-001"},  # lowercase in state

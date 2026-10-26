@@ -278,6 +278,7 @@ def resend_invitation(invitation_id: str, request: Request, db: Session = Depend
 
 
 @router.get("/adjusters/export")
+@router.get("/exports/adjusters")
 def export_adjusters(request: Request, format: str = "csv", is_active: Optional[bool] = None, db: Session = Depends(get_db)):
     admin = _admin(request, db)
     q = db.query(Adjuster).filter(Adjuster.tenant_id == admin.tenant_id)
@@ -288,6 +289,7 @@ def export_adjusters(request: Request, format: str = "csv", is_active: Optional[
     return _csv_or_xlsx(values, headers, "adjusters-export", format)
 
 @router.get("/policies/export")
+@router.get("/exports/policies")
 def export_policies(request: Request, format: str = "csv", policy_type: Optional[str] = None, is_active: Optional[bool] = None, db: Session = Depends(get_db)):
     admin = _admin(request, db)
     q = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id)
@@ -328,6 +330,7 @@ def create_strict_policy(payload: StrictPolicyRequest, request: Request, db: Ses
     return {"id":policy.id,"policy_number":policy.policy_number,"message":"Policy created successfully."}
 
 @router.post("/policies/import-strict")
+@router.post("/policies/bulk")
 async def import_strict_policies(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
     admin = _admin(request, db)
     suffix=(file.filename or "").lower().rsplit(".",1)[-1]
@@ -367,7 +370,7 @@ async def import_strict_policies(request: Request, file: UploadFile = File(...),
         except (ValueError, TypeError) as exc:
             errors.append({"row":idx,"policy_number":row.get("policy_number"),"error":str(exc)})
     db.commit()
-    return {"created":created,"updated":updated,"total_processed":created+updated,"errors":errors}
+    return {"created":created,"created_count":created,"updated":updated,"total_processed":created+updated,"errors":errors}
 
 @router.get("/claims")
 def admin_claims(request: Request, status: Optional[str] = None, adjuster_id: Optional[str] = None, include_drafts: bool = False, db: Session = Depends(get_db)):

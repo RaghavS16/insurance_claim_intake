@@ -3,7 +3,6 @@ Edge-case tests for src/knowledge/reranker.py
 
 Covers: rerank with various configurations.
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
 

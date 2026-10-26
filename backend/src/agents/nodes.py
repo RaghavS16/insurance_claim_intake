@@ -42,8 +42,8 @@ class ExtractionPatch(BaseModel):
     intent: IntentType
     changes: List[FieldChange] = Field(default_factory=list)
     needs_clarification: bool = False
-    clarification: str = ""
-    spoken_reply: str = ""
+    clarification: Optional[str] = ""
+    spoken_reply: Optional[str] = ""
 
 class DescriptionSynthesis(BaseModel):
     """Canonical incident narrative built from the claimant's fragmented facts."""

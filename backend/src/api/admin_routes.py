@@ -371,6 +371,7 @@ def get_adjuster(
 
 
 @router.put("/adjusters/{adjuster_id}")
+@router.patch("/adjusters/{adjuster_id}")
 def update_adjuster(
     adjuster_id: str,
     payload: UpdateAdjusterRequest,
@@ -658,6 +659,11 @@ def get_admin_dashboard(
 @router.get("/policies")
 def list_all_policies(
     request: Request,
+    policy_type: Optional[str] = None,
+    status: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    q: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -670,7 +676,37 @@ def list_all_policies(
     if page_size < 1 or page_size > 200:
         page_size = 50
 
-    query = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id).order_by(Policy.created_at.desc())
+    query = db.query(Policy).filter(Policy.tenant_id == admin.tenant_id)
+    if policy_type and policy_type.strip().lower() != "all":
+        query = query.filter(Policy.policy_type == policy_type.strip().lower())
+    
+    today = date.today()
+    active_flag = is_active
+    if status is not None:
+        if status.lower() == "active":
+            active_flag = True
+        elif status.lower() in ("inactive", "expired"):
+            active_flag = False
+
+    if active_flag is not None:
+        from sqlalchemy import and_, or_
+        if active_flag:
+            query = query.filter(
+                (Policy.is_active.is_(None)) | (Policy.is_active == True),
+                (Policy.expiry_date.is_(None)) | (Policy.expiry_date >= today),
+            )
+        else:
+            query = query.filter(
+                or_(Policy.is_active == False, and_(Policy.expiry_date.isnot(None), Policy.expiry_date < today))
+            )
+
+    search_term = (search or q or "").strip()
+    if search_term:
+        from sqlalchemy import or_
+        term = f"%{search_term}%"
+        query = query.filter(or_(Policy.policy_number.ilike(term), Policy.policyholder_name.ilike(term)))
+
+    query = query.order_by(Policy.created_at.desc())
     total = query.count()
     offset = (page - 1) * page_size
     policies = query.offset(offset).limit(page_size).all()

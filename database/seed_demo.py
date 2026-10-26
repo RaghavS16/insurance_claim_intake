@@ -239,7 +239,7 @@ Clause 3.4: The claimant must furnish a copy of the hospital discharge summary a
         ]
         docrag_dir = next((d for d in candidate_dirs if d and d.exists() and list(d.glob("*.docx"))), None)
 
-        if docrag_dir and docrag_dir.exists():
+        if docrag_dir and docrag_dir.exists() and not os.getenv("SKIP_DOCRAG_SEED"):
             for docx_file in sorted(docrag_dir.glob("*.docx")):
                 fname = docx_file.name
                 existing_doc = db.query(KnowledgeDocument).filter(

@@ -1,18 +1,14 @@
-import os
-os.environ.setdefault("ENVIRONMENT","test")
-os.environ.setdefault("DEBUG","true")
-os.environ.setdefault("SECRET_KEY","test-secret-key-at-least-32-characters-long")
-os.environ.setdefault("DATABASE_URL","sqlite:///./test.db")
-
+"""Tests for production guardrails, upload limits, and session versioning."""
+import pytest
+from src.config import Settings
 from src.utils.upload_limits import validate_declared_size
 from src.utils.auth import create_access_token, verify_token
 
+
 def test_upload_declared_size_rejects_oversize():
-    try:
+    with pytest.raises(ValueError):
         validate_declared_size("1001", 1000)
-    except ValueError:
-        return
-    assert False
+
 
 def test_token_has_session_version():
     token = create_access_token({"sub": "user-1", "sv": 7})
@@ -22,8 +18,6 @@ def test_token_has_session_version():
 
 
 def test_production_requires_redis():
-    from src.config import Settings
-    import pytest
     cfg = Settings(
         ENVIRONMENT="production",
         DEBUG=False,
@@ -38,8 +32,6 @@ def test_production_requires_redis():
 
 
 def test_production_requires_https_public_app_url():
-    from src.config import Settings
-    import pytest
     cfg = Settings(
         ENVIRONMENT="production",
         DEBUG=False,

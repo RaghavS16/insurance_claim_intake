@@ -4,7 +4,7 @@ Edge-case tests for src/database/claim_workflow.py
 Covers: ALLOWED_TRANSITIONS map, transition_claim, assign_claim.
 """
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock
 from src.database.claim_workflow import ALLOWED_TRANSITIONS, transition_claim, assign_claim
 
 

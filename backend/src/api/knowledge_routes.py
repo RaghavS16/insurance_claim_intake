@@ -44,7 +44,7 @@ def _auto_publish_and_compile(db: Session, tenant_id: str, doc_id: str, actor_id
     meta["published_by"] = actor_id
     meta["published_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Pre-compile manifest if not already present
+    # Pre-compile manifest if policy wording and not already present from DOCX table extraction
     if (doc.document_type in {"policy_wording", "endorsement"} or "wording" in (doc.source_name or "").lower()) and not meta.get("requirement_manifest"):
         try:
             from src.knowledge.policy_compiler import compile_policy_requirements
@@ -59,7 +59,7 @@ def _auto_publish_and_compile(db: Session, tenant_id: str, doc_id: str, actor_id
             )
             if manifest:
                 meta["requirement_manifest"] = manifest
-                meta["requirement_manifest_version"] = 1
+                meta["requirement_manifest_version"] = int(meta.get("requirement_manifest_version", 0)) + 1
         except Exception:
             logger.warning("Auto-compilation manifest non-fatal warning for %s", doc_id)
 
@@ -136,6 +136,7 @@ async def add_document(payload: IngestRequest, user: User = Depends(require_role
         raise HTTPException(status_code=502, detail="Knowledge indexing is temporarily unavailable.")
 
 @router.post("/upload")
+@router.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),
     document_type: str | None = Form("policy_wording"),

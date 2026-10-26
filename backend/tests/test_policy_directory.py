@@ -4,7 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import policy_routes
-from src.database.models import Policy
 
 
 class FakeQuery:

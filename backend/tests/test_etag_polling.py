@@ -6,8 +6,6 @@ from sqlalchemy.orm import sessionmaker
 
 from src.api.main import app
 from src.config import settings
-import src.database.models as _models
-import src.database.hardening_models as _hmodels
 from src.database.models import User, Claim, Adjuster, Base
 from src.database.hardening_models import Base as HardeningBase, ClaimAssignment
 from src.database.session import get_db

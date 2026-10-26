@@ -3,7 +3,7 @@ Shared test fixtures and configuration for all edge-case tests.
 """
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Ensure test environment before importing anything from src
 os.environ.setdefault("ENVIRONMENT", "test")

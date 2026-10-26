@@ -1,5 +1,4 @@
 """Tests for login abuse prevention, constant-time authentication, account lockout, and fail-closed behaviors."""
-import time
 import pytest
 import uuid
 from datetime import datetime, timezone
@@ -9,10 +8,6 @@ from src.config import settings
 from src.api.main import app
 from src.utils.auth import get_password_hash
 from src.utils.account_lockout import (
-    lockout_manager,
-    check_account_lock,
-    record_auth_failure,
-    record_auth_success,
     unlock_account,
     LOCKOUT_MAX_FAILURES,
 )

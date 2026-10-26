@@ -1,10 +1,6 @@
 """Comprehensive regression and verification tests for the IntelliClaim AI Chatbot and Adjuster AI Copilot upgrades."""
-import pytest
 from pathlib import Path
 from datetime import date
-from unittest.mock import MagicMock
-
-from src.knowledge.document_intelligence import infer_metadata, INSURANCE_TYPES
 from src.knowledge.retriever import infer_insurance_type_from_query, rank_chunks_for_query
 from src.knowledge.store import extract_docx_requirement_manifest
 from src.agents.rag_chat import _heuristic_intent, _synthesize_structured_answer_from_chunks

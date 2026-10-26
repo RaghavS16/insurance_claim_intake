@@ -341,6 +341,12 @@ def _deterministic_dynamic_extract(text: str, requirements: list[dict[str, Any]]
             elif re.search(r"\b(?:filed\s+(?:a\s+)?(?:police|fir)|police\s+report\s+was\s+filed|yes\s+i\s+have\s+(?:a\s+)?(?:police|fir))\b", text, re.I):
                 extracted[key] = True
 
+        # Dashcam / serial / footage extraction
+        if any(term in semantic for term in ("dashcam", "serial", "footage", "camera")):
+            cam_match = re.search(r"(?:dashcam|serial|footage|camera)[^A-Za-z0-9]*(?:is|number|no|#|:|-)?\s*([A-Za-z0-9-_]{4,25})", text, re.I)
+            if cam_match:
+                extracted[key] = cam_match.group(1).strip()
+
     # Rule 5: Only allow direct yes/no token to satisfy the single requirement that was just asked (or single active requirement)
     if target_key and (short_yes or short_no):
         for req in requirements or []:

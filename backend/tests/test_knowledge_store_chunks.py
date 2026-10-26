@@ -4,7 +4,6 @@ Edge-case tests for src/knowledge/store.py pure functions.
 Focuses on _extract_text (text branch), _chunks, and ingest_document edge cases
 (size limit, duplicate detection). Heavy I/O is mocked.
 """
-import io
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -93,18 +92,6 @@ class TestExtractText:
 # ingest_document edge cases (heavily mocked)
 # ---------------------------------------------------------------------------
 class TestIngestDocument:
-    def _base_patches(self):
-        return [
-            patch("src.knowledge.store._extract_text", return_value="A " * 100),
-            patch("src.knowledge.store.infer_metadata", return_value=MagicMock(
-                insurance_type="motor", document_type="policy_wording",
-                title="Test", document_scope="test"
-            )),
-            patch("src.knowledge.store.embed_documents", return_value=[[0.1] * 768] * 10),
-            patch("src.knowledge.store.put_bytes", return_value={"uri": "s3://bucket/key"}),
-            patch("src.knowledge.store.SessionLocal"),
-        ]
-
     def test_exceeds_max_size_raises_value_error(self, monkeypatch):
         from src.knowledge.store import ingest_document
         from src.config import settings

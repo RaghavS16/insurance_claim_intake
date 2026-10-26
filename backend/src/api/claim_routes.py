@@ -50,7 +50,8 @@ class VoiceSessionRequest(BaseModel):
     policy_number: Optional[str] = None
 
 class TextTurnRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000)
+    text: Optional[str] = Field(None, max_length=5000)
+    claim_text: Optional[str] = Field(None, max_length=5000)
 
 def _is_post_submission_status(status: str | None) -> bool:
     return str(status or "") in {"submitted","assigned","under_review","pending_evidence","approved","partially_approved","rejected","escalated","closed"}
@@ -437,6 +438,16 @@ def get_conversation_history(ticket_id: str, request: Request, db: Session = Dep
     return _conversation_payload(db, claim)
 
 
+@router.get("/{ticket_id}/turns")
+def get_claim_turns(ticket_id: str, request: Request, db: Session = Depends(get_db)):
+    current_user = _resolve_user(request, db)
+    claim = db.query(Claim).filter(Claim.ticket_id == ticket_id, Claim.tenant_id == str(current_user.tenant_id or "")).first()
+    if not claim: raise HTTPException(status_code=404, detail="Claim not found for the given ticket_id.")
+    enforce_claim_ownership(claim, current_user)
+    turns = _conversation_payload(db, claim)
+    return {"turns": turns, "total": len(turns)}
+
+
 @router.get("/{ticket_id}/export")
 def export_claim_transcript(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     """Export formatted conversation transcript and extracted claim dossier."""
@@ -518,6 +529,8 @@ def get_claim(ticket_id: str, request: Request, db: Session = Depends(get_db)):
     return JSONResponse(content=jsonable_encoder(payload), headers={"ETag": etag})
 
 
+@router.post("")
+@router.post("/")
 @router.post("/intake")
 async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
@@ -537,9 +550,18 @@ async def intake_claim(payload: ClaimIntakeRequest, request: Request, db: Sessio
     except Exception as exc:
         logger.exception("Claim conversation processing failed")
         raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
-    return {**_claim_payload(claim, db=db), "message": result.get("next_question") or result.get("message", "")}
+    return {
+        **_claim_payload(claim, db=db),
+        "message": result.get("next_question") or result.get("message", ""),
+        "agent_message": result.get("next_question") or result.get("message", ""),
+        "grounded": bool(result.get("rag_answer_grounded") or (result.get("chat_retrieval") or {}).get("grounded")),
+        "citation_status": result.get("rag_answer_status") or (result.get("chat_retrieval") or {}).get("status"),
+        "citations": list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+        "sources": list(result.get("chat_citations") or result.get("rag_answer_sources") or []),
+    }
 
 
+@router.post("/{ticket_id}/turn")
 @router.post("/{ticket_id}/text-turn")
 async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Request, db: Session = Depends(get_db)):
     current_user = _resolve_user(request, db)
@@ -549,8 +571,9 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
     if _is_post_submission_status(claim.status):
         raise HTTPException(status_code=409, detail="This claim has already been submitted. Use Track Claim to view status and respond to adjuster requests.")
     prior_turns = db.query(ConversationTurn).filter(ConversationTurn.claim_id == claim.id).count()
+    input_text = payload.text or payload.claim_text or ""
     try:
-        result = await process_claimant_turn(db, claim, payload.text, "text", prior_turns // 2 + 1)
+        result = await process_claimant_turn(db, claim, input_text, "text", prior_turns // 2 + 1)
     except ClaimTurnConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
@@ -558,6 +581,7 @@ async def claim_text_turn(ticket_id: str, payload: TextTurnRequest, request: Req
         raise HTTPException(status_code=503, detail="Claim processing is temporarily unavailable.") from exc
     return {
         **_claim_payload(claim, db=db),
+        "message": result.get("next_question") or result.get("message", ""),
         "agent_message": result.get("next_question") or result.get("message", ""),
         "grounded": bool(result.get("rag_answer_grounded") or (result.get("chat_retrieval") or {}).get("grounded")),
         "citation_status": result.get("rag_answer_status") or (result.get("chat_retrieval") or {}).get("status"),
@@ -775,6 +799,7 @@ async def confirm_claim(
     }
 
 @router.post("/{ticket_id}/requests/{request_id}/respond")
+@router.post("/{ticket_id}/evidence-requests/{request_id}/respond")
 async def respond_to_evidence_request(
     ticket_id: str,
     request_id: str,

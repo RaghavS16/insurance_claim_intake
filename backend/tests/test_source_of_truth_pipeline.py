@@ -9,21 +9,17 @@ Validates the 7 core requirements:
 6. Adjuster workspace dossier contains dynamic field-label/value pairs.
 7. Honest fallback when knowledge base has no indexed requirements.
 """
-import pytest
 from unittest.mock import MagicMock, patch
-from datetime import date, datetime, timezone
+from datetime import date
 
 from src.agents.dynamic_requirements import (
     clean_extracted_value,
     sync_extracted_fields,
-    build_dynamic_context,
-    extract_answers,
     unresolved,
 )
 from src.agents.graph import _response_planner, _dynamic_requirement_enrichment
 from src.agents.policy_check import verify_policy_for_claim
 from src.agents.submission_synthesizer import synthesize_claims_package
-from src.agents.gap_analysis import analyze_claim_gaps
 
 
 def test_1_first_question_is_not_hardcoded_and_comes_from_rag():

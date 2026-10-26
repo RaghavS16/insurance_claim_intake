@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from src.config import settings
 from src.api.main import app
 from src.utils.auth import get_password_hash
-from src.database.hardening_models import RefreshToken
 
 client = TestClient(app)
 

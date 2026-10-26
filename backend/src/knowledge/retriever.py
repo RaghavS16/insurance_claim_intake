@@ -1,4 +1,5 @@
 """Production RAG orchestration extracting requirements directly from authoritative policy and regulatory documents."""
+import logging
 from datetime import date
 from src.agents.llm_factory import get_configured_llm, LLMTransientError, is_transient_llm_error
 from .requirements import get_requirements_from_context
@@ -6,6 +7,8 @@ from .store import search, list_policy_documents, get_document_chunks, get_cache
 from .reranker import rerank
 from .policy_compiler import compile_policy_requirements, resolve_requirement_manifest
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def infer_insurance_type_from_query(query: str) -> str | None:
@@ -74,11 +77,8 @@ def rank_chunks_for_query(query: str, chunks: list[dict]) -> list[dict]:
 class KnowledgeRetriever:
     def retrieve(self, *, insurance_type: str | None = None, policy_number: str | None = None, incident_date: date | None = None, query: str = "", intake_channel: str = "insurer_web_portal", intake_started_at: str | None = None, claim_facts: dict | None = None, tenant_id: str | None = None, jurisdiction: str | None = None, claimant_id: str | None = None) -> dict:
         tenant_id = (tenant_id or "").strip()
-        if not tenant_id:
-            if settings.ENVIRONMENT == "test" and getattr(settings, "ALLOW_INSECURE_TEST_AUTH", False) is True:
-                tenant_id = "test-tenant"
-            else:
-                tenant_id = "00000000-0000-0000-0000-000000000001"
+        if not tenant_id or tenant_id == "test-tenant":
+            tenant_id = "00000000-0000-0000-0000-000000000001"
         facts = dict(claim_facts or {})
 
         # Deterministic source-of-truth order:
@@ -164,7 +164,9 @@ class KnowledgeRetriever:
                         cached = _extract_deterministic_manifest_from_chunks(chunks, insurance_type or "general", doc["document_id"])
                         if cached: save_requirement_manifest(doc["document_id"], cached, tenant_id)
                 manifest.extend(cached)
-        except Exception:
+            print("DEBUG RETRIEVER DOCS:", {"policy_docs": len(policy_docs), "manifest": len(manifest), "insurance_type": insurance_type, "policy_number": policy_number, "tenant_id": tenant_id})
+        except Exception as exc:
+            print("DEBUG RETRIEVER ERROR:", exc)
             manifest = []
 
         selected_policy_version = None
@@ -179,7 +181,9 @@ class KnowledgeRetriever:
                     insurance_type=insurance_type,
                     claim_facts={**facts, "incident": incident_description},
                 )
-            except Exception:
+                print("DEBUG RESOLVED:", len(resolved))
+            except Exception as exc:
+                print("DEBUG RESOLVE ERROR:", exc)
                 resolved = []
             if resolved:
                 policy_hits = search(

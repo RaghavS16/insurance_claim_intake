@@ -1,7 +1,5 @@
 """Tests for storage safety, path traversal prevention, download headers, and production fallbacks."""
 import pytest
-from unittest.mock import MagicMock, patch
-from pathlib import Path
 from fastapi.testclient import TestClient
 
 from src.config import settings

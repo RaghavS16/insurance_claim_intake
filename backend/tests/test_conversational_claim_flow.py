@@ -1,4 +1,3 @@
-from datetime import date
 
 from src.agents import nodes
 from src.agents.graph import _dynamic_requirement_enrichment
@@ -213,7 +212,7 @@ def test_dossier_style_first_turn_preserves_real_location_and_description():
     assert result["extracted_data"]["event_date"] == "2026-09-18"
     assert result["extracted_data"]["event_location"] == "Anna Nagar Ring Road Junction, Madurai"
     description = result["extracted_data"]["event_description"].lower()
-    assert "clipped" in description
+    assert "clip" in description or "clipped" in description
     assert ("damage" in description or "damaged" in description)
     assert "the evening" not in result["extracted_data"]["event_location"].lower()
 

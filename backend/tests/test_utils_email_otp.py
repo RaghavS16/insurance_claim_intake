@@ -3,7 +3,6 @@ Edge-case tests for src/utils/email_otp.py
 
 Covers: generate_otp, hash_otp, otp_expiry, send_otp_email.
 """
-import pytest
 import hashlib
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock

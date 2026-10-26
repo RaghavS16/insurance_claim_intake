@@ -4,7 +4,6 @@ Edge-case tests for src/agents/dynamic_requirements.py
 Covers: unresolved, missing_evidence, _deterministic_dynamic_extract,
         build_dynamic_context (partial), extract_answers (mocked LLM).
 """
-import pytest
 from unittest.mock import MagicMock, patch
 from pydantic import BaseModel
 

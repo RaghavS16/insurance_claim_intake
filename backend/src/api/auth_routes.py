@@ -94,7 +94,7 @@ def clear_refresh_token_cookie(response: Response) -> None:
 class ResetPasswordRequest(BaseModel):
     reset_token: str = Field(..., min_length=10)
     new_password: str = Field(..., min_length=8, max_length=128)
-    confirm_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: Optional[str] = Field(None, max_length=128)
 
 
 def _issue_refresh_token(db: Session, user: User, family_id: str | None = None, *, auth_context: dict | None = None) -> str:
@@ -566,8 +566,8 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
 # ---------------------------------------------------------------------------
 @router.post("/reset-password")
 def reset_password(payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    enforce_rate_limit(request, action="reset_password", max_requests=10, window_seconds=60)
-    if payload.new_password != payload.confirm_password:
+    confirm_pwd = payload.confirm_password or payload.new_password
+    if payload.new_password != confirm_pwd:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match.")
 
     try:

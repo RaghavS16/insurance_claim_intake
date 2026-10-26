@@ -29,7 +29,8 @@ MAX_LINK_ATTEMPTS = 5
 class LinkPolicyRequest(BaseModel):
     policy_number: str = Field(..., min_length=3, max_length=64, description="Policy number e.g. MOT-5521")
     policyholder_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Full name of policyholder (Optional)")
-    date_of_birth: str = Field(..., description="Date of birth in YYYY-MM-DD format")
+    date_of_birth: Optional[str] = Field(None, description="Date of birth in YYYY-MM-DD format")
+    dob: Optional[str] = Field(None, description="Alias for date_of_birth")
     phone_last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of phone number")
 
 
@@ -110,7 +111,8 @@ def link_policy(
         )
 
     # Validate PII: Date of Birth and Last 4 digits of phone number
-    dob_match = str(policy.policyholder_dob) == payload.date_of_birth.strip()
+    dob_val = (payload.date_of_birth or payload.dob or "").strip()
+    dob_match = str(policy.policyholder_dob) == dob_val
     
     stored_phone = policy.policyholder_phone_last4 or (policy.policyholder_phone[-4:] if policy.policyholder_phone else None)
     phone_match = stored_phone == payload.phone_last4.strip() if stored_phone else False

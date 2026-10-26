@@ -6,7 +6,7 @@ Covers: InMemorySlidingWindowRateLimiter.is_allowed, reset,
 """
 import time
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from fastapi import HTTPException
 
 

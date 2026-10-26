@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from src.database.models import Adjuster, Claim, User
 from src.database.hardening_models import ClaimAssignment
-from src.api.adjuster_routes import _can_access_claim, _ensure_assigned_adjuster, _get_adjuster_relevant_claims, _item, queue
+from src.api.adjuster_routes import _can_access_claim, _ensure_assigned_adjuster, _get_adjuster_relevant_claims, _item
 
 
 class TestCanAccessClaim:

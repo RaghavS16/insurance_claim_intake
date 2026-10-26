@@ -112,6 +112,7 @@ def _rag_question_responder(state: ClaimState) -> ClaimState:
     state["rag_answer_grounded"] = False
     state["rag_answer_query"] = ""
     state["rag_answer_status"] = None
+    state["_rag_question_only"] = False
 
     if state.get("_skip_all") or not _looks_like_question(state):
         return state
@@ -190,7 +191,7 @@ def _dynamic_fallback(state: ClaimState) -> str:
 
 
 def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
-    if state.get("_skip_all") or state.get("_rag_question_only"):
+    if state.get("_skip_all"):
         return state
 
     data = state.get("extracted_data") or {}
@@ -223,6 +224,8 @@ def _dynamic_requirement_enrichment(state: ClaimState) -> ClaimState:
         if state.get("dynamic_missing") or state.get("missing_evidence") or state.get("pending_evidence_review"):
             state["conversation_phase"] = "source_of_truth_intake"
             state["conversation_status"] = "collecting"
+        return state
+    if state.get("_rag_question_only") and not _claim_intake_context_requested(state):
         return state
 
     context = build_dynamic_context(state)
@@ -425,10 +428,10 @@ def _build_conversation_graph():
     graph.add_conditional_edges(
         "conversation_turn_processor",
         lambda state: "done" if state.get("_skip_all") else "continue",
-        {"continue": "dynamic_requirement_enrichment", "done": END},
+        {"continue": "claim_extractor", "done": END},
     )
-    graph.add_edge("dynamic_requirement_enrichment", "claim_extractor")
-    graph.add_edge("claim_extractor", "mandatory_field_checker")
+    graph.add_edge("claim_extractor", "dynamic_requirement_enrichment")
+    graph.add_edge("dynamic_requirement_enrichment", "mandatory_field_checker")
     graph.add_edge("mandatory_field_checker", "rag_question_responder")
     graph.add_edge("rag_question_responder", "next_question_generator")
     graph.add_edge("next_question_generator", END)

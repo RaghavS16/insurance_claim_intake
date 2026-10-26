@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import os
 import pytest
 from fastapi.testclient import TestClient
@@ -7,7 +8,6 @@ from sqlalchemy.orm import sessionmaker
 from src.database.models import Base, User
 from src.database.session import get_db
 from src.utils.auth import create_access_token, get_password_hash
-from src.config import Settings
 from src.api.main import app
 
 TEST_DB_FILE = "test_api_hardening_wp9.db"
@@ -37,9 +37,6 @@ def setup_db():
             os.remove(TEST_DB_FILE)
         except Exception:
             pass
-
-
-from datetime import datetime, timezone
 
 @pytest.fixture
 def test_user():

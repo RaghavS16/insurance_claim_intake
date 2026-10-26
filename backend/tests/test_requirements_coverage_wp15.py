@@ -57,6 +57,7 @@ def test_auth_full_lifecycle_and_cookie_flow(monkeypatch):
         return True
 
     monkeypatch.setattr("src.api.auth_routes.send_otp_email", mock_send_otp)
+    monkeypatch.setattr("src.utils.email_otp.send_otp_email", mock_send_otp)
     monkeypatch.setattr(settings, "REQUIRE_EMAIL_VERIFICATION", True)
 
     email = f"test_auth_wp15_{int(datetime.now().timestamp())}@example.com"

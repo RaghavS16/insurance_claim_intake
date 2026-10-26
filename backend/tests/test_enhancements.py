@@ -1,11 +1,9 @@
 """Unit and integration tests for production enhancements:
-- EmbeddingService (`embed`, `embed_documents`, Gemini/FastEmbed fallback)
+- EmbeddingService (`embed`, `embed_documents`, FastEmbed fallback)
 - Policy requirement manifest compilation & zero-latency unconditional resolution
-- Live notifications & user profile update endpoints
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.knowledge.embeddings import EmbeddingService, embed, embed_documents

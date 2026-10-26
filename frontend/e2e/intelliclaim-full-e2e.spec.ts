@@ -71,7 +71,7 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
     await page.waitForURL(/\/claimant\/dashboard/, { timeout: 15000 });
 
     // 2a. Verify Claimant Dashboard & Chat History section
-    await expect(page.getByText('Chat History')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Chat History' })).toBeVisible();
 
     // 2b. Navigate to My Policies & open Link Policy Modal
     await page.goto(`${BASE_URL}/claimant/policies`);
@@ -79,8 +79,8 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
     const linkBtn = page.getByRole('button', { name: /Link Existing Policy|Link Policy/i }).first();
     if (await linkBtn.isVisible()) {
       await linkBtn.click();
-      await page.fill('input[placeholder*="MOT-"]', 'POL-DEMO-MOTOR-001');
-      await page.fill('input[placeholder*="Jane Doe"]', 'Riya Claimant');
+      await page.fill('input[placeholder*="POL-"]', 'POL-DEMO-MOTOR-001');
+      await page.fill('input[placeholder*="Sharma"]', 'Riya Claimant');
       await page.fill('input[placeholder*="0004"]', '0004');
       const cancelBtn = page.getByRole('button', { name: /Cancel/i }).first();
       if (await cancelBtn.isVisible()) {
@@ -90,8 +90,8 @@ test.describe('IntelliClaim Full-Stack End-to-End Business Verification Suite', 
 
     // 2c. Navigate to Conversational Claim Intake (/claimant/file-claim)
     await page.goto(`${BASE_URL}/claimant/file-claim?fresh=true`);
-    await expect(page.getByText('Filing Against Policy:')).toBeVisible();
-    await expect(page.getByText('Live Claim Dossier')).toBeVisible();
+    await expect(page.getByText('Filing Against Policy:').first()).toBeVisible();
+    await expect(page.locator('.snow-dossier-col').getByText('Live Claim Dossier')).toBeVisible();
 
     // Send a RAG coverage question / claim filing message
     const chatInput = page.locator('input[placeholder*="Type your message"]');

@@ -524,10 +524,11 @@ def _build_raw_groq(model_name: str, *, timeout_seconds: float) -> BaseChatModel
         raise RuntimeError("GROQ_API_KEY is required when using the direct Groq provider.")
     clean_model = model_name.split(":")[0] if ":" in model_name else model_name
     assert_model_allowed(model_name)
+    max_tok = 800 if "qwen" in clean_model.lower() else 2048
     return ChatOpenAI(
         model=clean_model, api_key=api_key,
         base_url=settings.GROQ_BASE_URL.rstrip("/"), temperature=0,
-        max_tokens=2048, max_retries=1, timeout=min(float(timeout_seconds), 12.0),
+        max_tokens=max_tok, max_retries=1, timeout=min(float(timeout_seconds), 25.0),
     )
 
 
@@ -567,8 +568,8 @@ def get_fast_llm() -> BaseChatModel:
 
     # Direct Groq candidates
     if settings.GROQ_API_KEY:
-        candidates.append(lambda: _build_raw_groq("llama-3.1-8b-instant", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
         candidates.append(lambda: _build_raw_groq("openai/gpt-oss-20b", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_groq("qwen/qwen3.8-27b", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
 
     # Gemini candidates
     if settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY:
@@ -579,10 +580,6 @@ def get_fast_llm() -> BaseChatModel:
     if settings.HF_TOKEN:
         candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-20b:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
         candidates.append(lambda: _build_raw_huggingface(model_name="meta-llama/Llama-3.3-70B-Instruct:groq", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
-
-    # Groq secondary
-    if settings.GROQ_API_KEY:
-        candidates.append(lambda: _build_raw_groq("llama-3.3-70b-versatile", timeout_seconds=settings.FAST_LLM_TIMEOUT_SECONDS))
 
     fallback = lambda: _build_ollama("qwen2.5:1.5b")
 
@@ -606,8 +603,8 @@ def get_reasoning_llm() -> BaseChatModel:
 
     # Direct Groq candidates
     if settings.GROQ_API_KEY:
-        candidates.append(lambda: _build_raw_groq("llama-3.3-70b-versatile", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
         candidates.append(lambda: _build_raw_groq("openai/gpt-oss-120b", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
+        candidates.append(lambda: _build_raw_groq("openai/gpt-oss-20b", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
 
     # Gemini candidates
     if settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY:
@@ -619,10 +616,6 @@ def get_reasoning_llm() -> BaseChatModel:
         candidates.append(lambda: _build_raw_huggingface(model_name="openai/gpt-oss-120b:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
         candidates.append(lambda: _build_raw_huggingface(model_name="meta-llama/Llama-3.3-70B-Instruct:groq", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
         candidates.append(lambda: _build_raw_huggingface(model_name="Qwen/Qwen2.5-72B-Instruct:together", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
-
-    # Groq secondary
-    if settings.GROQ_API_KEY:
-        candidates.append(lambda: _build_raw_groq("llama-3.1-8b-instant", timeout_seconds=settings.REASONING_LLM_TIMEOUT_SECONDS))
 
     fallback = lambda: _build_ollama(settings.OLLAMA_MODEL)
 

@@ -5,8 +5,6 @@ import time
 import re
 import urllib.request
 import json
-from pathlib import Path
-import pytest
 from starlette.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

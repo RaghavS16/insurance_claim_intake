@@ -18,7 +18,6 @@ from src.utils.validators import (
     VALID_CLAIM_TYPES,
     VALID_FINAL_DECISIONS,
     VALID_CLOSURE_STATUSES,
-    VALID_DOCUMENT_TYPES,
 )
 
 

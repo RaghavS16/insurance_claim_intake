@@ -5,8 +5,7 @@ Covers: _is_affirmative, _is_negative, _is_conversational_filler,
         _is_audio_check, _is_unrelated_question, _conversation_only_response,
         _incident_description_from_text, conversation_turn_processor.
 """
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------

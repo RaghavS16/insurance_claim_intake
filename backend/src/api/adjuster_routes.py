@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Optional, Dict, List, Union
 import json
 import re
 import uuid
@@ -419,8 +419,7 @@ def _get_adjuster_relevant_claims(
             if is_unassigned:
                 relevant_claims.append(c)
         elif scope == "all":
-            if is_assigned_to_me:
-                relevant_claims.append(c)
+            relevant_claims.append(c)
 
     return relevant_claims, assigned_claim_ids
 
@@ -1037,8 +1036,8 @@ async def copilot(ticket_id: str, refresh: bool = False, user: User = Depends(_g
     evidence = [
         {
             "id": str(e.id),
-            "filename": e.filename,
-            "category": e.detected_document_type or e.category or "document",
+            "filename": getattr(e, "original_filename", None) or getattr(e, "filename", "document"),
+            "category": getattr(e, "detected_document_type", None) or getattr(e, "category", None) or "document",
             "verification_status": e.verification_status,
             "verification_confidence": e.verification_confidence,
         }
@@ -1382,6 +1381,7 @@ class EvidenceRequestCreate(BaseModel):
     request_text: str = Field(..., min_length=5, max_length=4000)
 
 @router.post("/claims/{ticket_id}/evidence-requests")
+@router.post("/claims/{ticket_id}/request-info")
 def create_evidence_request(ticket_id: str, payload: EvidenceRequestCreate, user: User = Depends(_guard), db: Session = Depends(get_db)):
     c = get_claim_or_404(db, ticket_id)
     adjuster = _ensure_assigned_adjuster(c, user, db)
@@ -1430,12 +1430,38 @@ def transition_claim_status(
 
 class DecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(approve|partial_approve|reject|request_evidence|escalate)$")
-    rationale: str = Field(..., min_length=10, max_length=10000)
+    rationale: Optional[str] = Field(None, max_length=10000)
+    notes: Optional[str] = Field(None, max_length=10000)
     approved_amount: float | None = Field(None, ge=0)
 
 class NoteRequest(BaseModel):
     note: str = Field(..., min_length=1, max_length=10000)
     visibility: str = Field("internal", pattern="^(internal|claimant)$")
+
+@router.get("/policies")
+def list_adjuster_policies(
+    request: Request,
+    query: Optional[str] = None,
+    q: Optional[str] = None,
+    policy_type: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 50,
+    user: User = Depends(_guard),
+    db: Session = Depends(get_db),
+):
+    """Adjuster Policy Database Lookup."""
+    from src.api.policy_routes import list_policies_directory
+    search_term = query or q
+    return list_policies_directory(
+        request=request,
+        q=search_term,
+        policy_type=policy_type,
+        is_active=is_active,
+        page=page,
+        page_size=page_size,
+        db=db,
+    )
 
 @router.get("/claims/{ticket_id}/assignment")
 def get_normalized_assignment(ticket_id: str, request: Request, db: Session = Depends(get_db)):
@@ -1460,14 +1486,15 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
         "reject": "rejected", "request_evidence": "pending_evidence", "escalate": "escalated",
     }
     target = decision_map[payload.decision]
+    rationale_text = payload.rationale or payload.notes or "Adjuster final decision"
     try:
-        transition_claim(db, claim, target, current_user.id, payload.rationale)
+        transition_claim(db, claim, target, current_user.id, rationale_text)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     row = ClaimDecision(
         tenant_id=claim.tenant_id or "",
         claim_id=claim.id, adjuster_id=adjuster.id, decision=payload.decision,
-        rationale=payload.rationale, approved_amount=payload.approved_amount,
+        rationale=rationale_text, approved_amount=payload.approved_amount,
         ai_recommendation_json=(claim.pipeline_state or {}).get("copilot") or {},
     )
     db.add(row)
@@ -1475,7 +1502,7 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
         claim_id=claim.id,
         tenant_id=claim.tenant_id or "", actor_user_id=current_user.id, event_type="decision_recorded",
         new_value_json={"decision": payload.decision, "approved_amount": payload.approved_amount},
-        reason=payload.rationale,
+        reason=rationale_text,
     ))
     append_system_audit(
         db,
@@ -1485,11 +1512,11 @@ def record_decision(ticket_id: str, payload: DecisionRequest, request: Request, 
         resource_type="claim",
         resource_id=claim.id,
         action="record_decision",
-        payload={"decision": payload.decision, "approved_amount": payload.approved_amount, "rationale_present": bool(payload.rationale)},
+        payload={"decision": payload.decision, "approved_amount": payload.approved_amount, "rationale_present": bool(rationale_text)},
     )
     db.commit()
     return {"decision_id": row.id, "claim_id": claim.ticket_id, "decision": payload.decision,
-            "status": claim.status, "rationale": payload.rationale}
+            "status": claim.status, "rationale": rationale_text}
 
 @router.post("/claims/{ticket_id}/notes")
 def add_claim_note(ticket_id: str, payload: NoteRequest, request: Request, db: Session = Depends(get_db)):
