@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 import os
 import socket
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -96,11 +96,11 @@ class Settings(BaseSettings):
     RERANK_MODEL: Optional[str] = None
     RERANK_TIMEOUT_SECONDS: int = Field(30, ge=5, le=120)
 
-    AWS_REGION: str = "ap-south-1"
-    AWS_ACCESS_KEY_ID: Optional[str] = None
-    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_REGION: str = Field("ap-south-1", validation_alias=AliasChoices("AWS_REGION", "S3_REGION"))
+    AWS_ACCESS_KEY_ID: Optional[str] = Field(None, validation_alias=AliasChoices("AWS_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID"))
+    AWS_SECRET_ACCESS_KEY: Optional[str] = Field(None, validation_alias=AliasChoices("AWS_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY"))
     AWS_SESSION_TOKEN: Optional[str] = None
-    S3_BUCKET: Optional[str] = None
+    S3_BUCKET: Optional[str] = Field(None, validation_alias=AliasChoices("S3_BUCKET", "S3_BUCKET_NAME"))
     S3_ENDPOINT_URL: Optional[str] = None
     S3_SERVER_SIDE_ENCRYPTION: str = ""
     S3_KMS_KEY_ID: Optional[str] = None
