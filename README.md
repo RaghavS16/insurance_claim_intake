@@ -89,7 +89,6 @@ insurance_claim_intake/
 │   │   └── lib/                  # API client, AuthContext, polling hooks & TypeScript types
 │   └── playwright.config.ts      # Automated dual-server Playwright runner
 ├── docs/                         # AI governance & disaster recovery documentation
-├── infra/aws/                    # Terraform AWS ECS / RDS / S3 infrastructure definitions
 └── docker-compose.yml            # Local multi-container stack (Postgres/pgvector, Redis, MinIO, Mailpit)
 ```
 
