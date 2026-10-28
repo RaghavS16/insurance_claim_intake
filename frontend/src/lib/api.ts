@@ -113,9 +113,10 @@ class ApiClient {
     }
 
     if (res.status === 401 && !isAuthEndpoint) {
-      const newToken = await this.refreshToken();
-      if (newToken) {
-        headers['Authorization'] = `Bearer ${newToken}`;
+      const refreshResult = await this.refreshToken();
+      const newAccessToken = typeof refreshResult === 'string' ? refreshResult : refreshResult?.access_token;
+      if (newAccessToken) {
+        headers['Authorization'] = `Bearer ${newAccessToken}`;
         const retryRes = await fetch(url, { ...options, headers, credentials: 'include' });
         if (!retryRes.ok) {
           const errorData = await retryRes.json().catch(() => ({}));

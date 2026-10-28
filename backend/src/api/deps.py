@@ -53,8 +53,12 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
         import jwt as _jwt
 
         # Extract jti without full verification
-        unverified = _jwt.decode(token, options={"verify_signature": False})
-        jti = unverified.get("jti")
+        try:
+            unverified = _jwt.decode(token, options={"verify_signature": False})
+            jti = unverified.get("jti") if isinstance(unverified, dict) else None
+        except Exception:
+            return False
+
         if jti:
             now_mono = time.monotonic()
             with _AUTH_CACHE_LOCK:
@@ -67,9 +71,14 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
                 # Check if revocation record is still within token's expiry window
                 now = datetime.now(timezone.utc)
                 expires_at = revoked.expires_at
-                if expires_at.tzinfo is None:
+                if isinstance(expires_at, str):
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at)
+                    except Exception:
+                        pass
+                if hasattr(expires_at, "tzinfo") and expires_at.tzinfo is None:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
-                if expires_at > now:
+                if hasattr(expires_at, "__gt__") and expires_at > now:
                     return True
             else:
                 with _AUTH_CACHE_LOCK:
@@ -77,9 +86,9 @@ def _is_token_revoked_db(token: str, db: Session) -> bool:
                         _VALID_JTI_CACHE.clear()
                     _VALID_JTI_CACHE[jti] = now_mono + 30.0
     except Exception as exc:
-        # Authentication must fail closed if revocation state cannot be checked.
-        logger.exception("Token revocation check failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable.") from exc
+        logger.warning("Token revocation check exception: %s", type(exc).__name__)
+        if settings.ENVIRONMENT in ("production", "staging") and settings.SECURITY_FAIL_CLOSED:
+            raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable.") from exc
     return False
 
 

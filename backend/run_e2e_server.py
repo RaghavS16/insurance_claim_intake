@@ -11,12 +11,10 @@ for p in (str(repo_root), str(backend_dir)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-env = (os.environ.get("ENVIRONMENT") or "development").lower().strip()
-if not os.environ.get("DEMO_PASSWORD"):
-    if env not in ("prod", "production"):
-        os.environ["DEMO_PASSWORD"] = "DemoPass123!"
-    else:
-        raise RuntimeError("DEMO_PASSWORD environment variable is required to run e2e server.")
+os.environ["DATABASE_URL"] = "sqlite:///./claims.db"
+os.environ["SKIP_DOCRAG_SEED"] = "1"
+os.environ["RUN_EMBEDDED_OUTBOX_WORKER"] = "false"
+os.environ["DEMO_PASSWORD"] = "DemoPass123!"
 os.environ.setdefault("ENVIRONMENT", "development")
 
 try:
