@@ -132,9 +132,11 @@ def retrieve_for_chat(text: str, state: Dict[str, Any]) -> Dict[str, Any]:
     search_query = text or ""
     low_text = search_query.lower()
     if any(w in low_text for w in ("apply", "new policy", "application", "buy", "proposal", "kyc")):
-        search_query += " Section 5 How to Apply Application Process Section 5.4 Documents Required for New Policy Application KYC"
-    elif any(w in low_text for w in ("file", "filing", "claim process", "how to claim", "documents required", "checklist")):
-        search_query += " Section 6 How to File a Claim Step-by-Step Section 6.3 IRDAI Timelines Section 6.5 Information Required Section 6.6 Mandatory Documents"
+        search_query += " Section 5 How to Apply 5.4 Documents required Identity proof Address proof RC"
+    elif any(w in low_text for w in ("document", "documents", "checklist", "evidence")):
+        search_query += " Section 6.3 Documents Section 6.8 Mandatory documents checklist Duly completed and signed claim form Policy copy Registration Certificate RC Driving licence FIR Repair estimate"
+    elif any(w in low_text for w in ("file", "filing", "claim process", "how to claim")):
+        search_query += " Section 6 How to File a Claim 6.1 step by step 6.3 Documents 6.8 Mandatory documents checklist"
 
     tenant_id = state.get("tenant_id") or "00000000-0000-0000-0000-000000000001"
     jurisdiction = state.get("jurisdiction") or "India"
@@ -272,63 +274,72 @@ def _synthesize_structured_answer_from_chunks(
     sources: list[dict[str, Any]],
     requirements: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Deterministic section-grounded synthesizer used when LLM is offline or timed out."""
+    low_q = question.lower()
+    is_doc_query = any(w in low_q for w in ("document", "documents", "checklist", "evidence", "upload", "paper"))
+    is_apply_query = any(w in low_q for w in ("apply", "application", "buy", "new policy", "proposal", "kyc", "details require"))
+
+    # 1. If asking for claim documents and compiled manifest has document requirements, use them directly!
+    doc_reqs = [r for r in (requirements or []) if r.get("evidence_type") == "document" and r.get("label")]
+    if is_doc_query and not is_apply_query and doc_reqs:
+        lines = []
+        for r in doc_reqs[:10]:
+            lbl = str(r.get("label") or "").strip()
+            cond = str(r.get("condition") or "All claims").strip()
+            note = str(r.get("note") or "").strip()
+            suffix = f" ({cond})" if cond and cond.lower() != "all claims" else " (Mandatory for all claims)"
+            if note:
+                suffix += f" — {note}"
+            lines.append(f"• {lbl}{suffix}")
+        citation = str((sources[0].get("citation_label") if sources else None) or doc_reqs[0].get("citation_label") or "Policy Wording • Section 6.8")
+        return "Based on the indexed policy wording, the following documents are required to file a claim:\n" + "\n".join(lines) + f"\n\nSources: {citation}"
+
     if not sources:
         if requirements:
-            labels = [
-                str(r.get("label") or r.get("key") or "").strip()
-                for r in requirements[:5]
-                if r.get("label") or r.get("key")
-            ]
+            labels = [str(r.get("label") or r.get("key") or "").strip() for r in requirements[:8] if r.get("label") or r.get("key")]
             if labels:
-                return "Based on policy guidelines, the following claim details are required: " + ", ".join(labels) + "."
+                return "Based on policy guidelines, the following claim items are required:\n" + "\n".join(f"• {l}" for l in labels)
         return (
             "I can help with the claim and explain the filing process, but I don't have a relevant policy or procedure "
             "document indexed for that question yet. Please link the applicable policy or provide the insurer guidance, "
             "and I'll use it to answer."
         )
 
-    low_q = question.lower()
+    # Gather bullets across top 3 sources (handling both newline-separated and inline '• ' bullets)
+    bullets: list[str] = []
+    for src in sources[:3]:
+        raw_txt = str(src.get("text") or "")
+        parts = re.split(r"(?:\n+|\s*•\s+)", raw_txt)
+        for part in parts:
+            p = part.strip().lstrip("-* ").strip()
+            if not p or len(p) < 8 or p.startswith("###") or p.startswith("[Table"):
+                continue
+            if is_doc_query and ("document / evidence:" in p.lower() or "claim form" in p.lower() or "registration certificate" in p.lower() or "driving licence" in p.lower() or "fir" in p.lower() or "repair estimate" in p.lower()):
+                p_clean = re.sub(r"^Document / evidence:\s*", "", p, flags=re.I)
+                if p_clean not in bullets:
+                    bullets.append(p_clean)
+            elif not is_doc_query and (" : " in p or " — " in p or len(p) < 220):
+                if p not in bullets:
+                    bullets.append(p)
+
     top_source = sources[0]
-    txt = str(top_source.get("text") or "")
     source_name = str(top_source.get("source_name") or "Policy Guidance")
     citation = str(top_source.get("citation_label") or source_name)
 
-    # 1. New Policy Application
-    if any(w in low_q for w in ("apply", "application", "buy", "proposal", "kyc", "documents required to apply", "details require")):
-        bullets = []
-        for line in txt.splitlines():
-            line_str = line.strip()
-            if line_str.startswith("•") or line_str.startswith("-") or "[table" in line_str.lower():
-                clean_bullet = line_str.lstrip("•- ").strip()
-                if clean_bullet and clean_bullet not in bullets:
-                    bullets.append(clean_bullet)
-        if bullets:
-            body = "To apply for this policy, the following documents and details are required per official guidelines:\n" + "\n".join(f"• {b}" for b in bullets[:6])
-        else:
-            clean_snippet = re.sub(r"\s+", " ", txt)[:380]
-            body = f"Based on {source_name}, here is the application guidance: {clean_snippet}"
-        return f"{body}\n\nSources: {citation}"
+    if bullets:
+        header = (
+            "To apply for this policy, the following documents and details are required:\n"
+            if is_apply_query
+            else (
+                "Based on the policy wording, the following documents are required to file a claim:\n"
+                if is_doc_query
+                else "Based on the policy guidance, here are the key claim filing requirements and steps:\n"
+            )
+        )
+        return header + "\n".join(f"• {b}" for b in bullets[:8]) + f"\n\nSources: {citation}"
 
-    # 2. Claim Filing Process & Checklists
-    if any(w in low_q for w in ("file", "filing", "claim process", "how to claim", "documents required", "checklist", "timeline", "intimation")):
-        bullets = []
-        for line in txt.splitlines():
-            line_str = line.strip()
-            if line_str.startswith("•") or line_str.startswith("-") or re.match(r"^\d+\.", line_str):
-                clean_bullet = line_str.lstrip("•- ").strip()
-                if clean_bullet and clean_bullet not in bullets:
-                    bullets.append(clean_bullet)
-        if bullets:
-            body = "Based on policy guidance, here is the procedure and required documents for filing a claim:\n" + "\n".join(f"• {b}" for b in bullets[:6])
-        else:
-            clean_snippet = re.sub(r"\s+", " ", txt)[:380]
-            body = f"Based on {source_name}, here is the claims filing guidance: {clean_snippet}"
-        return f"{body}\n\nSources: {citation}"
-
-    # 3. Exclusions, waiting periods, deductibles, general
-    clean_lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith("###") and not ln.strip().startswith("[Table")]
-    summary = " ".join(clean_lines[:4])[:450]
+    clean_text = re.sub(r"###\s+[^\n]+", "", str(top_source.get("text") or "")).strip()
+    sentences = re.split(r"(?<=[.!?])\s+", clean_text)
+    summary = " ".join(sentences[:4]).strip()
     return f"Based on {source_name}: {summary}\n\nSources: {citation}"
 
 

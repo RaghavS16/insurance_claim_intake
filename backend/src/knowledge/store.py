@@ -197,61 +197,105 @@ def _extract_text(content: bytes, filename: str) -> str:
     return content.decode("utf-8", errors="replace")
 
 def _structure_aware_chunks(text: str, *, page_number: int | None = None) -> list[dict[str, Any]]:
-    """Split by visible section/clause boundaries first, then bound chunk size.
+    """Split by visible section/clause boundaries first, preserving bullet and table structure."""
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    lines: list[str] = []
+    for ln in raw_lines:
+        w = ln.split()
+        if len(w) > 360:
+            for i in range(0, len(w), 300):
+                lines.append(" ".join(w[i:i + 300]))
+        else:
+            lines.append(ln)
 
-    Each returned row carries provenance that is persisted with the vector and can
-    be rendered as an exact citation. This intentionally prefers smaller semantic
-    units over a large flat sliding window.
-    """
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     section_no: str | None = None
     clause_no: str | None = None
     rows: list[dict[str, Any]] = []
     buffer: list[str] = []
 
-    section_re = re.compile(r"^(?:section|sec\.?)[\s:.-]*([0-9]+(?:\.[0-9]+)*)\b", re.I)
-    clause_re = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s*[.)-]?\s+", re.I)
-    heading_re = re.compile(r"^(?:[A-Z][A-Z0-9 /,&'()-]{3,}|[0-9]+(?:\.[0-9]+)*\s+.+)$")
+    section_re = re.compile(r"^(?:#+\s*)?(?:section|sec\.?)[\s:.-]*([0-9]+(?:\.[0-9]+)*)\b", re.I)
+    clause_re = re.compile(r"^(?:#+\s*)?([0-9]+(?:\.[0-9]+)*)\s*[.)-]?\s+(.+)$", re.I)
+    heading_re = re.compile(r"^(?:#+\s*)(.+)$")
 
     def flush() -> None:
         nonlocal buffer
         if not buffer:
             return
-        words = re.findall(r"\S+", " ".join(buffer))
-        size, overlap = 330, 50
-        step = max(1, size - overlap)
-        for i in range(0, len(words), step):
-            part = " ".join(words[i:i + size]).strip()
-            if not part:
-                continue
+        joined = "\n".join(buffer).strip()
+        words = joined.split()
+        if len(words) <= 360:
             rows.append({
-                "text": part,
+                "text": joined,
                 "page_number": page_number,
                 "section_number": section_no,
                 "clause_number": clause_no,
-                "citation_label": ".".join(
+                "citation_label": " • ".join(
                     x for x in (
-                        f"page {page_number}" if page_number else None,
-                        f"section {section_no}" if section_no else None,
-                        f"clause {clause_no}" if clause_no else None,
+                        f"p.{page_number}" if page_number else None,
+                        f"Section {section_no}" if section_no else None,
+                        f"Clause {clause_no}" if clause_no and clause_no != section_no else None,
                     ) if x
                 ) or None,
             })
+        else:
+            # Split long sections on line boundaries so bullet rows are never cut mid-line
+            chunk_lines: list[str] = []
+            word_count = 0
+            for ln in buffer:
+                ln_words = len(ln.split())
+                if chunk_lines and word_count + ln_words > 330:
+                    rows.append({
+                        "text": "\n".join(chunk_lines).strip(),
+                        "page_number": page_number,
+                        "section_number": section_no,
+                        "clause_number": clause_no,
+                        "citation_label": " • ".join(
+                            x for x in (
+                                f"p.{page_number}" if page_number else None,
+                                f"Section {section_no}" if section_no else None,
+                                f"Clause {clause_no}" if clause_no and clause_no != section_no else None,
+                            ) if x
+                        ) or None,
+                    })
+                    overlap_lines = chunk_lines[-2:] if len(chunk_lines) >= 2 else []
+                    chunk_lines = list(overlap_lines)
+                    word_count = sum(len(x.split()) for x in chunk_lines)
+                chunk_lines.append(ln)
+                word_count += ln_words
+            if chunk_lines:
+                rows.append({
+                    "text": "\n".join(chunk_lines).strip(),
+                    "page_number": page_number,
+                    "section_number": section_no,
+                    "clause_number": clause_no,
+                    "citation_label": " • ".join(
+                        x for x in (
+                            f"p.{page_number}" if page_number else None,
+                            f"Section {section_no}" if section_no else None,
+                            f"Clause {clause_no}" if clause_no and clause_no != section_no else None,
+                        ) if x
+                    ) or None,
+                })
         buffer = []
 
     for line in lines:
         sec = section_re.match(line)
         clause = clause_re.match(line)
+        hd = heading_re.match(line)
         if sec:
             flush()
             section_no = sec.group(1)
             clause_no = None
         elif clause:
             flush()
-            clause_no = clause.group(1)
-        elif heading_re.match(line) and len(line) <= 180:
+            num = clause.group(1)
+            title = clause.group(2).strip()
+            section_no = f"{num} {title}"[:90]
+            clause_no = num
+        elif hd and len(line) <= 180:
             flush()
-            section_no = section_no or line[:120]
+            section_no = hd.group(1).strip()[:90]
+            clause_no = None
         buffer.append(line)
     flush()
     return rows

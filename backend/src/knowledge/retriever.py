@@ -40,6 +40,7 @@ def rank_chunks_for_query(query: str, chunks: list[dict]) -> list[dict]:
         return chunks
     low = query.lower()
     is_apply = any(w in low for w in ("apply", "application", "buy", "new policy", "proposal", "kyc", "documents required to apply"))
+    is_docs = any(w in low for w in ("document", "documents", "checklist", "evidence", "upload", "paper", "papers", "certificates", "fir", "rc", "driving licence"))
     is_claim = any(w in low for w in ("file", "filing", "how to claim", "claim process", "documents required", "checklist", "cashless", "reimbursement", "timeline", "surveyor", "fir", "intimation"))
     is_exclusions = any(w in low for w in ("exclusion", "not covered", "deductible", "depreciation", "waiting period", "moratorium", "co-pay", "sub-limit"))
 
@@ -47,27 +48,35 @@ def rank_chunks_for_query(query: str, chunks: list[dict]) -> list[dict]:
     for c in chunks:
         score = float(c.get("rerank_score") or c.get("score") or 0.5)
         text = str(c.get("text") or "").lower()
-        sec = str(c.get("section_number") or "").strip()
+        sec = str(c.get("section_number") or "").strip().lower()
         cl = str(c.get("citation_label") or "").lower()
 
-        # Section 5 boost for application queries
         if is_apply:
-            if sec.startswith("5") or "5. how to apply" in text or "documents required to apply" in text or "section 5" in cl:
-                score += 0.45
+            if sec.startswith("5") or "5. how to apply" in text or "5.4 documents required" in text or "section 5" in cl:
+                score += 0.65
             elif "section 5" in text:
-                score += 0.25
+                score += 0.30
 
-        # Section 6 boost for claim filing/document queries
-        if is_claim:
-            if sec.startswith("6") or "6. how to file a claim" in text or "claim intake form" in text or "mandatory documents checklist" in text or "settlement timeline" in text or "section 6" in cl:
-                score += 0.45
-            elif "section 6" in text or "settlement" in text:
-                score += 0.25
+        if is_docs and not is_apply:
+            if "6.8" in sec or "6.3" in sec or "mandatory documents checklist" in text or "### 6.3 documents" in text or "document / evidence:" in text:
+                score += 0.85
+            elif "duly completed claim form" in text or "registration certificate (rc)" in text:
+                score += 0.60
+            elif "6.7" in sec or "claim intake form — fields to capture" in text:
+                score += 0.10
 
-        # Sections 2, 3, 4 boost for exclusions/deductibles
+        elif is_claim:
+            if sec.startswith("6") or "6. how to file a claim" in text or "6.1 " in text or "mandatory documents checklist" in text or "claim intake form" in text or "settlement timeline" in text:
+                score += 0.50
+
         if is_exclusions:
             if sec.startswith(("2", "3", "4")) or "exclusion" in text or "deductible" in text or "waiting period" in text or "moratorium" in text:
-                score += 0.40
+                score += 0.45
+
+        # Penalize grievance/ombudsman/sources chunks unless the user specifically asked about grievances or ombudsman
+        if not any(w in low for w in ("grievance", "ombudsman", "bima bharosa", "complaint", "escalat")):
+            if "bima bharosa" in text or "ombudsman" in text or sec.startswith("sources"):
+                score -= 0.35
 
         scored.append((score, c))
 

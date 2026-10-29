@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import time
 from collections import OrderedDict, defaultdict
@@ -57,7 +58,20 @@ def _split_keys(raw: str | None) -> list[str]:
 
 
 def _rotate_key(provider: str, raw: str | None) -> str:
-    keys = _split_keys(raw)
+    val = (raw or "").strip()
+    if not val or val.startswith("<"):
+        prov = provider.lower()
+        if "groq" in prov:
+            val = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
+        elif "gemini" in prov or "google" in prov:
+            val = os.getenv("GEMINI_API_KEYS") or os.getenv("GOOGLE_API_KEYS") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+        elif "hf" in prov or "huggingface" in prov:
+            val = os.getenv("HF_TOKENS") or os.getenv("HF_TOKEN") or ""
+        elif "openai" in prov:
+            val = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY") or ""
+        val = val.strip()
+
+    keys = [k for k in _split_keys(val) if not k.startswith("<")]
     if not keys:
         return ""
     idx = _KEY_INDEX[provider] % len(keys)
@@ -259,6 +273,10 @@ class _ResilientStructured(Generic[T]):
                 _trip_circuit(c_key, exc)
                 if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
                     raise
+                if not is_local:
+                    record_ai_fallback(operation="structured")
+                    logger.warning("Structured candidate '%s' failed: %s; failing over to next candidate (0ms)", c_key, exc)
+                    continue
                 if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
                     record_ai_fallback(operation="structured")
                     logger.warning("Structured candidate '%s' failed: %s; failing over (0ms)", c_key, exc)
@@ -338,6 +356,10 @@ class ResilientChatModel:
                 _trip_circuit(c_key, exc)
                 if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
                     raise
+                if not is_local:
+                    record_ai_fallback(operation="sync")
+                    logger.warning("LLM candidate '%s' error: %s; failing over immediately (0ms)", c_key, exc)
+                    continue
                 if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
                     record_ai_fallback(operation="sync")
                     logger.warning("LLM candidate '%s' transient error: %s; failing over immediately (0ms)", c_key, exc)
@@ -389,6 +411,10 @@ class ResilientChatModel:
                 _trip_circuit(c_key, exc)
                 if is_local and not settings.AI_ALLOW_LOCAL_FALLBACK:
                     raise
+                if not is_local:
+                    record_ai_fallback(operation="async")
+                    logger.warning("LLM candidate '%s' ainvoke error: %s; failing over immediately (0ms)", c_key, exc)
+                    continue
                 if is_transient_llm_error(exc) or "getaddrinfo" in str(exc).lower() or isinstance(exc, (LLMTransientError, OSError)):
                     record_ai_fallback(operation="async")
                     logger.warning("LLM candidate '%s' ainvoke error: %s; failing over immediately (0ms)", c_key, exc)
